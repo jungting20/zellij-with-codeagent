@@ -4,9 +4,9 @@
 
 ### Current Status
 
-`U1. Bootstrap Go Module and Daemon Layout` is complete.
+`U1. Bootstrap Go Module and Daemon Layout` and `U2. Define Runtime Domain Model and Registry` are complete.
 
-The project now has a minimal Go module and an `agentd` daemon entrypoint. This is only the runtime skeleton; registry, event bus, Zellij backend, external transport, and AI planner integration are not implemented yet.
+The project now has a minimal Go module, an `agentd` daemon entrypoint, and an in-memory registry package for stable logical pane records. This is still pre-runtime-service; event bus, Zellij backend, external transport, and AI planner integration are not implemented yet.
 
 ### Implemented
 
@@ -14,6 +14,9 @@ The project now has a minimal Go module and an `agentd` daemon entrypoint. This 
 - Created `cmd/agentd/main.go`
 - Created `cmd/agentd/main_test.go`
 - Created `internal/runtime/doc.go`
+- Created `internal/registry/types.go`
+- Created `internal/registry/registry.go`
+- Created `internal/registry/registry_test.go`
 
 ### Agentd Behavior
 
@@ -28,10 +31,18 @@ The project now has a minimal Go module and an `agentd` daemon entrypoint. This 
 - `go run ./cmd/agentd --help` passed.
 - `go run ./cmd/agentd --version` passed.
 
+### Registry Behavior
+
+- Logical `PaneID`, `TaskID`, and `AgentID` are daemon-owned identifiers.
+- `ZellijPaneID` is stored as a backend identifier, not the primary registry key.
+- `RegisterPane` creates stable pane records with role, command, cwd, status, timestamps, and output summary fields.
+- `GetPane`, `ListPanes`, `UpdatePaneStatus`, `UpdatePaneOutput`, `RemovePane`, and `GetLatestByZellijPaneID` are implemented.
+- Returned records clone command slices so callers cannot mutate registry state by changing returned values.
+- Reusing a Zellij pane ID for a new logical pane does not mutate the old logical record.
+
 ### Not Implemented Yet
 
 - `RuntimeService` interface
-- Registry model
 - Event bus
 - Zellij CLI backend
 - Subscription manager
@@ -42,6 +53,6 @@ The project now has a minimal Go module and an `agentd` daemon entrypoint. This 
 
 ### Next Step
 
-Start `U2. Define Runtime Domain Model and Registry`.
+Start `U3. Implement Zellij CLI Backend`.
 
-The next implementation should define stable logical runtime records for tasks, agents, panes, pane roles, and pane lifecycle status while keeping Zellij pane IDs as backend identifiers only.
+The next implementation should encapsulate all `zellij` subprocess calls behind `internal/zellij`, including create pane, close pane, send input, list panes, dump screen, and subscribe-oriented command construction.
