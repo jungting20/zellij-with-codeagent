@@ -37,6 +37,28 @@ func NewBackend(opts Options) *CLIBackend {
 	}
 }
 
+func (b *CLIBackend) CreateTab(ctx context.Context, req CreateTabRequest) (TabID, error) {
+	result, err := b.run(ctx, "create tab", createTabCommand(b.binary, b.session, req))
+	if err != nil {
+		return 0, err
+	}
+
+	id, err := parseTabID(result.Stdout)
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+func (b *CLIBackend) CloseTab(ctx context.Context, req CloseTabRequest) error {
+	if req.TabID == nil {
+		return ErrMissingTab
+	}
+
+	_, err := b.run(ctx, "close tab", closeTabCommand(b.binary, b.session, *req.TabID))
+	return err
+}
+
 func (b *CLIBackend) CreatePane(ctx context.Context, req CreatePaneRequest) (PaneID, error) {
 	result, err := b.run(ctx, "create pane", createPaneCommand(b.binary, b.session, req))
 	if err != nil {

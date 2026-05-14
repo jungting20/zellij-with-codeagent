@@ -13,12 +13,17 @@ const defaultBinary = "zellij"
 
 var (
 	ErrEmptyPaneID = errors.New("zellij returned an empty pane id")
+	ErrEmptyTabID  = errors.New("zellij returned an empty tab id")
 	ErrMissingPane = errors.New("zellij pane id is required")
+	ErrMissingTab  = errors.New("zellij tab id is required")
 )
 
 type PaneID string
+type TabID int
 
 type Backend interface {
+	CreateTab(ctx context.Context, req CreateTabRequest) (TabID, error)
+	CloseTab(ctx context.Context, req CloseTabRequest) error
 	CreatePane(ctx context.Context, req CreatePaneRequest) (PaneID, error)
 	ClosePane(ctx context.Context, req ClosePaneRequest) error
 	SendInput(ctx context.Context, req SendInputRequest) error
@@ -36,7 +41,18 @@ type Options struct {
 type CreatePaneRequest struct {
 	Name    string
 	CWD     string
+	TabID   *TabID
 	Command []string
+}
+
+type CreateTabRequest struct {
+	Name    string
+	CWD     string
+	Command []string
+}
+
+type CloseTabRequest struct {
+	TabID *TabID
 }
 
 type ClosePaneRequest struct {
@@ -186,4 +202,17 @@ func cleanPaneID(value string) (PaneID, error) {
 		return "", ErrEmptyPaneID
 	}
 	return PaneID(id), nil
+}
+
+func parseTabID(value string) (TabID, error) {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return 0, ErrEmptyTabID
+	}
+
+	id, err := strconv.Atoi(text)
+	if err != nil {
+		return 0, fmt.Errorf("parse zellij tab id: %w", err)
+	}
+	return TabID(id), nil
 }

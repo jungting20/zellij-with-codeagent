@@ -54,6 +54,8 @@ func (r *Registry) RegisterPane(req RegisterPaneRequest) (PaneRecord, error) {
 		TaskID:       req.TaskID,
 		AgentID:      req.AgentID,
 		ZellijPaneID: req.ZellijPaneID,
+		ZellijTabID:  cloneZellijTabID(req.ZellijTabID),
+		TabName:      req.TabName,
 		Role:         req.Role,
 		Command:      cloneStrings(req.Command),
 		CWD:          req.CWD,
@@ -169,7 +171,17 @@ func (r *Registry) RemovePane(id PaneID) (PaneRecord, error) {
 
 func clonePaneRecord(record PaneRecord) PaneRecord {
 	record.Command = cloneStrings(record.Command)
+	record.ZellijTabID = cloneZellijTabID(record.ZellijTabID)
 	return record
+}
+
+func cloneZellijTabID(value *ZellijTabID) *ZellijTabID {
+	if value == nil {
+		return nil
+	}
+
+	clone := *value
+	return &clone
 }
 
 func cloneStrings(values []string) []string {

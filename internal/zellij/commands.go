@@ -1,5 +1,7 @@
 package zellij
 
+import "strconv"
+
 func newCommand(binary, session string, args ...string) CommandSpec {
 	spec := CommandSpec{Name: binary}
 	if spec.Name == "" {
@@ -21,7 +23,26 @@ func newActionCommand(binary, session, action string, args ...string) CommandSpe
 }
 
 func createPaneCommand(binary, session string, req CreatePaneRequest) CommandSpec {
-	args := make([]string, 0, 8+len(req.Command))
+	args := make([]string, 0, 10+len(req.Command))
+	if req.Name != "" {
+		args = append(args, "--name", req.Name)
+	}
+	if req.CWD != "" {
+		args = append(args, "--cwd", req.CWD)
+	}
+	if req.TabID != nil {
+		args = append(args, "--tab-id", strconv.Itoa(int(*req.TabID)))
+	}
+	if len(req.Command) > 0 {
+		args = append(args, "--")
+		args = append(args, req.Command...)
+	}
+
+	return newActionCommand(binary, session, "new-pane", args...)
+}
+
+func createTabCommand(binary, session string, req CreateTabRequest) CommandSpec {
+	args := make([]string, 0, 6+len(req.Command))
 	if req.Name != "" {
 		args = append(args, "--name", req.Name)
 	}
@@ -33,7 +54,11 @@ func createPaneCommand(binary, session string, req CreatePaneRequest) CommandSpe
 		args = append(args, req.Command...)
 	}
 
-	return newActionCommand(binary, session, "new-pane", args...)
+	return newActionCommand(binary, session, "new-tab", args...)
+}
+
+func closeTabCommand(binary, session string, id TabID) CommandSpec {
+	return newActionCommand(binary, session, "close-tab-by-id", strconv.Itoa(int(id)))
 }
 
 func closePaneCommand(binary, session string, id PaneID) CommandSpec {

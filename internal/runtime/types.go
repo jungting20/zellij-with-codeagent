@@ -18,6 +18,7 @@ type (
 	TaskID       = registry.TaskID
 	AgentID      = registry.AgentID
 	ZellijPaneID = registry.ZellijPaneID
+	ZellijTabID  = registry.ZellijTabID
 	PaneRole     = registry.PaneRole
 	PaneStatus   = registry.PaneStatus
 )
@@ -53,8 +54,13 @@ type CreatePaneRequest struct {
 	AgentID AgentID
 	Role    PaneRole
 	Name    string
-	Command []string
-	CWD     string
+	NewTab  bool
+	TabName string
+	// ZellijTabID targets an existing tab. When NewTab is true, the created tab
+	// ID is returned on the Pane instead.
+	ZellijTabID *ZellijTabID
+	Command     []string
+	CWD         string
 }
 
 type CreatePaneResponse struct {
@@ -102,6 +108,8 @@ type Pane struct {
 	TaskID        TaskID
 	AgentID       AgentID
 	ZellijPaneID  ZellijPaneID
+	ZellijTabID   *ZellijTabID
+	TabName       string
 	Role          PaneRole
 	Command       []string
 	CWD           string

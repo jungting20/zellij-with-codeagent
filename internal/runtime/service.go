@@ -56,13 +56,9 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 		return CreatePaneResponse{}, ErrMissingPaneID
 	}
 
-	zellijID, err := s.backend.CreatePane(ctx, zellij.CreatePaneRequest{
-		Name:    req.Name,
-		CWD:     req.CWD,
-		Command: cloneStrings(req.Command),
-	})
+	zellijID, tabID, tabName, cleanup, err := s.createBackendPane(ctx, req)
 	if err != nil {
-		return CreatePaneResponse{}, err
+		return CreatePaneResponse{}, errors.Join(err, cleanup(ctx))
 	}
 
 	record, err := s.registry.RegisterPane(registry.RegisterPaneRequest{
@@ -70,16 +66,74 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 		TaskID:       registry.TaskID(req.TaskID),
 		AgentID:      registry.AgentID(req.AgentID),
 		ZellijPaneID: registry.ZellijPaneID(zellijID),
+		ZellijTabID:  registryTabID(tabID),
+		TabName:      tabName,
 		Role:         registry.PaneRole(req.Role),
 		Command:      cloneStrings(req.Command),
 		CWD:          req.CWD,
 	})
 	if err != nil {
-		cleanupErr := s.backend.ClosePane(ctx, zellij.ClosePaneRequest{PaneID: zellijID})
-		return CreatePaneResponse{}, errors.Join(err, cleanupErr)
+		return CreatePaneResponse{}, errors.Join(err, cleanup(ctx))
 	}
 
 	return CreatePaneResponse{Pane: paneFromRecord(record)}, nil
+}
+
+func (s *Service) createBackendPane(ctx context.Context, req CreatePaneRequest) (zellij.PaneID, *zellij.TabID, string, func(context.Context) error, error) {
+	if req.NewTab {
+		tabID, err := s.backend.CreateTab(ctx, zellij.CreateTabRequest{
+			Name:    req.TabName,
+			CWD:     req.CWD,
+			Command: cloneStrings(req.Command),
+		})
+		if err != nil {
+			return "", nil, "", nilCleanup, err
+		}
+
+		pane, err := s.findPaneInTab(ctx, tabID)
+		if err != nil {
+			return "", nil, "", func(ctx context.Context) error {
+				return s.backend.CloseTab(ctx, zellij.CloseTabRequest{TabID: &tabID})
+			}, err
+		}
+
+		tabName := req.TabName
+		if tabName == "" {
+			tabName = pane.TabName
+		}
+
+		return pane.ID, &tabID, tabName, func(ctx context.Context) error {
+			return s.backend.CloseTab(ctx, zellij.CloseTabRequest{TabID: &tabID})
+		}, nil
+	}
+
+	var targetTabID *zellij.TabID
+	if req.ZellijTabID != nil {
+		tabID := zellij.TabID(*req.ZellijTabID)
+		targetTabID = &tabID
+	}
+
+	zellijID, err := s.backend.CreatePane(ctx, zellij.CreatePaneRequest{
+		Name:    req.Name,
+		CWD:     req.CWD,
+		TabID:   targetTabID,
+		Command: cloneStrings(req.Command),
+	})
+	if err != nil {
+		return "", nil, "", nilCleanup, err
+	}
+
+	tabID := targetTabID
+	tabName := req.TabName
+	if pane, err := s.findPaneByID(ctx, zellijID); err == nil {
+		discoveredTabID := zellij.TabID(pane.TabID)
+		tabID = &discoveredTabID
+		tabName = pane.TabName
+	}
+
+	return zellijID, tabID, tabName, func(ctx context.Context) error {
+		return s.backend.ClosePane(ctx, zellij.ClosePaneRequest{PaneID: zellijID})
+	}, nil
 }
 
 func (s *Service) SendInput(ctx context.Context, req SendInputRequest) error {
@@ -188,6 +242,54 @@ func (s *Service) lookupPane(id PaneID) (registry.PaneRecord, error) {
 	return record, nil
 }
 
+func (s *Service) findPaneByID(ctx context.Context, paneID zellij.PaneID) (zellij.Pane, error) {
+	panes, err := s.backend.ListPanes(ctx)
+	if err != nil {
+		return zellij.Pane{}, err
+	}
+	for _, pane := range panes {
+		if pane.ID == paneID {
+			return pane, nil
+		}
+	}
+	return zellij.Pane{}, ErrPaneNotFound
+}
+
+func (s *Service) findPaneInTab(ctx context.Context, tabID zellij.TabID) (zellij.Pane, error) {
+	panes, err := s.backend.ListPanes(ctx)
+	if err != nil {
+		return zellij.Pane{}, err
+	}
+	for _, pane := range panes {
+		if zellij.TabID(pane.TabID) == tabID && !pane.IsPlugin {
+			return pane, nil
+		}
+	}
+	return zellij.Pane{}, ErrPaneNotFound
+}
+
+func nilCleanup(context.Context) error {
+	return nil
+}
+
+func registryTabID(value *zellij.TabID) *registry.ZellijTabID {
+	if value == nil {
+		return nil
+	}
+
+	tabID := registry.ZellijTabID(*value)
+	return &tabID
+}
+
+func runtimeTabID(value *registry.ZellijTabID) *ZellijTabID {
+	if value == nil {
+		return nil
+	}
+
+	tabID := ZellijTabID(*value)
+	return &tabID
+}
+
 func sequentialPaneIDGenerator() PaneIDGenerator {
 	var next uint64
 	return func() PaneID {
@@ -201,6 +303,8 @@ func paneFromRecord(record registry.PaneRecord) Pane {
 		TaskID:        TaskID(record.TaskID),
 		AgentID:       AgentID(record.AgentID),
 		ZellijPaneID:  ZellijPaneID(record.ZellijPaneID),
+		ZellijTabID:   runtimeTabID(record.ZellijTabID),
+		TabName:       record.TabName,
 		Role:          PaneRole(record.Role),
 		Command:       cloneStrings(record.Command),
 		CWD:           record.CWD,

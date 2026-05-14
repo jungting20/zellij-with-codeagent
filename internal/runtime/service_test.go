@@ -12,7 +12,10 @@ import (
 )
 
 func TestCreatePaneRegistersLogicalRecord(t *testing.T) {
-	backend := &fakeBackend{createID: "terminal_5"}
+	backend := &fakeBackend{
+		createID:  "terminal_5",
+		listPanes: []zellij.Pane{{ID: "terminal_5", TabID: 3, TabName: "main"}},
+	}
 	service := newTestService(backend)
 
 	response, err := service.CreatePane(context.Background(), CreatePaneRequest{
@@ -34,6 +37,9 @@ func TestCreatePaneRegistersLogicalRecord(t *testing.T) {
 	if response.Pane.Status != PaneStatusStarting {
 		t.Fatalf("CreatePane() status = %q, want %q", response.Pane.Status, PaneStatusStarting)
 	}
+	if response.Pane.ZellijTabID == nil || *response.Pane.ZellijTabID != 3 || response.Pane.TabName != "main" {
+		t.Fatalf("CreatePane() tab metadata = (%v, %q), want (3, main)", response.Pane.ZellijTabID, response.Pane.TabName)
+	}
 	if len(backend.createRequests) != 1 {
 		t.Fatalf("backend CreatePane calls = %d, want 1", len(backend.createRequests))
 	}
@@ -52,6 +58,126 @@ func TestCreatePaneRegistersLogicalRecord(t *testing.T) {
 	}
 	if len(list.Panes) != 1 || list.Panes[0].ID != "pane-1" {
 		t.Fatalf("ListPanes() = %#v, want created pane", list.Panes)
+	}
+}
+
+func TestCreatePaneTargetsExistingTab(t *testing.T) {
+	tabID := ZellijTabID(7)
+	backend := &fakeBackend{
+		createID:  "terminal_5",
+		listPanes: []zellij.Pane{{ID: "terminal_5", TabID: 7, TabName: "tests"}},
+	}
+	service := newTestService(backend)
+
+	response, err := service.CreatePane(context.Background(), CreatePaneRequest{
+		ID:          "pane-1",
+		Role:        PaneRoleTest,
+		Name:        "runner",
+		ZellijTabID: &tabID,
+		Command:     []string{"go", "test", "./..."},
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+
+	want := zellij.CreatePaneRequest{
+		Name:    "runner",
+		TabID:   zellijTabID(7),
+		Command: []string{"go", "test", "./..."},
+	}
+	if !reflect.DeepEqual(backend.createRequests[0], want) {
+		t.Fatalf("backend CreatePane request = %#v, want %#v", backend.createRequests[0], want)
+	}
+	if response.Pane.ZellijTabID == nil || *response.Pane.ZellijTabID != 7 || response.Pane.TabName != "tests" {
+		t.Fatalf("CreatePane() tab metadata = (%v, %q), want (7, tests)", response.Pane.ZellijTabID, response.Pane.TabName)
+	}
+}
+
+func TestCreatePaneTargetsTabZero(t *testing.T) {
+	tabID := ZellijTabID(0)
+	backend := &fakeBackend{
+		createID:  "terminal_5",
+		listPanes: []zellij.Pane{{ID: "terminal_5", TabID: 0, TabName: "main"}},
+	}
+	service := newTestService(backend)
+
+	response, err := service.CreatePane(context.Background(), CreatePaneRequest{
+		ID:          "pane-1",
+		ZellijTabID: &tabID,
+		Command:     []string{"pwd"},
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+
+	want := zellij.CreatePaneRequest{
+		TabID:   zellijTabID(0),
+		Command: []string{"pwd"},
+	}
+	if !reflect.DeepEqual(backend.createRequests[0], want) {
+		t.Fatalf("backend CreatePane request = %#v, want %#v", backend.createRequests[0], want)
+	}
+	if response.Pane.ZellijTabID == nil || *response.Pane.ZellijTabID != 0 {
+		t.Fatalf("CreatePane() tab ID = %v, want 0", response.Pane.ZellijTabID)
+	}
+}
+
+func TestCreatePaneCreatesNewTabAndRegistersTabMetadata(t *testing.T) {
+	backend := &fakeBackend{
+		createTabID: 9,
+		listPanes:   []zellij.Pane{{ID: "terminal_9", TabID: 9, TabName: "agent-tests"}},
+	}
+	service := newTestService(backend)
+
+	response, err := service.CreatePane(context.Background(), CreatePaneRequest{
+		ID:      "pane-1",
+		Role:    PaneRoleTest,
+		NewTab:  true,
+		TabName: "agent-tests",
+		Command: []string{"go", "test", "./..."},
+		CWD:     "/workspace",
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+
+	if len(backend.createTabRequests) != 1 {
+		t.Fatalf("backend CreateTab calls = %d, want 1", len(backend.createTabRequests))
+	}
+	wantTabRequest := zellij.CreateTabRequest{
+		Name:    "agent-tests",
+		CWD:     "/workspace",
+		Command: []string{"go", "test", "./..."},
+	}
+	if !reflect.DeepEqual(backend.createTabRequests[0], wantTabRequest) {
+		t.Fatalf("backend CreateTab request = %#v, want %#v", backend.createTabRequests[0], wantTabRequest)
+	}
+	if len(backend.createRequests) != 0 {
+		t.Fatalf("backend CreatePane calls = %d, want 0", len(backend.createRequests))
+	}
+	if response.Pane.ZellijPaneID != "terminal_9" || response.Pane.ZellijTabID == nil || *response.Pane.ZellijTabID != 9 || response.Pane.TabName != "agent-tests" {
+		t.Fatalf("CreatePane() pane = %#v, want pane and tab metadata", response.Pane)
+	}
+}
+
+func TestCreatePaneCleansUpNewTabWhenPaneDiscoveryFails(t *testing.T) {
+	backend := &fakeBackend{
+		createTabID: 9,
+		listPanes:   []zellij.Pane{},
+	}
+	service := newTestService(backend)
+
+	_, err := service.CreatePane(context.Background(), CreatePaneRequest{
+		ID:      "pane-1",
+		NewTab:  true,
+		TabName: "agent-tests",
+		Command: []string{"go", "test", "./..."},
+	})
+	if !errors.Is(err, ErrPaneNotFound) {
+		t.Fatalf("CreatePane() error = %v, want %v", err, ErrPaneNotFound)
+	}
+	if len(backend.closeTabRequests) != 1 || backend.closeTabRequests[0].TabID == nil || *backend.closeTabRequests[0].TabID != 9 {
+		t.Fatalf("backend CloseTab requests = %#v, want cleanup of tab 9", backend.closeTabRequests)
 	}
 }
 
@@ -140,6 +266,7 @@ func TestInspectPaneReturnsRegistryRecord(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
 	}
+	listCallsBefore := len(backend.listCalls)
 
 	response, err := service.InspectPane(context.Background(), InspectPaneRequest{PaneID: "pane-1"})
 	if err != nil {
@@ -152,8 +279,8 @@ func TestInspectPaneReturnsRegistryRecord(t *testing.T) {
 	if response.Pane.TaskID != "task-1" || response.Pane.Role != PaneRoleCoder {
 		t.Fatalf("InspectPane() pane = %#v, want registry metadata", response.Pane)
 	}
-	if len(backend.listCalls) != 0 {
-		t.Fatalf("backend ListPanes calls = %d, want 0", len(backend.listCalls))
+	if len(backend.listCalls) != listCallsBefore {
+		t.Fatalf("backend ListPanes calls changed from %d to %d, want no inspect-time call", listCallsBefore, len(backend.listCalls))
 	}
 }
 
@@ -271,30 +398,70 @@ func newTestService(backend *fakeBackend) *Service {
 	})
 }
 
-type fakeBackend struct {
-	createID  zellij.PaneID
-	createIDs []zellij.PaneID
+func zellijTabID(id zellij.TabID) *zellij.TabID {
+	return &id
+}
 
-	createErr error
-	closeErr  error
-	sendErr   error
-	listErr   error
-	dumpErr   error
+type fakeBackend struct {
+	createID    zellij.PaneID
+	createIDs   []zellij.PaneID
+	createTabID zellij.TabID
+
+	createErr    error
+	createTabErr error
+	closeErr     error
+	closeTabErr  error
+	sendErr      error
+	listErr      error
+	dumpErr      error
 
 	listPanes  []zellij.Pane
 	dumpOutput string
 
-	createRequests []zellij.CreatePaneRequest
-	closeRequests  []zellij.ClosePaneRequest
-	sendRequests   []zellij.SendInputRequest
-	dumpRequests   []zellij.DumpScreenRequest
-	listCalls      []struct{}
+	createRequests    []zellij.CreatePaneRequest
+	createTabRequests []zellij.CreateTabRequest
+	closeRequests     []zellij.ClosePaneRequest
+	closeTabRequests  []zellij.CloseTabRequest
+	sendRequests      []zellij.SendInputRequest
+	dumpRequests      []zellij.DumpScreenRequest
+	listCalls         []struct{}
+}
+
+func (b *fakeBackend) CreateTab(_ context.Context, req zellij.CreateTabRequest) (zellij.TabID, error) {
+	b.createTabRequests = append(b.createTabRequests, zellij.CreateTabRequest{
+		Name:    req.Name,
+		CWD:     req.CWD,
+		Command: cloneStrings(req.Command),
+	})
+	if b.createTabErr != nil {
+		return 0, b.createTabErr
+	}
+	if b.createTabID == 0 {
+		return 1, nil
+	}
+	return b.createTabID, nil
+}
+
+func (b *fakeBackend) CloseTab(_ context.Context, req zellij.CloseTabRequest) error {
+	var tabID *zellij.TabID
+	if req.TabID != nil {
+		clone := *req.TabID
+		tabID = &clone
+	}
+	b.closeTabRequests = append(b.closeTabRequests, zellij.CloseTabRequest{TabID: tabID})
+	return b.closeTabErr
 }
 
 func (b *fakeBackend) CreatePane(_ context.Context, req zellij.CreatePaneRequest) (zellij.PaneID, error) {
+	var tabID *zellij.TabID
+	if req.TabID != nil {
+		clone := *req.TabID
+		tabID = &clone
+	}
 	b.createRequests = append(b.createRequests, zellij.CreatePaneRequest{
 		Name:    req.Name,
 		CWD:     req.CWD,
+		TabID:   tabID,
 		Command: cloneStrings(req.Command),
 	})
 	if b.createErr != nil {

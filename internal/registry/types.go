@@ -9,6 +9,7 @@ type (
 	AgentID      string
 	PaneID       string
 	ZellijPaneID string
+	ZellijTabID  int
 )
 
 type PaneRole string
@@ -38,6 +39,8 @@ type PaneRecord struct {
 	TaskID        TaskID
 	AgentID       AgentID
 	ZellijPaneID  ZellijPaneID
+	ZellijTabID   *ZellijTabID
+	TabName       string
 	Role          PaneRole
 	Command       []string
 	CWD           string
@@ -53,6 +56,8 @@ type RegisterPaneRequest struct {
 	TaskID       TaskID
 	AgentID      AgentID
 	ZellijPaneID ZellijPaneID
+	ZellijTabID  *ZellijTabID
+	TabName      string
 	Role         PaneRole
 	Command      []string
 	CWD          string

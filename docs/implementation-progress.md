@@ -35,6 +35,8 @@ The project now has a testable `internal/runtime` service boundary that wires th
 
 - `RuntimeService` exposes structured in-process methods for creating panes, sending input, listing panes, inspecting registry metadata, snapshotting output, and closing panes.
 - `CreatePane` calls the Zellij backend, registers a stable logical pane record, and returns both logical and Zellij pane IDs.
+- Pane records now preserve Zellij tab ID and tab name metadata.
+- `CreatePane` can create a new Zellij tab before registering the managed pane, or target an existing tab by ID.
 - Pane-specific operations resolve logical pane IDs through the registry before touching backend-owned Zellij IDs.
 - Unknown logical pane IDs return `ErrPaneNotFound` without backend calls.
 - Backend create failures leave the registry unchanged.
@@ -46,6 +48,7 @@ The project now has a testable `internal/runtime` service boundary that wires th
 ### Verification
 
 - `go test ./...` passed.
+- `AGENTD_ZELLIJ_INTEGRATION=1 go test ./internal/runtime -run TestIntegrationCreateSnapshotAndClosePane -v` created a real Zellij tab and pane, captured output, and closed it.
 
 ### Not Implemented Yet
 

@@ -9,12 +9,15 @@ import (
 
 func TestRegisterPaneCreatesStableLogicalRecord(t *testing.T) {
 	registry := newTestRegistry()
+	tabID := ZellijTabID(3)
 
 	record, err := registry.RegisterPane(RegisterPaneRequest{
 		ID:           "pane-1",
 		TaskID:       "task-1",
 		AgentID:      "agent-1",
 		ZellijPaneID: "terminal_5",
+		ZellijTabID:  &tabID,
+		TabName:      "tests",
 		Role:         PaneRoleTest,
 		Command:      []string{"go", "test", "./..."},
 		CWD:          "/workspace",
@@ -31,6 +34,9 @@ func TestRegisterPaneCreatesStableLogicalRecord(t *testing.T) {
 	}
 	if record.ZellijPaneID != "terminal_5" {
 		t.Fatalf("record.ZellijPaneID = %q, want terminal_5", record.ZellijPaneID)
+	}
+	if record.ZellijTabID == nil || *record.ZellijTabID != 3 || record.TabName != "tests" {
+		t.Fatalf("record tab metadata = (%v, %q), want (3, tests)", record.ZellijTabID, record.TabName)
 	}
 	if !reflect.DeepEqual(record.Command, []string{"go", "test", "./..."}) {
 		t.Fatalf("record.Command = %#v, want go test command", record.Command)
@@ -61,12 +67,15 @@ func TestRegisterPaneRejectsDuplicateLogicalID(t *testing.T) {
 
 func TestUpdatePaneStatusPreservesAssociations(t *testing.T) {
 	registry := newTestRegistry()
+	tabID := ZellijTabID(2)
 
 	if _, err := registry.RegisterPane(RegisterPaneRequest{
 		ID:           "pane-1",
 		TaskID:       "task-1",
 		AgentID:      "agent-1",
 		ZellijPaneID: "terminal_5",
+		ZellijTabID:  &tabID,
+		TabName:      "server",
 		Role:         PaneRoleServer,
 		Status:       PaneStatusRunning,
 	}); err != nil {
@@ -84,7 +93,7 @@ func TestUpdatePaneStatusPreservesAssociations(t *testing.T) {
 	if record.StatusMessage != "process exited" {
 		t.Fatalf("record.StatusMessage = %q, want process exited", record.StatusMessage)
 	}
-	if record.TaskID != "task-1" || record.AgentID != "agent-1" || record.ZellijPaneID != "terminal_5" {
+	if record.TaskID != "task-1" || record.AgentID != "agent-1" || record.ZellijPaneID != "terminal_5" || record.ZellijTabID == nil || *record.ZellijTabID != 2 || record.TabName != "server" {
 		t.Fatalf("record associations changed unexpectedly: %#v", record)
 	}
 }

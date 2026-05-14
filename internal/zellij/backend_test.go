@@ -46,6 +46,64 @@ func TestCreatePaneParsesReturnedPaneID(t *testing.T) {
 	}
 }
 
+func TestCreatePaneTargetsTabID(t *testing.T) {
+	tabID := TabID(7)
+	runner := &fakeRunner{
+		results: []fakeResult{
+			{result: CommandResult{Stdout: "terminal_5\n"}},
+		},
+	}
+	backend := NewBackend(Options{Runner: runner})
+
+	_, err := backend.CreatePane(context.Background(), CreatePaneRequest{
+		Name:    "tests",
+		TabID:   &tabID,
+		Command: []string{"go", "test", "./..."},
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+
+	want := CommandSpec{
+		Name: "zellij",
+		Args: []string{
+			"action", "new-pane",
+			"--name", "tests",
+			"--tab-id", "7",
+			"--", "go", "test", "./...",
+		},
+	}
+	if !reflect.DeepEqual(runner.commands[0], want) {
+		t.Fatalf("command = %#v, want %#v", runner.commands[0], want)
+	}
+}
+
+func TestCreatePaneCanTargetTabZero(t *testing.T) {
+	tabID := TabID(0)
+	runner := &fakeRunner{
+		results: []fakeResult{
+			{result: CommandResult{Stdout: "terminal_5\n"}},
+		},
+	}
+	backend := NewBackend(Options{Runner: runner})
+
+	_, err := backend.CreatePane(context.Background(), CreatePaneRequest{
+		TabID:   &tabID,
+		Command: []string{"pwd"},
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+
+	want := CommandSpec{
+		Name: "zellij",
+		Args: []string{"action", "new-pane", "--tab-id", "0", "--", "pwd"},
+	}
+	if !reflect.DeepEqual(runner.commands[0], want) {
+		t.Fatalf("command = %#v, want %#v", runner.commands[0], want)
+	}
+}
+
 func TestCreatePaneRejectsEmptyReturnedPaneID(t *testing.T) {
 	runner := &fakeRunner{
 		results: []fakeResult{
@@ -57,6 +115,93 @@ func TestCreatePaneRejectsEmptyReturnedPaneID(t *testing.T) {
 	_, err := backend.CreatePane(context.Background(), CreatePaneRequest{})
 	if !errors.Is(err, ErrEmptyPaneID) {
 		t.Fatalf("CreatePane() error = %v, want %v", err, ErrEmptyPaneID)
+	}
+}
+
+func TestCreateTabParsesReturnedTabID(t *testing.T) {
+	runner := &fakeRunner{
+		results: []fakeResult{
+			{result: CommandResult{Stdout: "9\n"}},
+		},
+	}
+	backend := NewBackend(Options{
+		Session: "agent-session",
+		Runner:  runner,
+	})
+
+	id, err := backend.CreateTab(context.Background(), CreateTabRequest{
+		Name:    "tests",
+		CWD:     "/workspace",
+		Command: []string{"go", "test", "./..."},
+	})
+	if err != nil {
+		t.Fatalf("CreateTab() error = %v", err)
+	}
+	if id != 9 {
+		t.Fatalf("CreateTab() id = %d, want 9", id)
+	}
+
+	want := CommandSpec{
+		Name: "zellij",
+		Args: []string{
+			"--session", "agent-session",
+			"action", "new-tab",
+			"--name", "tests",
+			"--cwd", "/workspace",
+			"--", "go", "test", "./...",
+		},
+	}
+	if !reflect.DeepEqual(runner.commands[0], want) {
+		t.Fatalf("command = %#v, want %#v", runner.commands[0], want)
+	}
+}
+
+func TestCreateTabRejectsEmptyReturnedTabID(t *testing.T) {
+	runner := &fakeRunner{
+		results: []fakeResult{
+			{result: CommandResult{Stdout: "\n"}},
+		},
+	}
+	backend := NewBackend(Options{Runner: runner})
+
+	_, err := backend.CreateTab(context.Background(), CreateTabRequest{})
+	if !errors.Is(err, ErrEmptyTabID) {
+		t.Fatalf("CreateTab() error = %v, want %v", err, ErrEmptyTabID)
+	}
+}
+
+func TestCreateTabAllowsReturnedTabZero(t *testing.T) {
+	runner := &fakeRunner{
+		results: []fakeResult{
+			{result: CommandResult{Stdout: "0\n"}},
+		},
+	}
+	backend := NewBackend(Options{Runner: runner})
+
+	id, err := backend.CreateTab(context.Background(), CreateTabRequest{})
+	if err != nil {
+		t.Fatalf("CreateTab() error = %v", err)
+	}
+	if id != 0 {
+		t.Fatalf("CreateTab() id = %d, want 0", id)
+	}
+}
+
+func TestCloseTabCanCloseTabZero(t *testing.T) {
+	tabID := TabID(0)
+	runner := &fakeRunner{}
+	backend := NewBackend(Options{Runner: runner})
+
+	if err := backend.CloseTab(context.Background(), CloseTabRequest{TabID: &tabID}); err != nil {
+		t.Fatalf("CloseTab() error = %v", err)
+	}
+
+	want := CommandSpec{
+		Name: "zellij",
+		Args: []string{"action", "close-tab-by-id", "0"},
+	}
+	if !reflect.DeepEqual(runner.commands[0], want) {
+		t.Fatalf("command = %#v, want %#v", runner.commands[0], want)
 	}
 }
 
@@ -240,6 +385,9 @@ func TestPaneIDIsRequiredForPaneSpecificCommands(t *testing.T) {
 
 	if err := backend.ClosePane(context.Background(), ClosePaneRequest{}); !errors.Is(err, ErrMissingPane) {
 		t.Fatalf("ClosePane() error = %v, want %v", err, ErrMissingPane)
+	}
+	if err := backend.CloseTab(context.Background(), CloseTabRequest{}); !errors.Is(err, ErrMissingTab) {
+		t.Fatalf("CloseTab() error = %v, want %v", err, ErrMissingTab)
 	}
 	if err := backend.SendInput(context.Background(), SendInputRequest{}); !errors.Is(err, ErrMissingPane) {
 		t.Fatalf("SendInput() error = %v, want %v", err, ErrMissingPane)
