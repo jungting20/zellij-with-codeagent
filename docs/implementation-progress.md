@@ -1,5 +1,52 @@
 # Implementation Progress
 
+## 2026-05-14
+
+### Current Status
+
+`U1. Bootstrap Go Module and Daemon Layout`, `U2. Define Runtime Domain Model and Registry`, and `U3. Implement Zellij CLI Backend` are complete.
+
+The project now has a testable `internal/zellij` package that encapsulates `zellij` subprocess command construction and execution behind a backend interface. This is still pre-runtime-service; the backend exists, but it is not yet wired into a daemon-owned `RuntimeService`, event bus, subscription manager, or planner-facing transport.
+
+### Implemented
+
+- Created `internal/zellij/types.go`
+- Created `internal/zellij/commands.go`
+- Created `internal/zellij/backend.go`
+- Created `internal/zellij/backend_test.go`
+
+### Zellij Backend Behavior
+
+- `NewBackend` creates a CLI-backed Zellij controller with configurable binary path, session name, and command runner.
+- `CreatePane` runs `zellij action new-pane`, supports pane name, cwd, and direct command arguments, and parses the returned pane ID.
+- `ClosePane` runs `zellij action close-pane --pane-id`.
+- `SendInput` serializes per-pane input operations and preserves paste-before-enter ordering for newline-terminated input.
+- `ListPanes` runs `zellij action list-panes --json` and parses pane metadata into typed records.
+- `DumpScreen` runs `zellij action dump-screen` with optional `--full` and `--ansi`.
+- `SubscribeCommand` builds the long-running `zellij subscribe` command spec for future subscription manager ownership.
+- Failed subprocess calls return `CommandError` with the operation name and stderr detail.
+- Malformed `list-panes` JSON is surfaced as an error instead of being hidden.
+
+### Verification
+
+- `go test ./...` passed.
+
+### Not Implemented Yet
+
+- `RuntimeService` interface
+- Event bus
+- Subscription manager that owns long-running subscribe processes
+- Reconciliation and cleanup
+- Runtime introspection
+- AI planner
+- External transports such as HTTP, Unix socket, stdio JSON-RPC, or gRPC
+
+### Next Step
+
+Start `U4. Create Internal RuntimeService`.
+
+The next implementation should wire the registry and Zellij backend together behind daemon-owned runtime operations for pane creation, input, inspection, and cleanup.
+
 ## 2026-05-12
 
 ### Current Status
