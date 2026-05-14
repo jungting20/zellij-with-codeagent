@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"zellij-with-codeagent/internal/eventbus"
 	"zellij-with-codeagent/internal/registry"
 	"zellij-with-codeagent/internal/zellij"
 )
@@ -13,15 +14,19 @@ import (
 type PaneIDGenerator func() PaneID
 
 type Options struct {
-	Registry  *registry.Registry
-	Backend   zellij.Backend
-	NewPaneID PaneIDGenerator
+	Registry           *registry.Registry
+	Backend            zellij.Backend
+	NewPaneID          PaneIDGenerator
+	EventBus           *eventbus.Bus
+	SubscriptionRunner SubscriptionRunner
 }
 
 type Service struct {
 	registry  *registry.Registry
 	backend   zellij.Backend
 	newPaneID PaneIDGenerator
+	bus       *eventbus.Bus
+	subs      *SubscriptionManager
 }
 
 func NewService(opts Options) *Service {
@@ -40,10 +45,27 @@ func NewService(opts Options) *Service {
 		newPaneID = sequentialPaneIDGenerator()
 	}
 
+	bus := opts.EventBus
+	if bus == nil {
+		bus = eventbus.New()
+	}
+
+	var subs *SubscriptionManager
+	if opts.SubscriptionRunner != nil {
+		subs = NewSubscriptionManager(SubscriptionManagerOptions{
+			Registry: reg,
+			Backend:  backend,
+			Bus:      bus,
+			Runner:   opts.SubscriptionRunner,
+		})
+	}
+
 	return &Service{
 		registry:  reg,
 		backend:   backend,
 		newPaneID: newPaneID,
+		bus:       bus,
+		subs:      subs,
 	}
 }
 
@@ -76,7 +98,20 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 		return CreatePaneResponse{}, errors.Join(err, cleanup(ctx))
 	}
 
+	if s.subs != nil {
+		s.subs.StartPane(registry.PaneID(id))
+	}
+
 	return CreatePaneResponse{Pane: paneFromRecord(record)}, nil
+}
+
+// SubscribeEvents exposes in-process runtime observations published by the daemon.
+func (s *Service) SubscribeEvents(ctx context.Context) (<-chan eventbus.Event, func(), error) {
+	if s.bus == nil {
+		return nil, nil, errors.New("runtime: event bus not configured")
+	}
+	ch, unsub := s.bus.Subscribe(ctx)
+	return ch, unsub, nil
 }
 
 func (s *Service) createBackendPane(ctx context.Context, req CreatePaneRequest) (zellij.PaneID, *zellij.TabID, string, func(context.Context) error, error) {
@@ -218,6 +253,10 @@ func (s *Service) ClosePane(ctx context.Context, req ClosePaneRequest) (ClosePan
 	updated, err := s.registry.UpdatePaneStatus(registry.PaneID(req.PaneID), registry.PaneStatusClosed, "closed by runtime service")
 	if err != nil {
 		return ClosePaneResponse{}, err
+	}
+
+	if s.subs != nil {
+		s.subs.StopPane(registry.PaneID(req.PaneID))
 	}
 
 	return ClosePaneResponse{Pane: paneFromRecord(updated)}, nil

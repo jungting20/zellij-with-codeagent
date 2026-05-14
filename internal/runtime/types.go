@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"zellij-with-codeagent/internal/eventbus"
 	"zellij-with-codeagent/internal/registry"
 )
 
@@ -46,6 +47,7 @@ type RuntimeService interface {
 	InspectPane(context.Context, InspectPaneRequest) (InspectPaneResponse, error)
 	SnapshotOutput(context.Context, SnapshotOutputRequest) (SnapshotOutputResponse, error)
 	ClosePane(context.Context, ClosePaneRequest) (ClosePaneResponse, error)
+	SubscribeEvents(context.Context) (<-chan eventbus.Event, func(), error)
 }
 
 type CreatePaneRequest struct {

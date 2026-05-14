@@ -45,7 +45,8 @@ func printUsage(w io.Writer) {
 
 func newRuntimeService() agentruntime.RuntimeService {
 	return agentruntime.NewService(agentruntime.Options{
-		Registry: registry.New(),
-		Backend:  zellij.NewBackend(zellij.Options{}),
+		Registry:           registry.New(),
+		Backend:            zellij.NewBackend(zellij.Options{}),
+		SubscriptionRunner: agentruntime.ExecSubscriptionRunner{},
 	})
 }

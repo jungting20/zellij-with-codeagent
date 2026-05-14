@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"zellij-with-codeagent/internal/eventbus"
 	"zellij-with-codeagent/internal/registry"
 	"zellij-with-codeagent/internal/zellij"
 )
@@ -268,6 +269,46 @@ func TestE2ECreateTabAndFourPanesPrintRegistry(t *testing.T) {
 	t.Logf("runtime registry after creating tab %d (%s) and 4 panes:\n%s", tabID, tabName, registryJSON)
 }
 
+func TestIntegrationSubscribeEmitsRawOutput(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	service, _ := newIntegrationService(t, "integration-subscribe-marker")
+
+	evCtx, evCancel := context.WithCancel(ctx)
+	defer evCancel()
+	events, unsub, errSub := service.SubscribeEvents(evCtx)
+	if errSub != nil {
+		t.Fatalf("SubscribeEvents() error = %v", errSub)
+	}
+	defer unsub()
+
+	marker := "agentd-subscribe-marker"
+	created, err := service.CreatePane(ctx, CreatePaneRequest{
+		Role:    PaneRoleLog,
+		NewTab:  true,
+		TabName: "agentd-subscribe",
+		Command: []string{"sh", "-lc", fmt.Sprintf("printf '%s\\n'; sleep 30", marker)},
+		CWD:     ".",
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+	defer closeIntegrationPane(t, service, created.Pane.ID)
+
+	found := false
+	for !found {
+		select {
+		case ev := <-events:
+			if ev.Type == eventbus.TypeRawOutput && strings.Contains(ev.Message, marker) {
+				found = true
+			}
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for subscribe raw_output containing %q", marker)
+		}
+	}
+}
+
 func formatTabID(id *ZellijTabID) string {
 	if id == nil {
 		return "unknown"
@@ -290,6 +331,7 @@ func newIntegrationService(t *testing.T, paneID PaneID) (*Service, *zellij.CLIBa
 		NewPaneID: func() PaneID {
 			return paneID
 		},
+		SubscriptionRunner: ExecSubscriptionRunner{},
 	})
 	return service, backend
 }
@@ -304,8 +346,9 @@ func newE2EService(t *testing.T) (*Service, *zellij.CLIBackend) {
 		Session: os.Getenv("ZELLIJ_SESSION_NAME"),
 	})
 	service := NewService(Options{
-		Registry: registry.New(),
-		Backend:  backend,
+		Registry:           registry.New(),
+		Backend:            backend,
+		SubscriptionRunner: ExecSubscriptionRunner{},
 	})
 	return service, backend
 }
