@@ -4,9 +4,9 @@
 
 ### Current Status
 
-`U1. Bootstrap Go Module and Daemon Layout`, `U2. Define Runtime Domain Model and Registry`, and `U3. Implement Zellij CLI Backend` are complete.
+`U1. Bootstrap Go Module and Daemon Layout`, `U2. Define Runtime Domain Model and Registry`, `U3. Implement Zellij CLI Backend`, and `U4. Create Internal RuntimeService` are complete.
 
-The project now has a testable `internal/zellij` package that encapsulates `zellij` subprocess command construction and execution behind a backend interface. This is still pre-runtime-service; the backend exists, but it is not yet wired into a daemon-owned `RuntimeService`, event bus, subscription manager, or planner-facing transport.
+The project now has a testable `internal/runtime` service boundary that wires the registry and Zellij backend together for daemon-owned pane operations. This is still pre-event-streaming; the runtime service exists, but it is not yet wired into an event bus, subscription manager, reconciliation loop, introspection surface, or planner-facing transport.
 
 ### Implemented
 
@@ -14,6 +14,10 @@ The project now has a testable `internal/zellij` package that encapsulates `zell
 - Created `internal/zellij/commands.go`
 - Created `internal/zellij/backend.go`
 - Created `internal/zellij/backend_test.go`
+- Created `internal/runtime/types.go`
+- Created `internal/runtime/service.go`
+- Created `internal/runtime/service_test.go`
+- Updated `cmd/agentd/main.go`
 
 ### Zellij Backend Behavior
 
@@ -27,13 +31,24 @@ The project now has a testable `internal/zellij` package that encapsulates `zell
 - Failed subprocess calls return `CommandError` with the operation name and stderr detail.
 - Malformed `list-panes` JSON is surfaced as an error instead of being hidden.
 
+### Runtime Service Behavior
+
+- `RuntimeService` exposes structured in-process methods for creating panes, sending input, listing panes, inspecting registry metadata, snapshotting output, and closing panes.
+- `CreatePane` calls the Zellij backend, registers a stable logical pane record, and returns both logical and Zellij pane IDs.
+- Pane-specific operations resolve logical pane IDs through the registry before touching backend-owned Zellij IDs.
+- Unknown logical pane IDs return `ErrPaneNotFound` without backend calls.
+- Backend create failures leave the registry unchanged.
+- Registry failures after backend pane creation trigger best-effort backend cleanup.
+- Snapshot output updates the registry's latest output summary.
+- Close failures mark the logical pane record as `error`; successful closes mark it `closed`.
+- `agentd` now has an internal runtime service construction point while external transports remain deferred.
+
 ### Verification
 
 - `go test ./...` passed.
 
 ### Not Implemented Yet
 
-- `RuntimeService` interface
 - Event bus
 - Subscription manager that owns long-running subscribe processes
 - Reconciliation and cleanup
@@ -43,9 +58,9 @@ The project now has a testable `internal/zellij` package that encapsulates `zell
 
 ### Next Step
 
-Start `U4. Create Internal RuntimeService`.
+Start `U5. Add Subscription Manager and Event Bus`.
 
-The next implementation should wire the registry and Zellij backend together behind daemon-owned runtime operations for pane creation, input, inspection, and cleanup.
+The next implementation should stream pane output from Zellij, normalize it into runtime events, and publish those events through an internal event bus.
 
 ## 2026-05-12
 
