@@ -389,6 +389,70 @@ func TestInProcessHarnessExercisesRuntimeOperations(t *testing.T) {
 	}
 }
 
+func TestInProcessScenarioLeavesPaneOpenWhenClosePaneIsNotCalled(t *testing.T) {
+	backend := &fakeBackend{
+		createTabID: 9,
+		listPanes:   []zellij.Pane{{ID: "terminal_9", TabID: 9, TabName: "agentd-scenario"}},
+		dumpOutput:  "runtime-input-ok\n",
+	}
+	service := newTestService(backend)
+
+	created, err := service.CreatePane(context.Background(), CreatePaneRequest{
+		ID:      "pane-1",
+		Role:    PaneRoleCoder,
+		NewTab:  true,
+		TabName: "agentd-scenario",
+		Command: []string{"sh"},
+		CWD:     "/workspace",
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+	if created.Pane.ZellijPaneID != "terminal_9" || created.Pane.ZellijTabID == nil || *created.Pane.ZellijTabID != 9 {
+		t.Fatalf("CreatePane() pane = %#v, want pane in created tab 9", created.Pane)
+	}
+
+	if err := service.SendInput(context.Background(), SendInputRequest{
+		PaneID: created.Pane.ID,
+		Text:   "printf 'runtime-input-ok\\n'\n",
+	}); err != nil {
+		t.Fatalf("SendInput() error = %v", err)
+	}
+
+	snapshot, err := service.SnapshotOutput(context.Background(), SnapshotOutputRequest{
+		PaneID: created.Pane.ID,
+		Full:   true,
+	})
+	if err != nil {
+		t.Fatalf("SnapshotOutput() error = %v", err)
+	}
+	if snapshot.Output != "runtime-input-ok\n" || snapshot.Pane.LastOutput != "runtime-input-ok\n" {
+		t.Fatalf("SnapshotOutput() = %#v, want captured output on open pane", snapshot)
+	}
+
+	inspected, err := service.InspectPane(context.Background(), InspectPaneRequest{PaneID: created.Pane.ID})
+	if err != nil {
+		t.Fatalf("InspectPane() error = %v", err)
+	}
+	if inspected.Pane.Status == PaneStatusClosed {
+		t.Fatalf("InspectPane() status = %q, want pane to remain open", inspected.Pane.Status)
+	}
+
+	list, err := service.ListPanes(context.Background())
+	if err != nil {
+		t.Fatalf("ListPanes() error = %v", err)
+	}
+	if len(list.Panes) != 1 || list.Panes[0].ID != created.Pane.ID {
+		t.Fatalf("ListPanes() = %#v, want open scenario pane", list.Panes)
+	}
+	if len(backend.closeRequests) != 0 {
+		t.Fatalf("backend ClosePane calls = %#v, want none", backend.closeRequests)
+	}
+	if len(backend.closeTabRequests) != 0 {
+		t.Fatalf("backend CloseTab calls = %#v, want none", backend.closeTabRequests)
+	}
+}
+
 func newTestService(backend *fakeBackend) *Service {
 	return NewService(Options{
 		Registry: registry.NewWithClock(func() time.Time {
