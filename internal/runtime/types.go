@@ -47,6 +47,8 @@ type RuntimeService interface {
 	ListPanes(context.Context) (ListPanesResponse, error)
 	InspectPane(context.Context, InspectPaneRequest) (InspectPaneResponse, error)
 	SnapshotOutput(context.Context, SnapshotOutputRequest) (SnapshotOutputResponse, error)
+	InspectRuntime(context.Context, InspectRuntimeRequest) (InspectRuntimeResponse, error)
+	RecentEvents(context.Context, RecentEventsRequest) (RecentEventsResponse, error)
 	ClosePane(context.Context, ClosePaneRequest) (ClosePaneResponse, error)
 	Reconcile(context.Context, ReconcileRequest) (ReconcileResponse, error)
 	Cleanup(context.Context, CleanupRequest) (CleanupResponse, error)
@@ -98,6 +100,67 @@ type SnapshotOutputRequest struct {
 type SnapshotOutputResponse struct {
 	Pane   Pane
 	Output string
+}
+
+type InspectRuntimeRequest struct{}
+
+type RuntimeCounts struct {
+	Managed  int
+	Starting int
+	Running  int
+	Exited   int
+	Closed   int
+	Lost     int
+	Error    int
+	Active   int
+	Terminal int
+}
+
+type TaskPaneGroup struct {
+	TaskID TaskID
+	Panes  []Pane
+}
+
+type RolePaneGroup struct {
+	Role  PaneRole
+	Panes []Pane
+}
+
+type PaneOutputSummary struct {
+	PaneID     PaneID
+	TaskID     TaskID
+	Role       PaneRole
+	Status     PaneStatus
+	LastOutput string
+	UpdatedAt  time.Time
+}
+
+type InspectRuntimeResponse struct {
+	Message string
+	Counts  RuntimeCounts
+	Panes   []Pane
+	Tasks   []TaskPaneGroup
+	Roles   []RolePaneGroup
+	Outputs []PaneOutputSummary
+}
+
+type RecentEventsRequest struct {
+	Limit int
+	Types []eventbus.EventType
+}
+
+type EventSummary struct {
+	Type         eventbus.EventType
+	PaneID       PaneID
+	TaskID       TaskID
+	AgentID      AgentID
+	ZellijPaneID ZellijPaneID
+	Message      string
+	Time         time.Time
+}
+
+type RecentEventsResponse struct {
+	Events []EventSummary
 }
 
 type ClosePaneRequest struct {

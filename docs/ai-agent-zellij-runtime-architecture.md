@@ -402,6 +402,40 @@ planner → daemon API → zellij
 
 ---
 
+# MVP 구현 invariant
+
+현재 구현된 MVP에서도 핵심 방향은 같다.
+
+```text
+planner / client
+        ↓
+internal/runtime.RuntimeService
+        ↓
+registry + eventbus + zellij backend
+        ↓
+zellij CLI
+```
+
+## 반드시 지킬 것
+
+- planner나 외부 client는 zellij CLI를 직접 호출하지 않는다.
+- zellij pane 생성, 입력, snapshot, subscribe, reconcile, cleanup은 daemon runtime boundary를 통해서만 한다.
+- logical `PaneID`는 daemon-owned ID이고, `ZellijPaneID`는 backend ID일 뿐이다.
+- registry가 managed pane 상태의 기준이다. zellij는 실행 runtime이지 상태 저장소가 아니다.
+- reconcile은 unmanaged live pane을 보고할 수 있지만 기본적으로 adopt하거나 close하지 않는다.
+- pane이 `closed`, `exited`, `lost`가 되면 subscription lifecycle도 같이 종료되어야 한다.
+- supervisor/debug view도 planner와 같은 runtime introspection 데이터를 읽어야 한다.
+
+## 현재 MVP 한계
+
+- 상태는 local memory에만 있다.
+- daemon restart 후 durable recovery는 아직 없다.
+- semantic event는 MVP regex/heuristic 기반이다.
+- LLM planner와 외부 transport는 아직 붙지 않았다.
+- HTTP, Unix socket, stdio JSON-RPC, gRPC 같은 외부 API는 deferred 상태다.
+
+---
+
 # 최종 구조
 
 ```text

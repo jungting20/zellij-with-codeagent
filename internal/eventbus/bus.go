@@ -5,15 +5,20 @@ import (
 	"sync"
 )
 
-const defaultBuffer = 64
+const (
+	defaultBuffer  = 64
+	defaultHistory = 128
+)
 
 // Bus fans out events to subscribers without exposing Zellij wire formats.
 type Bus struct {
-	mu      sync.RWMutex
-	closed  bool
-	nextID  int
-	subs    map[int]chan Event
-	bufferN int
+	mu       sync.RWMutex
+	closed   bool
+	nextID   int
+	subs     map[int]chan Event
+	bufferN  int
+	history  []Event
+	historyN int
 }
 
 // New returns an event bus with buffered subscriber channels.
@@ -27,8 +32,9 @@ func NewWithBuffer(buffer int) *Bus {
 		buffer = 1
 	}
 	return &Bus{
-		subs:    make(map[int]chan Event),
-		bufferN: buffer,
+		subs:     make(map[int]chan Event),
+		bufferN:  buffer,
+		historyN: defaultHistory,
 	}
 }
 
@@ -71,16 +77,21 @@ func (b *Bus) Subscribe(ctx context.Context) (<-chan Event, func()) {
 // Publish delivers an event to all subscribers. Slow subscribers drop events
 // when their buffer is full so publishers cannot deadlock.
 func (b *Bus) Publish(e Event) {
-	b.mu.RLock()
+	b.mu.Lock()
 	if b.closed {
-		b.mu.RUnlock()
+		b.mu.Unlock()
 		return
+	}
+	b.history = append(b.history, e)
+	if overflow := len(b.history) - b.historyN; overflow > 0 {
+		copy(b.history, b.history[overflow:])
+		b.history = b.history[:b.historyN]
 	}
 	subs := make([]chan Event, 0, len(b.subs))
 	for _, ch := range b.subs {
 		subs = append(subs, ch)
 	}
-	b.mu.RUnlock()
+	b.mu.Unlock()
 
 	for _, ch := range subs {
 		select {
@@ -89,6 +100,22 @@ func (b *Bus) Publish(e Event) {
 			// drop — subscriber is slower than publisher
 		}
 	}
+}
+
+// Recent returns recent events in publication order. A non-positive limit
+// returns the full retained history.
+func (b *Bus) Recent(limit int) []Event {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	start := 0
+	if limit > 0 && limit < len(b.history) {
+		start = len(b.history) - limit
+	}
+
+	events := make([]Event, len(b.history)-start)
+	copy(events, b.history[start:])
+	return events
 }
 
 // Close shuts down the bus and closes all subscriber channels.

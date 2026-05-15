@@ -75,3 +75,33 @@ func TestBusCloseStopsDelivery(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 }
+
+func TestBusRecentReturnsEventsInPublicationOrder(t *testing.T) {
+	bus := New()
+	base := time.Date(2026, 5, 15, 0, 0, 0, 0, time.UTC)
+
+	bus.Publish(Event{Type: TypeServerReady, PaneID: "pane-1", Message: "ready", Time: base})
+	bus.Publish(Event{Type: TypeTestFailed, PaneID: "pane-2", Message: "failed", Time: base.Add(time.Second)})
+	bus.Publish(Event{Type: TypeTestPassed, PaneID: "pane-2", Message: "passed", Time: base.Add(2 * time.Second)})
+
+	recent := bus.Recent(2)
+	if len(recent) != 2 {
+		t.Fatalf("Recent(2) length = %d, want 2", len(recent))
+	}
+	if recent[0].Type != TypeTestFailed || recent[1].Type != TypeTestPassed {
+		t.Fatalf("Recent(2) = %#v, want last two events in publication order", recent)
+	}
+}
+
+func TestBusRecentClonesHistory(t *testing.T) {
+	bus := New()
+	bus.Publish(Event{Type: TypeServerReady, PaneID: "pane-1", Message: "ready"})
+
+	recent := bus.Recent(0)
+	recent[0].Message = "mutated"
+
+	again := bus.Recent(0)
+	if again[0].Message != "ready" {
+		t.Fatalf("Recent() leaked mutable history, got %#v", again[0])
+	}
+}

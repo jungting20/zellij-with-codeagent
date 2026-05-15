@@ -4,9 +4,9 @@
 
 ### Current Status
 
-`U1` through `U6. Implement Reconciliation and Cleanup` are complete.
+`U1` through `U8. Document MVP Operation and Invariants` are complete.
 
-The runtime can now reconcile daemon-owned logical pane records against live `zellij list-panes --json` state, mark externally disappeared panes as `lost`, mark exited panes as `exited`, report unmanaged live panes without adopting them, and clean up daemon-managed panes while preserving unmanaged panes in the same Zellij session. Reconciliation and cleanup also keep subscription lifecycles aligned by stopping subscriptions for lost, exited, or cleanup-closed panes. Runtime introspection, planner transports, and the supervisor remain deferred.
+The runtime can now reconcile daemon-owned logical pane records against live `zellij list-panes --json` state, clean up daemon-managed panes while preserving unmanaged panes in the same Zellij session, expose in-process introspection for managed panes, grouped runtime status, latest output summaries, and recent event history, and document MVP operation plus invariants for future planner and transport work. Reconciliation and cleanup keep subscription lifecycles aligned by stopping subscriptions for lost, exited, or cleanup-closed panes. AI planner integration and external transports remain deferred.
 
 ### Implemented
 
@@ -14,9 +14,17 @@ The runtime can now reconcile daemon-owned logical pane records against live `ze
 - Created `internal/runtime/reconcile_test.go`
 - Created `internal/runtime/cleanup.go`
 - Created `internal/runtime/cleanup_test.go`
+- Created `internal/runtime/introspection.go`
+- Created `internal/runtime/introspection_test.go`
+- Created `internal/supervisor/view.go`
+- Created `internal/supervisor/view_test.go`
+- Created `README.md`
+- Updated `internal/eventbus/bus.go`
+- Updated `internal/eventbus/bus_test.go`
 - Updated `internal/runtime/types.go`
 - Updated `internal/runtime/service_test.go`
 - Updated `internal/runtime/integration_test.go` with real-Zellij reconciliation and cleanup coverage
+- Updated `docs/ai-agent-zellij-runtime-architecture.md`
 - Updated `docs/runtime-e2e-test.md`
 
 ### Reconciliation Behavior
@@ -36,22 +44,35 @@ The runtime can now reconcile daemon-owned logical pane records against live `ze
 - Close failures mark only the failed pane `error`, continue cleanup attempts for later panes, and return `ErrCleanupPartial` with per-pane failure details.
 - Unknown explicitly requested pane IDs are reported as cleanup failures without backend calls.
 
+### Introspection Behavior
+
+- `eventbus.Bus` retains a bounded recent event history and returns cloned event slices in publication order.
+- `RuntimeService.InspectRuntime` returns a developer-facing status view with managed panes, counts by lifecycle state, panes grouped by task and role, and latest output summaries.
+- Empty registries return a useful `no managed panes` status without special-case caller logic.
+- `RuntimeService.RecentEvents` returns recent events with optional type filtering and limit handling after filtering.
+- `supervisor.BuildView` combines runtime status and recent events into a read-only dashboard-ready view without adding an external transport.
+- Unknown pane output snapshots still return `ErrPaneNotFound` before any backend `dump-screen` call.
+
+### MVP Operation and Invariants
+
+- `README.md` documents setup, `go run ./cmd/agentd`, `go test ./...`, real-Zellij integration tests, manual E2E tests, and current MVP limitations.
+- The README describes the internal `RuntimeService` boundary, core operations, Zellij session selection through backend options or `ZELLIJ_SESSION_NAME`, and cleanup expectations.
+- `docs/ai-agent-zellij-runtime-architecture.md` now records implementation invariants: planners and clients must not call Zellij directly, the registry is the managed state source, Zellij pane IDs are backend IDs, unmanaged panes are not adopted or closed by default, and subscription lifecycles follow pane lifecycles.
+
 ### Verification
 
 - `go test ./...` passed.
+- `go test ./internal/eventbus ./internal/runtime ./internal/supervisor` passed.
 - `AGENTD_ZELLIJ_INTEGRATION=1 go test ./internal/runtime -run '^TestIntegration(Reconcile|Cleanup)' -v -count=1` created real Zellij panes, reconciled an externally closed pane to a terminal runtime state, cleaned up managed panes, and preserved an unmanaged pane until test cleanup.
 
 ### Not Implemented Yet
 
-- Runtime introspection (`U7`)
 - AI planner integration and semantic matchers tuned beyond MVP regex/heuristics
 - External transports such as HTTP, Unix socket, stdio JSON-RPC, or gRPC
 
 ### Next Step
 
-Start `U7. Build Minimal Runtime Introspection`.
-
-Expose enough developer-facing runtime state to inspect managed panes, recent events, and output summaries without adding a separate external transport yet.
+No further MVP implementation unit is listed in the current plan. Future work can start from the deferred planner integration, semantic matcher tuning, or external transport design.
 
 ## 2026-05-14
 
