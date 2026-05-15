@@ -105,3 +105,4 @@ See `docs/runtime-e2e-test.md` for the close-on-input E2E flow and cleanup notes
 - Rule-based semantic event matchers only.
 - No LLM planner integration yet.
 - No external transport or rich TUI dashboard yet.
+# zellij-with-codeagent
