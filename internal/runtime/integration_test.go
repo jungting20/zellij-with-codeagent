@@ -377,6 +377,177 @@ func TestE2EClosePaneWhenManualPhraseObserved(t *testing.T) {
 	t.Logf("closed pane %s after observing manual input %q", observedPaneID, trigger)
 }
 
+func TestE2EPlannerScenarioEventMonitorAndSixPanes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	service, backend := newE2EService(t)
+
+	tabName := "agentd-e2e-planner-scenario"
+	panes := make([]Pane, 0, 6)
+	first, err := service.CreatePane(ctx, CreatePaneRequest{
+		ID:      "planner-e2e-coder",
+		TaskID:  "planner-e2e-task",
+		AgentID: "planner-agent",
+		Role:    PaneRoleCoder,
+		Name:    "planner-e2e-coder",
+		NewTab:  true,
+		TabName: tabName,
+		Command: e2ePlannerPaneCommand("planner-e2e-coder"),
+		CWD:     ".",
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() first error = %v", err)
+	}
+	if first.Pane.ZellijTabID == nil {
+		t.Fatalf("CreatePane() first tab ID = nil, want created tab ID")
+	}
+	tabID := *first.Pane.ZellijTabID
+	zellijTabID := zellij.TabID(tabID)
+	panes = append(panes, first.Pane)
+
+	monitorPaneID, err := backend.CreatePane(ctx, zellij.CreatePaneRequest{
+		Name:    "planner-e2e-eventbus-monitor",
+		TabID:   &zellijTabID,
+		Command: e2eEventMonitorCommand(),
+		CWD:     ".",
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() event monitor error = %v", err)
+	}
+	waitForBackendSnapshotContains(ctx, t, backend, monitorPaneID, "agentd_event_monitor_ready")
+
+	requests := []struct {
+		id   PaneID
+		role PaneRole
+	}{
+		{id: "planner-e2e-test", role: PaneRoleTest},
+		{id: "planner-e2e-build", role: PaneRoleBuild},
+		{id: "planner-e2e-server", role: PaneRoleServer},
+		{id: "planner-e2e-log", role: PaneRoleLog},
+		{id: "planner-e2e-reviewer", role: PaneRoleUnknown},
+	}
+	for _, req := range requests {
+		created, err := service.CreatePane(ctx, CreatePaneRequest{
+			ID:          req.id,
+			TaskID:      "planner-e2e-task",
+			AgentID:     "planner-agent",
+			Role:        req.role,
+			Name:        string(req.id),
+			ZellijTabID: &tabID,
+			Command:     e2ePlannerPaneCommand(string(req.id)),
+			CWD:         ".",
+		})
+		if err != nil {
+			t.Fatalf("CreatePane() %s error = %v", req.id, err)
+		}
+		panes = append(panes, created.Pane)
+	}
+
+	for _, pane := range panes {
+		waitForSnapshotContains(ctx, t, service, pane.ID, "agentd_planner_ready:"+string(pane.ID))
+		if pane.ZellijTabID == nil || *pane.ZellijTabID != tabID {
+			t.Fatalf("created pane %s tab ID = %v, want %d", pane.ID, pane.ZellijTabID, tabID)
+		}
+		t.Logf("created managed pane %s -> zellij pane %s in tab %d", pane.ID, pane.ZellijPaneID, tabID)
+	}
+	t.Logf("created unmanaged event monitor pane -> zellij pane %s in tab %d", monitorPaneID, tabID)
+
+	events, unsub, err := service.SubscribeEvents(ctx)
+	if err != nil {
+		t.Fatalf("SubscribeEvents() error = %v", err)
+	}
+	defer unsub()
+
+	monitorErrs := make(chan error, 1)
+	sendMonitorLine := func(line string) error {
+		return backend.SendInput(ctx, zellij.SendInputRequest{
+			PaneID: monitorPaneID,
+			Text:   line + "\n",
+		})
+	}
+	if err := sendMonitorLine("=== agentd planner E2E event bus monitor ==="); err != nil {
+		t.Fatalf("write event monitor header: %v", err)
+	}
+
+	recent, err := service.RecentEvents(ctx, RecentEventsRequest{})
+	if err != nil {
+		t.Fatalf("RecentEvents() error = %v", err)
+	}
+	for _, ev := range recent.Events {
+		if err := sendMonitorLine(e2eFormatRecentEvent("recent", ev)); err != nil {
+			t.Fatalf("write recent event to monitor: %v", err)
+		}
+	}
+
+	go func() {
+		for {
+			select {
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				if err := sendMonitorLine(e2eFormatEvent("live", ev)); err != nil {
+					select {
+					case monitorErrs <- err:
+					default:
+					}
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	interactions := []struct {
+		from PaneID
+		to   PaneID
+		text string
+	}{
+		{from: "planner-e2e-coder", to: "planner-e2e-test", text: "구현 초안을 테스트 pane에 전달합니다"},
+		{from: "planner-e2e-test", to: "planner-e2e-build", text: "테스트 통과 결과를 빌드 pane에 전달합니다"},
+		{from: "planner-e2e-build", to: "planner-e2e-server", text: "빌드 결과로 서버 시작을 요청합니다 :3000"},
+		{from: "planner-e2e-server", to: "planner-e2e-log", text: "서버 로그 확인을 로그 pane에 요청합니다"},
+		{from: "planner-e2e-log", to: "planner-e2e-reviewer", text: "로그 요약을 리뷰 pane에 전달합니다"},
+		{from: "planner-e2e-reviewer", to: "planner-e2e-coder", text: "리뷰 결과를 코더 pane에 되돌려 보냅니다"},
+		{from: "planner-e2e-coder", to: "planner-e2e-test", text: "실패 시나리오를 재현합니다"},
+		{from: "planner-e2e-coder", to: "planner-e2e-test", text: "수정 후 통과 시나리오를 확인합니다"},
+	}
+	for _, interaction := range interactions {
+		input := fmt.Sprintf("상호작용 %s -> %s: %s", interaction.from, interaction.to, interaction.text)
+		if err := service.SendInput(ctx, SendInputRequest{
+			PaneID: interaction.to,
+			Text:   input + "\n",
+		}); err != nil {
+			t.Fatalf("SendInput(%s) error = %v", interaction.to, err)
+		}
+		waitForSnapshotContains(ctx, t, service, interaction.to, input)
+		time.Sleep(150 * time.Millisecond)
+	}
+
+	waitForSnapshotContains(ctx, t, service, "planner-e2e-server", "server listening on :3000")
+	waitForSnapshotContains(ctx, t, service, "planner-e2e-test", "--- FAIL:")
+	waitForSnapshotContains(ctx, t, service, "planner-e2e-test", "ok planner-e2e-test")
+
+	select {
+	case err := <-monitorErrs:
+		t.Fatalf("event monitor forwarding error = %v", err)
+	default:
+	}
+
+	list, err := service.ListPanes(ctx)
+	if err != nil {
+		t.Fatalf("ListPanes() error = %v", err)
+	}
+	registryJSON, err := json.MarshalIndent(list.Panes, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal registry panes: %v", err)
+	}
+	t.Logf("planner scenario left open in tab %d (%s). managed panes:\n%s", tabID, tabName, registryJSON)
+	t.Logf("inspect Zellij tab %d (%s): event monitor pane %s plus %d managed interactive panes are intentionally left open", tabID, tabName, monitorPaneID, len(panes))
+}
+
 func TestIntegrationSubscribeEmitsRawOutput(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -600,6 +771,44 @@ func e2eManualInputCommand(trigger string) []string {
 	return []string{"sh", "-lc", script}
 }
 
+func e2ePlannerPaneCommand(name string) []string {
+	script := fmt.Sprintf(`name=%q
+printf 'agentd_planner_ready:%%s\n' "$name"
+while IFS= read -r line; do
+  printf 'agentd_planner_input:%%s:%%s\n' "$name" "$line"
+  case "$line" in
+    *":3000"*|*"start server"*|*"서버 시작"*) printf 'server listening on :3000 for %%s\n' "$name" ;;
+    *"fail"*|*"실패"*) printf -- '--- FAIL: %%s\n' "$name" ;;
+    *"pass"*|*"통과"*|*"성공"*) printf 'ok %%s\n' "$name" ;;
+    *"handoff"*|*"전달"*|*"상호작용"*) printf 'agentd_planner_handoff:%%s:%%s\n' "$name" "$line" ;;
+  esac
+done`, name)
+	return []string{"sh", "-lc", script}
+}
+
+func e2eEventMonitorCommand() []string {
+	script := "printf 'agentd_event_monitor_ready\\n'; while IFS= read -r line; do printf '%s\\n' \"$line\"; done"
+	return []string{"sh", "-lc", script}
+}
+
+func e2eFormatEvent(label string, ev eventbus.Event) string {
+	return fmt.Sprintf("eventbus[%s] terminal=%s type=%s", label, e2eEventTerminalID(ev.ZellijPaneID, ev.PaneID), ev.Type)
+}
+
+func e2eFormatRecentEvent(label string, ev EventSummary) string {
+	return fmt.Sprintf("eventbus[%s] terminal=%s type=%s", label, e2eEventTerminalID(string(ev.ZellijPaneID), string(ev.PaneID)), ev.Type)
+}
+
+func e2eEventTerminalID(zellijPaneID, logicalPaneID string) string {
+	if zellijPaneID != "" {
+		return zellijPaneID
+	}
+	if logicalPaneID != "" {
+		return logicalPaneID
+	}
+	return "unknown"
+}
+
 func closeIntegrationPane(t *testing.T, service *Service, paneID PaneID) {
 	t.Helper()
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -654,6 +863,29 @@ func waitForBackendPanePresence(ctx context.Context, t *testing.T, backend *zell
 	}
 
 	t.Fatalf("zellij pane %s presence = %v, want %v", paneID, !wantPresent, wantPresent)
+}
+
+func waitForBackendSnapshotContains(ctx context.Context, t *testing.T, backend *zellij.CLIBackend, paneID zellij.PaneID, marker string) string {
+	t.Helper()
+
+	var output string
+	var err error
+	for i := 0; i < 20; i++ {
+		output, err = backend.DumpScreen(ctx, zellij.DumpScreenRequest{
+			PaneID: paneID,
+			Full:   true,
+		})
+		if err != nil {
+			t.Fatalf("backend DumpScreen() error = %v", err)
+		}
+		if strings.Contains(output, marker) {
+			return output
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	t.Fatalf("backend DumpScreen() = %q, want %s", output, marker)
+	return ""
 }
 
 func responseIncludesPane(panes []Pane, id PaneID) bool {
