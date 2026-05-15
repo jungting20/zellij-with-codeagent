@@ -269,6 +269,114 @@ func TestE2ECreateTabAndFourPanesPrintRegistry(t *testing.T) {
 	t.Logf("runtime registry after creating tab %d (%s) and 4 panes:\n%s", tabID, tabName, registryJSON)
 }
 
+func TestE2EClosePaneWhenManualPhraseObserved(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	service, _ := newE2EService(t)
+
+	trigger := "close this pane"
+	observedMarker := "agentd_manual_input:" + trigger
+
+	evCtx, evCancel := context.WithCancel(ctx)
+	defer evCancel()
+	events, unsub, errSub := service.SubscribeEvents(evCtx)
+	if errSub != nil {
+		t.Fatalf("SubscribeEvents() error = %v", errSub)
+	}
+	defer unsub()
+
+	panes := make([]Pane, 0, 4)
+	tabName := "agentd-e2e-close-on-input"
+	first, err := service.CreatePane(ctx, CreatePaneRequest{
+		ID:      "e2e-close-input-pane-1",
+		Role:    PaneRoleCoder,
+		Name:    "e2e-close-input-pane-1",
+		NewTab:  true,
+		TabName: tabName,
+		Command: e2eManualInputCommand(trigger),
+		CWD:     ".",
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() first error = %v", err)
+	}
+	if first.Pane.ZellijTabID == nil {
+		t.Fatalf("CreatePane() first tab ID = nil, want created tab ID")
+	}
+	panes = append(panes, first.Pane)
+	tabID := *first.Pane.ZellijTabID
+
+	requests := []struct {
+		id   PaneID
+		role PaneRole
+	}{
+		{id: "e2e-close-input-pane-2", role: PaneRoleTest},
+		{id: "e2e-close-input-pane-3", role: PaneRoleBuild},
+		{id: "e2e-close-input-pane-4", role: PaneRoleLog},
+	}
+	for _, req := range requests {
+		created, err := service.CreatePane(ctx, CreatePaneRequest{
+			ID:          req.id,
+			Role:        req.role,
+			Name:        string(req.id),
+			ZellijTabID: &tabID,
+			Command:     e2eManualInputCommand(trigger),
+			CWD:         ".",
+		})
+		if err != nil {
+			t.Fatalf("CreatePane() %s error = %v", req.id, err)
+		}
+		panes = append(panes, created.Pane)
+	}
+
+	createdPaneIDs := make(map[string]bool, len(panes))
+	for _, pane := range panes {
+		createdPaneIDs[string(pane.ID)] = true
+		t.Logf("created %s -> zellij pane %s in tab %d", pane.ID, pane.ZellijPaneID, tabID)
+	}
+	t.Logf("type %q in any pane in tab %d (%s); only that pane will be closed", trigger, tabID, tabName)
+
+	var observedPaneID PaneID
+	for observedPaneID == "" {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatalf("event stream closed before manual input containing %q", observedMarker)
+			}
+			if ev.Type != eventbus.TypeRawOutput || !strings.Contains(ev.Message, observedMarker) {
+				continue
+			}
+			if !createdPaneIDs[ev.PaneID] {
+				t.Fatalf("observed manual input from unexpected pane %s", ev.PaneID)
+			}
+			observedPaneID = PaneID(ev.PaneID)
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for manual input containing %q", observedMarker)
+		}
+	}
+
+	closed, err := service.ClosePane(ctx, ClosePaneRequest{PaneID: observedPaneID})
+	if err != nil {
+		t.Fatalf("ClosePane(%s) error = %v", observedPaneID, err)
+	}
+	if closed.Pane.Status != PaneStatusClosed {
+		t.Fatalf("ClosePane(%s) status = %q, want %q", observedPaneID, closed.Pane.Status, PaneStatusClosed)
+	}
+	for _, pane := range panes {
+		if pane.ID == observedPaneID {
+			continue
+		}
+		inspected, err := service.InspectPane(ctx, InspectPaneRequest{PaneID: pane.ID})
+		if err != nil {
+			t.Fatalf("InspectPane(%s) error = %v", pane.ID, err)
+		}
+		if inspected.Pane.Status == PaneStatusClosed {
+			t.Fatalf("pane %s status = %q, want only %s closed", pane.ID, inspected.Pane.Status, observedPaneID)
+		}
+	}
+	t.Logf("closed pane %s after observing manual input %q", observedPaneID, trigger)
+}
+
 func TestIntegrationSubscribeEmitsRawOutput(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -355,6 +463,11 @@ func newE2EService(t *testing.T) (*Service, *zellij.CLIBackend) {
 
 func e2ePaneCommand(marker string) []string {
 	return []string{"sh", "-lc", fmt.Sprintf("printf '%s\n'; sleep 600", marker)}
+}
+
+func e2eManualInputCommand(trigger string) []string {
+	script := fmt.Sprintf("printf 'type %q and press Enter\\n'; while IFS= read -r line; do printf 'agentd_manual_input:%%s\\n' \"$line\"; done", trigger)
+	return []string{"sh", "-lc", script}
 }
 
 func closeIntegrationPane(t *testing.T, service *Service, paneID PaneID) {
