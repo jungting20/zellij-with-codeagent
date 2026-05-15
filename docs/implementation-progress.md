@@ -1,5 +1,58 @@
 # Implementation Progress
 
+## 2026-05-15
+
+### Current Status
+
+`U1` through `U6. Implement Reconciliation and Cleanup` are complete.
+
+The runtime can now reconcile daemon-owned logical pane records against live `zellij list-panes --json` state, mark externally disappeared panes as `lost`, mark exited panes as `exited`, report unmanaged live panes without adopting them, and clean up daemon-managed panes while preserving unmanaged panes in the same Zellij session. Reconciliation and cleanup also keep subscription lifecycles aligned by stopping subscriptions for lost, exited, or cleanup-closed panes. Runtime introspection, planner transports, and the supervisor remain deferred.
+
+### Implemented
+
+- Created `internal/runtime/reconcile.go`
+- Created `internal/runtime/reconcile_test.go`
+- Created `internal/runtime/cleanup.go`
+- Created `internal/runtime/cleanup_test.go`
+- Updated `internal/runtime/types.go`
+- Updated `internal/runtime/service_test.go`
+- Updated `internal/runtime/integration_test.go` with real-Zellij reconciliation and cleanup coverage
+- Updated `docs/runtime-e2e-test.md`
+
+### Reconciliation Behavior
+
+- `RuntimeService.Reconcile` compares registry records with non-plugin panes returned by the Zellij backend.
+- Live managed panes are marked `running`.
+- Managed panes reported by Zellij as exited are marked `exited` and have subscriptions stopped.
+- Managed panes missing from the live Zellij pane list are marked `lost` and have subscriptions stopped.
+- Unmanaged live panes are reported in the response but are not adopted or closed.
+- `list-panes` failures leave registry state intact and publish a `health_changed` event.
+
+### Cleanup Behavior
+
+- `RuntimeService.Cleanup` closes daemon-managed panes, with optional logical pane ID, task ID, and role filters.
+- Cleanup skips terminal records that are already `closed`, `exited`, or `lost`.
+- Successful cleanup marks records `closed` and stops subscriptions.
+- Close failures mark only the failed pane `error`, continue cleanup attempts for later panes, and return `ErrCleanupPartial` with per-pane failure details.
+- Unknown explicitly requested pane IDs are reported as cleanup failures without backend calls.
+
+### Verification
+
+- `go test ./...` passed.
+- `AGENTD_ZELLIJ_INTEGRATION=1 go test ./internal/runtime -run '^TestIntegration(Reconcile|Cleanup)' -v -count=1` created real Zellij panes, reconciled an externally closed pane to a terminal runtime state, cleaned up managed panes, and preserved an unmanaged pane until test cleanup.
+
+### Not Implemented Yet
+
+- Runtime introspection (`U7`)
+- AI planner integration and semantic matchers tuned beyond MVP regex/heuristics
+- External transports such as HTTP, Unix socket, stdio JSON-RPC, or gRPC
+
+### Next Step
+
+Start `U7. Build Minimal Runtime Introspection`.
+
+Expose enough developer-facing runtime state to inspect managed panes, recent events, and output summaries without adding a separate external transport yet.
+
 ## 2026-05-14
 
 ### Current Status

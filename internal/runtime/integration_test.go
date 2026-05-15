@@ -417,6 +417,136 @@ func TestIntegrationSubscribeEmitsRawOutput(t *testing.T) {
 	}
 }
 
+func TestIntegrationReconcileMarksExternallyClosedPaneTerminal(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	service, backend := newIntegrationService(t, "integration-reconcile-unused")
+
+	created, err := service.CreatePane(ctx, CreatePaneRequest{
+		ID:      "integration-reconcile-lost",
+		Role:    PaneRoleTest,
+		NewTab:  true,
+		TabName: "agentd-reconcile",
+		Command: []string{"sh", "-lc", "printf 'agentd-reconcile-lost\n'; sleep 30"},
+		CWD:     ".",
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+	if created.Pane.ZellijTabID == nil {
+		t.Fatalf("CreatePane() tab ID = nil, want cleanup tab ID")
+	}
+	tabID := zellij.TabID(*created.Pane.ZellijTabID)
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer closeCancel()
+		if err := backend.CloseTab(closeCtx, zellij.CloseTabRequest{TabID: &tabID}); err != nil {
+			t.Logf("direct CloseTab cleanup error = %v", err)
+		}
+	})
+
+	waitForSnapshotContains(ctx, t, service, created.Pane.ID, "agentd-reconcile-lost")
+
+	if err := backend.ClosePane(ctx, zellij.ClosePaneRequest{PaneID: zellij.PaneID(created.Pane.ZellijPaneID)}); err != nil {
+		t.Fatalf("direct ClosePane() error = %v", err)
+	}
+	waitForBackendPanePresence(ctx, t, backend, zellij.PaneID(created.Pane.ZellijPaneID), false)
+
+	response, err := service.Reconcile(ctx, ReconcileRequest{})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if !responseIncludesPane(response.Lost, created.Pane.ID) && !responseIncludesPane(response.Exited, created.Pane.ID) {
+		t.Fatalf("Reconcile() lost = %#v exited = %#v, want terminal %s", response.Lost, response.Exited, created.Pane.ID)
+	}
+
+	inspected, err := service.InspectPane(ctx, InspectPaneRequest{PaneID: created.Pane.ID})
+	if err != nil {
+		t.Fatalf("InspectPane() error = %v", err)
+	}
+	if inspected.Pane.Status != PaneStatusLost && inspected.Pane.Status != PaneStatusExited {
+		t.Fatalf("InspectPane() status = %q, want %q or %q", inspected.Pane.Status, PaneStatusLost, PaneStatusExited)
+	}
+}
+
+func TestIntegrationCleanupClosesManagedPanesOnly(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	service, backend := newIntegrationService(t, "integration-cleanup-unused")
+
+	first, err := service.CreatePane(ctx, CreatePaneRequest{
+		ID:      "integration-cleanup-managed-1",
+		Role:    PaneRoleTest,
+		NewTab:  true,
+		TabName: "agentd-cleanup",
+		Command: []string{"sh", "-lc", "printf 'agentd-cleanup-managed-1\n'; sleep 30"},
+		CWD:     ".",
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() first error = %v", err)
+	}
+	if first.Pane.ZellijTabID == nil {
+		t.Fatalf("CreatePane() first tab ID = nil, want created tab ID")
+	}
+	tabID := zellij.TabID(*first.Pane.ZellijTabID)
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer closeCancel()
+		if err := backend.CloseTab(closeCtx, zellij.CloseTabRequest{TabID: &tabID}); err != nil {
+			t.Logf("direct CloseTab cleanup error = %v", err)
+		}
+	})
+
+	runtimeTabID := ZellijTabID(tabID)
+	second, err := service.CreatePane(ctx, CreatePaneRequest{
+		ID:          "integration-cleanup-managed-2",
+		Role:        PaneRoleBuild,
+		ZellijTabID: &runtimeTabID,
+		Command:     []string{"sh", "-lc", "printf 'agentd-cleanup-managed-2\n'; sleep 30"},
+		CWD:         ".",
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() second error = %v", err)
+	}
+
+	unmanagedID, err := backend.CreatePane(ctx, zellij.CreatePaneRequest{
+		TabID:   &tabID,
+		Command: []string{"sh", "-lc", "printf 'agentd-cleanup-unmanaged\n'; sleep 30"},
+		CWD:     ".",
+	})
+	if err != nil {
+		t.Fatalf("direct CreatePane() unmanaged error = %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer closeCancel()
+		if err := backend.ClosePane(closeCtx, zellij.ClosePaneRequest{PaneID: unmanagedID}); err != nil {
+			t.Logf("direct ClosePane unmanaged cleanup error = %v", err)
+		}
+	})
+
+	waitForSnapshotContains(ctx, t, service, first.Pane.ID, "agentd-cleanup-managed-1")
+	waitForSnapshotContains(ctx, t, service, second.Pane.ID, "agentd-cleanup-managed-2")
+	waitForBackendPanePresence(ctx, t, backend, unmanagedID, true)
+
+	response, err := service.Cleanup(ctx, CleanupRequest{})
+	if err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	closed := map[PaneID]bool{}
+	for _, pane := range response.Closed {
+		closed[pane.ID] = true
+	}
+	if !closed[first.Pane.ID] || !closed[second.Pane.ID] || len(response.Closed) != 2 {
+		t.Fatalf("Cleanup() closed = %#v, want both managed panes", response.Closed)
+	}
+	waitForBackendPanePresence(ctx, t, backend, zellij.PaneID(first.Pane.ZellijPaneID), false)
+	waitForBackendPanePresence(ctx, t, backend, zellij.PaneID(second.Pane.ZellijPaneID), false)
+	waitForBackendPanePresence(ctx, t, backend, unmanagedID, true)
+}
+
 func formatTabID(id *ZellijTabID) string {
 	if id == nil {
 		return "unknown"
@@ -500,4 +630,37 @@ func waitForSnapshotContains(ctx context.Context, t *testing.T, service *Service
 
 	t.Fatalf("SnapshotOutput() = %q, want %s", snapshot.Output, marker)
 	return SnapshotOutputResponse{}
+}
+
+func waitForBackendPanePresence(ctx context.Context, t *testing.T, backend *zellij.CLIBackend, paneID zellij.PaneID, wantPresent bool) {
+	t.Helper()
+
+	for i := 0; i < 30; i++ {
+		panes, err := backend.ListPanes(ctx)
+		if err != nil {
+			t.Fatalf("ListPanes() error = %v", err)
+		}
+		present := false
+		for _, pane := range panes {
+			if pane.ID == paneID {
+				present = true
+				break
+			}
+		}
+		if present == wantPresent {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	t.Fatalf("zellij pane %s presence = %v, want %v", paneID, !wantPresent, wantPresent)
+}
+
+func responseIncludesPane(panes []Pane, id PaneID) bool {
+	for _, pane := range panes {
+		if pane.ID == id {
+			return true
+		}
+	}
+	return false
 }

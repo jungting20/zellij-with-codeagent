@@ -471,13 +471,14 @@ type fakeBackend struct {
 	createIDs   []zellij.PaneID
 	createTabID zellij.TabID
 
-	createErr    error
-	createTabErr error
-	closeErr     error
-	closeTabErr  error
-	sendErr      error
-	listErr      error
-	dumpErr      error
+	createErr      error
+	createTabErr   error
+	closeErr       error
+	closeErrByPane map[zellij.PaneID]error
+	closeTabErr    error
+	sendErr        error
+	listErr        error
+	dumpErr        error
 
 	listPanes  []zellij.Pane
 	dumpOutput string
@@ -544,6 +545,9 @@ func (b *fakeBackend) CreatePane(_ context.Context, req zellij.CreatePaneRequest
 
 func (b *fakeBackend) ClosePane(_ context.Context, req zellij.ClosePaneRequest) error {
 	b.closeRequests = append(b.closeRequests, req)
+	if err := b.closeErrByPane[req.PaneID]; err != nil {
+		return err
+	}
 	return b.closeErr
 }
 

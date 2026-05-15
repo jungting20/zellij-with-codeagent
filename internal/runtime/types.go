@@ -10,8 +10,9 @@ import (
 )
 
 var (
-	ErrPaneNotFound  = errors.New("runtime pane not found")
-	ErrMissingPaneID = errors.New("runtime pane id is required")
+	ErrPaneNotFound   = errors.New("runtime pane not found")
+	ErrMissingPaneID  = errors.New("runtime pane id is required")
+	ErrCleanupPartial = errors.New("runtime cleanup partially failed")
 )
 
 type (
@@ -47,6 +48,8 @@ type RuntimeService interface {
 	InspectPane(context.Context, InspectPaneRequest) (InspectPaneResponse, error)
 	SnapshotOutput(context.Context, SnapshotOutputRequest) (SnapshotOutputResponse, error)
 	ClosePane(context.Context, ClosePaneRequest) (ClosePaneResponse, error)
+	Reconcile(context.Context, ReconcileRequest) (ReconcileResponse, error)
+	Cleanup(context.Context, CleanupRequest) (CleanupResponse, error)
 	SubscribeEvents(context.Context) (<-chan eventbus.Event, func(), error)
 }
 
@@ -103,6 +106,33 @@ type ClosePaneRequest struct {
 
 type ClosePaneResponse struct {
 	Pane Pane
+}
+
+type ReconcileRequest struct{}
+
+type ReconcileResponse struct {
+	Panes     []Pane
+	Active    []Pane
+	Exited    []Pane
+	Lost      []Pane
+	Unmanaged []ZellijPaneID
+}
+
+type CleanupRequest struct {
+	PaneIDs []PaneID
+	TaskID  TaskID
+	Role    PaneRole
+}
+
+type CleanupFailure struct {
+	Pane  Pane
+	Error string
+}
+
+type CleanupResponse struct {
+	Closed  []Pane
+	Failed  []CleanupFailure
+	Skipped []Pane
 }
 
 type Pane struct {

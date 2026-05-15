@@ -4,6 +4,8 @@
 
 `TestE2EClosePaneWhenManualPhraseObserved`는 실제 Zellij session에 탭 1개와 pane 4개를 만들고, 테스터가 아무 pane에 정해진 문구를 입력하면 해당 pane의 subscribe 출력 이벤트를 감지해 `RuntimeService.ClosePane`으로 그 pane만 닫는 수동 확인용 테스트다.
 
+`TestIntegrationReconcileMarksExternallyClosedPaneTerminal`와 `TestIntegrationCleanupClosesManagedPanesOnly`는 `AGENTD_ZELLIJ_INTEGRATION=1`에서 실행되는 자동 검증이다. 실제 Zellij pane을 만들지만 테스트 종료 시 직접 cleanup하므로 수동 관찰용 E2E와 다르게 pane/tab을 의도적으로 남기지 않는다.
+
 ## What It Does
 
 - 새 Zellij tab `agentd-e2e-four-panes`를 생성한다.
@@ -81,4 +83,10 @@ closed pane e2e-close-input-pane-... after observing manual input "close this pa
 
 ```bash
 AGENTD_ZELLIJ_INTEGRATION=1 go test ./internal/runtime -run '^TestIntegration' -v -count=1
+```
+
+U6 reconciliation/cleanup 흐름만 확인하려면 아래처럼 실행한다.
+
+```bash
+AGENTD_ZELLIJ_INTEGRATION=1 go test ./internal/runtime -run '^TestIntegration(Reconcile|Cleanup)' -v -count=1
 ```
