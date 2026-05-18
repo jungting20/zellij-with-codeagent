@@ -407,10 +407,11 @@ func TestE2EPlannerScenarioEventMonitorAndSixPanes(t *testing.T) {
 	panes = append(panes, first.Pane)
 
 	monitorPaneID, err := backend.CreatePane(ctx, zellij.CreatePaneRequest{
-		Name:    "planner-e2e-eventbus-monitor",
-		TabID:   &zellijTabID,
-		Command: e2eEventMonitorCommand(),
-		CWD:     ".",
+		Name:     "planner-e2e-eventbus-monitor",
+		TabID:    &zellijTabID,
+		Floating: true,
+		Command:  e2eEventMonitorCommand(),
+		CWD:      ".",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() event monitor error = %v", err)

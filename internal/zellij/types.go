@@ -39,10 +39,11 @@ type Options struct {
 }
 
 type CreatePaneRequest struct {
-	Name    string
-	CWD     string
-	TabID   *TabID
-	Command []string
+	Name     string
+	CWD      string
+	TabID    *TabID
+	Floating bool
+	Command  []string
 }
 
 type CreateTabRequest struct {

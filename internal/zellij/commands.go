@@ -33,6 +33,9 @@ func createPaneCommand(binary, session string, req CreatePaneRequest) CommandSpe
 	if req.TabID != nil {
 		args = append(args, "--tab-id", strconv.Itoa(int(*req.TabID)))
 	}
+	if req.Floating {
+		args = append(args, "--floating")
+	}
 	if len(req.Command) > 0 {
 		args = append(args, "--")
 		args = append(args, req.Command...)

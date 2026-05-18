@@ -78,6 +78,40 @@ func TestCreatePaneTargetsTabID(t *testing.T) {
 	}
 }
 
+func TestCreatePaneCanCreateFloatingPane(t *testing.T) {
+	tabID := TabID(7)
+	runner := &fakeRunner{
+		results: []fakeResult{
+			{result: CommandResult{Stdout: "terminal_5\n"}},
+		},
+	}
+	backend := NewBackend(Options{Runner: runner})
+
+	_, err := backend.CreatePane(context.Background(), CreatePaneRequest{
+		Name:     "monitor",
+		TabID:    &tabID,
+		Floating: true,
+		Command:  []string{"sh"},
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+
+	want := CommandSpec{
+		Name: "zellij",
+		Args: []string{
+			"action", "new-pane",
+			"--name", "monitor",
+			"--tab-id", "7",
+			"--floating",
+			"--", "sh",
+		},
+	}
+	if !reflect.DeepEqual(runner.commands[0], want) {
+		t.Fatalf("command = %#v, want %#v", runner.commands[0], want)
+	}
+}
+
 func TestCreatePaneCanTargetTabZero(t *testing.T) {
 	tabID := TabID(0)
 	runner := &fakeRunner{

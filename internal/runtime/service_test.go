@@ -524,10 +524,11 @@ func (b *fakeBackend) CreatePane(_ context.Context, req zellij.CreatePaneRequest
 		tabID = &clone
 	}
 	b.createRequests = append(b.createRequests, zellij.CreatePaneRequest{
-		Name:    req.Name,
-		CWD:     req.CWD,
-		TabID:   tabID,
-		Command: cloneStrings(req.Command),
+		Name:     req.Name,
+		CWD:      req.CWD,
+		TabID:    tabID,
+		Floating: req.Floating,
+		Command:  cloneStrings(req.Command),
 	})
 	if b.createErr != nil {
 		return "", b.createErr
