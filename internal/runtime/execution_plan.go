@@ -20,7 +20,7 @@ var SupportedExecutionPlanLayouts = map[string]struct{}{
 
 type ExecutionPlanPaneSpec struct {
 	ID      PaneID
-	Role    PaneRole
+	Role    string
 	AgentID AgentID
 	Command []string
 	CWD     string

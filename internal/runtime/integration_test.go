@@ -21,7 +21,7 @@ func TestIntegrationCreateSnapshotAndClosePane(t *testing.T) {
 	service, _ := newIntegrationService(t, "integration-pane")
 
 	created, err := service.CreatePane(ctx, CreatePaneRequest{
-		Role:    PaneRoleTest,
+		Role:    "test",
 		NewTab:  true,
 		TabName: "agentd-smoke",
 		Command: []string{"sh", "-lc", "printf 'agentd-runtime-smoke\n'; sleep 30"},
@@ -52,7 +52,7 @@ func TestIntegrationCreateNewTabSendInputAndClosePane(t *testing.T) {
 	service, _ := newIntegrationService(t, "integration-input-pane")
 
 	created, err := service.CreatePane(ctx, CreatePaneRequest{
-		Role:    PaneRoleCoder,
+		Role:    "coder",
 		NewTab:  true,
 		TabName: "agentd-input",
 		Command: []string{"sh"},
@@ -85,7 +85,7 @@ func TestIntegrationCreatePaneInExistingTabAndClosePane(t *testing.T) {
 
 	base, err := service.CreatePane(ctx, CreatePaneRequest{
 		ID:      "integration-existing-tab-base",
-		Role:    PaneRoleTest,
+		Role:    "test",
 		NewTab:  true,
 		TabName: "agentd-existing-tab",
 		Command: []string{"sh", "-lc", "printf 'agentd-existing-tab-base\n'; sleep 30"},
@@ -103,7 +103,7 @@ func TestIntegrationCreatePaneInExistingTabAndClosePane(t *testing.T) {
 
 	target, err := service.CreatePane(ctx, CreatePaneRequest{
 		ID:          "integration-existing-tab-target",
-		Role:        PaneRoleTest,
+		Role:        "test",
 		ZellijTabID: &tabID,
 		Command:     []string{"sh", "-lc", "printf 'agentd-existing-tab-target\n'; sleep 30"},
 		CWD:         ".",
@@ -127,7 +127,7 @@ func TestIntegrationCreatePaneWithoutRuntimeClosePane(t *testing.T) {
 	service, backend := newIntegrationService(t, "integration-open-pane")
 
 	created, err := service.CreatePane(ctx, CreatePaneRequest{
-		Role:    PaneRoleLog,
+		Role:    "log",
 		NewTab:  true,
 		TabName: "agentd-left-open",
 		Command: []string{"sh", "-lc", "printf 'agentd-left-open\n'; sleep 30"},
@@ -181,7 +181,7 @@ func TestE2ECreateTabAndFourPanesPrintRegistry(t *testing.T) {
 
 	first, err := service.CreatePane(ctx, CreatePaneRequest{
 		ID:      "e2e-pane-1",
-		Role:    PaneRoleCoder,
+		Role:    "coder",
 		Name:    "e2e-pane-1",
 		NewTab:  true,
 		TabName: tabName,
@@ -199,12 +199,12 @@ func TestE2ECreateTabAndFourPanesPrintRegistry(t *testing.T) {
 
 	requests := []struct {
 		id     PaneID
-		role   PaneRole
+		role   string
 		marker string
 	}{
-		{id: "e2e-pane-2", role: PaneRoleTest, marker: "agentd-e2e-pane-2"},
-		{id: "e2e-pane-3", role: PaneRoleBuild, marker: "agentd-e2e-pane-3"},
-		{id: "e2e-pane-4", role: PaneRoleLog, marker: "agentd-e2e-pane-4"},
+		{id: "e2e-pane-2", role: "test", marker: "agentd-e2e-pane-2"},
+		{id: "e2e-pane-3", role: "build", marker: "agentd-e2e-pane-3"},
+		{id: "e2e-pane-4", role: "log", marker: "agentd-e2e-pane-4"},
 	}
 	for _, req := range requests {
 		created, err := service.CreatePane(ctx, CreatePaneRequest{
@@ -290,7 +290,7 @@ func TestE2EClosePaneWhenManualPhraseObserved(t *testing.T) {
 	tabName := "agentd-e2e-close-on-input"
 	first, err := service.CreatePane(ctx, CreatePaneRequest{
 		ID:      "e2e-close-input-pane-1",
-		Role:    PaneRoleCoder,
+		Role:    "coder",
 		Name:    "e2e-close-input-pane-1",
 		NewTab:  true,
 		TabName: tabName,
@@ -308,11 +308,11 @@ func TestE2EClosePaneWhenManualPhraseObserved(t *testing.T) {
 
 	requests := []struct {
 		id   PaneID
-		role PaneRole
+		role string
 	}{
-		{id: "e2e-close-input-pane-2", role: PaneRoleTest},
-		{id: "e2e-close-input-pane-3", role: PaneRoleBuild},
-		{id: "e2e-close-input-pane-4", role: PaneRoleLog},
+		{id: "e2e-close-input-pane-2", role: "test"},
+		{id: "e2e-close-input-pane-3", role: "build"},
+		{id: "e2e-close-input-pane-4", role: "log"},
 	}
 	for _, req := range requests {
 		created, err := service.CreatePane(ctx, CreatePaneRequest{
@@ -389,7 +389,7 @@ func TestE2EPlannerScenarioEventMonitorAndSixPanes(t *testing.T) {
 		ID:      "planner-e2e-coder",
 		TaskID:  "planner-e2e-task",
 		AgentID: "planner-agent",
-		Role:    PaneRoleCoder,
+		Role:    "coder",
 		Name:    "planner-e2e-coder",
 		NewTab:  true,
 		TabName: tabName,
@@ -420,13 +420,13 @@ func TestE2EPlannerScenarioEventMonitorAndSixPanes(t *testing.T) {
 
 	requests := []struct {
 		id   PaneID
-		role PaneRole
+		role string
 	}{
-		{id: "planner-e2e-test", role: PaneRoleTest},
-		{id: "planner-e2e-build", role: PaneRoleBuild},
-		{id: "planner-e2e-server", role: PaneRoleServer},
-		{id: "planner-e2e-log", role: PaneRoleLog},
-		{id: "planner-e2e-reviewer", role: PaneRoleUnknown},
+		{id: "planner-e2e-test", role: "test"},
+		{id: "planner-e2e-build", role: "build"},
+		{id: "planner-e2e-server", role: "server"},
+		{id: "planner-e2e-log", role: "log"},
+		{id: "planner-e2e-reviewer", role: "unknown"},
 	}
 	for _, req := range requests {
 		created, err := service.CreatePane(ctx, CreatePaneRequest{
@@ -565,7 +565,7 @@ func TestIntegrationSubscribeEmitsRawOutput(t *testing.T) {
 
 	marker := "agentd-subscribe-marker"
 	created, err := service.CreatePane(ctx, CreatePaneRequest{
-		Role:    PaneRoleLog,
+		Role:    "log",
 		NewTab:  true,
 		TabName: "agentd-subscribe",
 		Command: []string{"sh", "-lc", fmt.Sprintf("printf '%s\\n'; sleep 30", marker)},
@@ -597,7 +597,7 @@ func TestIntegrationReconcileMarksExternallyClosedPaneTerminal(t *testing.T) {
 
 	created, err := service.CreatePane(ctx, CreatePaneRequest{
 		ID:      "integration-reconcile-lost",
-		Role:    PaneRoleTest,
+		Role:    "test",
 		NewTab:  true,
 		TabName: "agentd-reconcile",
 		Command: []string{"sh", "-lc", "printf 'agentd-reconcile-lost\n'; sleep 30"},
@@ -650,7 +650,7 @@ func TestIntegrationCleanupClosesManagedPanesOnly(t *testing.T) {
 
 	first, err := service.CreatePane(ctx, CreatePaneRequest{
 		ID:      "integration-cleanup-managed-1",
-		Role:    PaneRoleTest,
+		Role:    "test",
 		NewTab:  true,
 		TabName: "agentd-cleanup",
 		Command: []string{"sh", "-lc", "printf 'agentd-cleanup-managed-1\n'; sleep 30"},
@@ -674,7 +674,7 @@ func TestIntegrationCleanupClosesManagedPanesOnly(t *testing.T) {
 	runtimeTabID := ZellijTabID(tabID)
 	second, err := service.CreatePane(ctx, CreatePaneRequest{
 		ID:          "integration-cleanup-managed-2",
-		Role:        PaneRoleBuild,
+		Role:        "build",
 		ZellijTabID: &runtimeTabID,
 		Command:     []string{"sh", "-lc", "printf 'agentd-cleanup-managed-2\n'; sleep 30"},
 		CWD:         ".",

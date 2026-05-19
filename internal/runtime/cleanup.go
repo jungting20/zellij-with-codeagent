@@ -87,7 +87,7 @@ func cleanupMatches(record registry.PaneRecord, req CleanupRequest, requested ma
 	if req.TaskID != "" && registry.TaskID(req.TaskID) != record.TaskID {
 		return false
 	}
-	if req.Role != "" && string(req.Role) != record.Role {
+	if req.Role != "" && req.Role != record.Role {
 		return false
 	}
 	return true

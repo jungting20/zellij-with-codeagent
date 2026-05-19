@@ -24,16 +24,7 @@ type (
 	PaneStatus   = registry.PaneStatus
 )
 
-type PaneRole string
-
 const (
-	PaneRoleUnknown PaneRole = "unknown"
-	PaneRoleCoder   PaneRole = "coder"
-	PaneRoleTest    PaneRole = "test"
-	PaneRoleBuild   PaneRole = "build"
-	PaneRoleServer  PaneRole = "server"
-	PaneRoleLog     PaneRole = "log"
-
 	PaneStatusStarting = registry.PaneStatusStarting
 	PaneStatusRunning  = registry.PaneStatusRunning
 	PaneStatusExited   = registry.PaneStatusExited
@@ -61,7 +52,7 @@ type CreatePaneRequest struct {
 	ID      PaneID
 	TaskID  TaskID
 	AgentID AgentID
-	Role    PaneRole
+	Role    string
 	Name    string
 	NewTab  bool
 	TabName string
@@ -124,14 +115,14 @@ type TaskPaneGroup struct {
 }
 
 type RolePaneGroup struct {
-	Role  PaneRole
+	Role  string
 	Panes []Pane
 }
 
 type PaneOutputSummary struct {
 	PaneID     PaneID
 	TaskID     TaskID
-	Role       PaneRole
+	Role       string
 	Status     PaneStatus
 	LastOutput string
 	UpdatedAt  time.Time
@@ -186,7 +177,7 @@ type ReconcileResponse struct {
 type CleanupRequest struct {
 	PaneIDs []PaneID
 	TaskID  TaskID
-	Role    PaneRole
+	Role    string
 }
 
 type CleanupFailure struct {
@@ -207,7 +198,7 @@ type Pane struct {
 	ZellijPaneID  ZellijPaneID
 	ZellijTabID   *ZellijTabID
 	TabName       string
-	Role          PaneRole
+	Role          string
 	Command       []string
 	CWD           string
 	Status        PaneStatus

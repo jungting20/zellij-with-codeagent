@@ -183,7 +183,7 @@ func RuntimeCreatePaneRequest(req CreatePaneRequest) rt.CreatePaneRequest {
 		ID:          rt.PaneID(req.ID),
 		TaskID:      rt.TaskID(req.TaskID),
 		AgentID:     rt.AgentID(req.AgentID),
-		Role:        rt.PaneRole(req.Role),
+		Role:        req.Role,
 		Name:        req.Name,
 		NewTab:      req.NewTab,
 		TabName:     req.TabName,
@@ -203,7 +203,7 @@ func RuntimeCleanupRequest(req CleanupRequest) rt.CleanupRequest {
 	return rt.CleanupRequest{
 		PaneIDs: paneIDs,
 		TaskID:  rt.TaskID(req.TaskID),
-		Role:    rt.PaneRole(req.Role),
+		Role:    req.Role,
 	}
 }
 
@@ -353,7 +353,7 @@ func RuntimeApplyExecutionPlanRequest(reqID string, payload ExecutionPlanPayload
 	for _, pane := range payload.Panes {
 		panes = append(panes, rt.ExecutionPlanPaneSpec{
 			ID:      rt.PaneID(pane.ID),
-			Role:    rt.PaneRole(pane.Role),
+			Role:    pane.Role,
 			AgentID: rt.AgentID(pane.AgentID),
 			Command: cloneStrings(pane.Command),
 			CWD:     pane.CWD,

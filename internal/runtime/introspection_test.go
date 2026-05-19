@@ -20,7 +20,7 @@ func TestInspectRuntimeGroupsPanesAndOutputSummaries(t *testing.T) {
 	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{
 		ID:      "pane-a",
 		TaskID:  "task-1",
-		Role:    PaneRoleCoder,
+		Role:    "coder",
 		Command: []string{"bash"},
 	}); err != nil {
 		t.Fatalf("CreatePane(pane-a) error = %v", err)
@@ -28,7 +28,7 @@ func TestInspectRuntimeGroupsPanesAndOutputSummaries(t *testing.T) {
 	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{
 		ID:     "pane-b",
 		TaskID: "task-2",
-		Role:   PaneRoleTest,
+		Role:   "test",
 	}); err != nil {
 		t.Fatalf("CreatePane(pane-b) error = %v", err)
 	}
@@ -53,7 +53,7 @@ func TestInspectRuntimeGroupsPanesAndOutputSummaries(t *testing.T) {
 	if len(response.Tasks) != 2 || response.Tasks[0].TaskID != "task-1" || response.Tasks[0].Panes[0].ID != "pane-a" {
 		t.Fatalf("InspectRuntime() task groups = %#v, want panes grouped by task", response.Tasks)
 	}
-	if len(response.Roles) != 2 || response.Roles[0].Role != PaneRoleCoder || response.Roles[1].Role != PaneRoleTest {
+	if len(response.Roles) != 2 || response.Roles[0].Role != "coder" || response.Roles[1].Role != "test" {
 		t.Fatalf("InspectRuntime() role groups = %#v, want panes grouped by role", response.Roles)
 	}
 	if len(response.Outputs) != 2 || response.Outputs[0].PaneID != "pane-a" || response.Outputs[0].LastOutput != "server ready\n" {

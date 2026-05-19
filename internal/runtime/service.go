@@ -344,7 +344,7 @@ func paneFromRecord(record registry.PaneRecord) Pane {
 		ZellijPaneID:  ZellijPaneID(record.ZellijPaneID),
 		ZellijTabID:   runtimeTabID(record.ZellijTabID),
 		TabName:       record.TabName,
-		Role:          PaneRole(record.Role),
+		Role:          record.Role,
 		Command:       cloneStrings(record.Command),
 		CWD:           record.CWD,
 		Status:        PaneStatus(record.Status),

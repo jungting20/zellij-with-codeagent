@@ -211,14 +211,14 @@ func newTestServer(t *testing.T, service *fakeRuntimeService) *Server {
 type fakeRuntimeService struct {
 	mu sync.Mutex
 
-	createCalled     bool
-	createReq        rt.CreatePaneRequest
-	applyPlanCalled  bool
-	applyPlanReq     rt.ApplyExecutionPlanRequest
-	sendReq          rt.SendInputRequest
-	sendErr          error
-	recentReq        rt.RecentEventsRequest
-	cleanupErr       error
+	createCalled    bool
+	createReq       rt.CreatePaneRequest
+	applyPlanCalled bool
+	applyPlanReq    rt.ApplyExecutionPlanRequest
+	sendReq         rt.SendInputRequest
+	sendErr         error
+	recentReq       rt.RecentEventsRequest
+	cleanupErr      error
 
 	subs []chan eventbus.Event
 }
@@ -276,7 +276,7 @@ func (f *fakeRuntimeService) InspectRuntime(context.Context, rt.InspectRuntimeRe
 		Counts:  rt.RuntimeCounts{Managed: 1, Starting: 1, Active: 1},
 		Panes:   []rt.Pane{pane},
 		Tasks:   []rt.TaskPaneGroup{{TaskID: "task-1", Panes: []rt.Pane{pane}}},
-		Roles:   []rt.RolePaneGroup{{Role: rt.PaneRoleTest, Panes: []rt.Pane{pane}}},
+		Roles:   []rt.RolePaneGroup{{Role: "test", Panes: []rt.Pane{pane}}},
 		Outputs: []rt.PaneOutputSummary{{PaneID: pane.ID, TaskID: pane.TaskID, Role: pane.Role, Status: pane.Status, UpdatedAt: pane.UpdatedAt}},
 	}, nil
 }
@@ -390,7 +390,7 @@ func fakePane(id rt.PaneID) rt.Pane {
 		ZellijPaneID: "terminal_1",
 		ZellijTabID:  &tabID,
 		TabName:      "agentd-test",
-		Role:         rt.PaneRoleTest,
+		Role:         "test",
 		Status:       rt.PaneStatusStarting,
 		CreatedAt:    time.Unix(1, 0),
 		UpdatedAt:    time.Unix(1, 0),

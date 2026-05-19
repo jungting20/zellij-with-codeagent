@@ -15,11 +15,11 @@ func TestCleanupClosesOnlyMatchingManagedPanes(t *testing.T) {
 	}
 	service := newTestService(backend)
 
-	mustCreatePane(t, service, CreatePaneRequest{ID: "pane-coder", TaskID: "task-1", Role: PaneRoleCoder})
-	mustCreatePane(t, service, CreatePaneRequest{ID: "pane-test", TaskID: "task-1", Role: PaneRoleTest})
-	mustCreatePane(t, service, CreatePaneRequest{ID: "pane-log", TaskID: "task-2", Role: PaneRoleLog})
+	mustCreatePane(t, service, CreatePaneRequest{ID: "pane-coder", TaskID: "task-1", Role: "coder"})
+	mustCreatePane(t, service, CreatePaneRequest{ID: "pane-test", TaskID: "task-1", Role: "test"})
+	mustCreatePane(t, service, CreatePaneRequest{ID: "pane-log", TaskID: "task-2", Role: "log"})
 
-	response, err := service.Cleanup(context.Background(), CleanupRequest{TaskID: "task-1", Role: PaneRoleTest})
+	response, err := service.Cleanup(context.Background(), CleanupRequest{TaskID: "task-1", Role: "test"})
 	if err != nil {
 		t.Fatalf("Cleanup() error = %v", err)
 	}

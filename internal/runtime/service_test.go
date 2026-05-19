@@ -22,7 +22,7 @@ func TestCreatePaneRegistersLogicalRecord(t *testing.T) {
 		ID:      "pane-1",
 		TaskID:  "task-1",
 		AgentID: "agent-1",
-		Role:    PaneRoleTest,
+		Role:    "test",
 		Name:    "tests",
 		Command: []string{"go", "test", "./..."},
 		CWD:     "/workspace",
@@ -71,7 +71,7 @@ func TestCreatePaneTargetsExistingTab(t *testing.T) {
 
 	response, err := service.CreatePane(context.Background(), CreatePaneRequest{
 		ID:          "pane-1",
-		Role:        PaneRoleTest,
+		Role:        "test",
 		Name:        "runner",
 		ZellijTabID: &tabID,
 		Command:     []string{"go", "test", "./..."},
@@ -131,7 +131,7 @@ func TestCreatePaneCreatesNewTabAndRegistersTabMetadata(t *testing.T) {
 
 	response, err := service.CreatePane(context.Background(), CreatePaneRequest{
 		ID:      "pane-1",
-		Role:    PaneRoleTest,
+		Role:    "test",
 		NewTab:  true,
 		TabName: "agent-tests",
 		Command: []string{"go", "test", "./..."},
@@ -261,7 +261,7 @@ func TestInspectPaneReturnsRegistryRecord(t *testing.T) {
 	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{
 		ID:      "pane-1",
 		TaskID:  "task-1",
-		Role:    PaneRoleCoder,
+		Role:    "coder",
 		Command: []string{"bash"},
 	}); err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
@@ -276,7 +276,7 @@ func TestInspectPaneReturnsRegistryRecord(t *testing.T) {
 	if response.Pane.ID != "pane-1" {
 		t.Fatalf("InspectPane() pane ID = %q, want pane-1", response.Pane.ID)
 	}
-	if response.Pane.TaskID != "task-1" || response.Pane.Role != PaneRoleCoder {
+	if response.Pane.TaskID != "task-1" || response.Pane.Role != "coder" {
 		t.Fatalf("InspectPane() pane = %#v, want registry metadata", response.Pane)
 	}
 	if len(backend.listCalls) != listCallsBefore {
@@ -369,7 +369,7 @@ func TestInProcessHarnessExercisesRuntimeOperations(t *testing.T) {
 
 	created, err := service.CreatePane(context.Background(), CreatePaneRequest{
 		ID:      "pane-1",
-		Role:    PaneRoleCoder,
+		Role:    "coder",
 		Command: []string{"bash"},
 	})
 	if err != nil {
@@ -399,7 +399,7 @@ func TestInProcessScenarioLeavesPaneOpenWhenClosePaneIsNotCalled(t *testing.T) {
 
 	created, err := service.CreatePane(context.Background(), CreatePaneRequest{
 		ID:      "pane-1",
-		Role:    PaneRoleCoder,
+		Role:    "coder",
 		NewTab:  true,
 		TabName: "agentd-scenario",
 		Command: []string{"sh"},

@@ -26,8 +26,8 @@ func TestApplyExecutionPlanCreatesPanesInOneTab(t *testing.T) {
 		Session:   "feature-auth",
 		Layout:    "triple-horizontal",
 		Panes: []ExecutionPlanPaneSpec{
-			{ID: "planner", Role: PaneRole("planner")},
-			{ID: "frontend", Role: PaneRole("react-dev")},
+			{ID: "planner", Role: "planner"},
+			{ID: "frontend", Role: "react-dev"},
 		},
 	})
 	if err != nil {
@@ -94,8 +94,8 @@ func TestApplyExecutionPlanRollsBackOnSecondPaneFailure(t *testing.T) {
 		Session: "feature-auth",
 		Layout:  "triple-horizontal",
 		Panes: []ExecutionPlanPaneSpec{
-			{ID: "planner", Role: PaneRole("planner")},
-			{ID: "frontend", Role: PaneRole("react-dev")},
+			{ID: "planner", Role: "planner"},
+			{ID: "frontend", Role: "react-dev"},
 		},
 	})
 	if err == nil {

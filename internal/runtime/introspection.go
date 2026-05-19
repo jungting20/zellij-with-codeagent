@@ -106,27 +106,26 @@ func groupPanesByTask(panes []Pane) []TaskPaneGroup {
 }
 
 func groupPanesByRole(panes []Pane) []RolePaneGroup {
-	byRole := make(map[PaneRole][]Pane)
+	byRole := make(map[string][]Pane)
 	for _, pane := range panes {
 		role := pane.Role
 		if role == "" {
-			role = PaneRoleUnknown
+			role = "unknown"
 		}
 		byRole[role] = append(byRole[role], pane)
 	}
 
 	keys := make([]string, 0, len(byRole))
 	for role := range byRole {
-		keys = append(keys, string(role))
+		keys = append(keys, role)
 	}
 	sort.Strings(keys)
 
 	groups := make([]RolePaneGroup, 0, len(keys))
 	for _, key := range keys {
-		role := PaneRole(key)
 		groups = append(groups, RolePaneGroup{
-			Role:  role,
-			Panes: clonePanes(byRole[role]),
+			Role:  key,
+			Panes: clonePanes(byRole[key]),
 		})
 	}
 	return groups
