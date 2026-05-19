@@ -1,5 +1,57 @@
 # Implementation Progress
 
+## 2026-05-19
+
+### Current Status
+
+External transport and Fake planner validation are implemented on top of the existing runtime MVP.
+
+`agentd serve --socket <path>` now exposes the daemon runtime through local JSON HTTP over a Unix domain socket. `cmd/fake-planner` uses the transport client as a separate planner-style process and drives a deterministic multi-pane scenario without importing `internal/zellij` or calling Zellij directly.
+
+### Implemented
+
+- Created `internal/transport/types.go`
+- Created `internal/transport/errors.go`
+- Created `internal/transport/server.go`
+- Created `internal/transport/client.go`
+- Created `internal/transport/e2e_test.go`
+- Created `internal/planner/fake/planner.go`
+- Created `cmd/fake-planner/main.go`
+- Added transport, client, server, Fake planner, command, and env-gated E2E tests
+- Updated `cmd/agentd/main.go` with `serve --socket <path>`
+- Updated README, runtime E2E docs, and architecture invariants
+
+### Transport Behavior
+
+- `agentd serve --socket <path>` starts a long-running local server on a Unix domain socket.
+- The transport exposes health, pane creation, input, snapshot, runtime inspection, recent events, live event streaming, reconcile, and cleanup endpoints.
+- Requests use logical daemon IDs (`pane_id`, `task_id`, `agent_id`) as the contract identifiers.
+- Runtime errors are normalized into structured JSON errors with stable codes such as `bad_request`, `not_found`, `runtime_error`, `cleanup_partial`, `stream_closed`, and `timeout`.
+- Live events are streamed as newline-delimited JSON and late clients can recover with `RecentEvents`.
+
+### Fake Planner Behavior
+
+- The Fake planner is deterministic and scenario-based, not an LLM reasoning loop.
+- It creates coder, test, build, server, and log panes through the transport client.
+- It reuses the first pane's Zellij tab metadata for subsequent pane creation.
+- It waits for snapshot readiness markers, sends handoff/server/test inputs, observes `server_ready`, `test_failed`, and `test_passed`, and cleans up by task ID unless `--leave-open` is set.
+- Duplicate events do not trigger duplicate planner transitions.
+
+### Verification
+
+- `go test ./...` passed.
+- `AGENTD_TRANSPORT_E2E=1 go test ./internal/transport -run '^TestE2EFakePlannerOverUnixTransport$' -v -count=1` is available for real-Zellij external transport verification.
+
+### Not Implemented Yet
+
+- Real LLM planner integration
+- Durable restart recovery or persisted event/task history
+- Rich TUI supervisor/dashboard
+
+### Next Step
+
+Future work can replace or augment the deterministic Fake planner with a real planner that uses the same transport contract.
+
 ## 2026-05-15
 
 ### Current Status

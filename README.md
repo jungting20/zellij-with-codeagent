@@ -10,8 +10,10 @@
 - `internal/registry` is the system of record for daemon-managed panes.
 - `internal/eventbus` publishes normalized runtime events and retains recent event history.
 - `internal/supervisor` builds a read-only status view from runtime introspection.
+- `internal/transport` exposes the runtime over local JSON HTTP on a Unix domain socket.
+- `cmd/fake-planner` is a deterministic planner-style client that verifies the external transport path.
 
-There is no external API transport yet. Callers should use the Go service boundary in tests or future in-process integrations.
+The transport is local-only and still intended for developer validation, but external clients no longer need to call the Go service in process.
 
 ## Requirements
 
@@ -33,7 +35,23 @@ Start the current daemon entrypoint:
 go run ./cmd/agentd
 ```
 
-The entrypoint currently prints `agentd daemon skeleton`; it initializes the runtime service but does not expose HTTP, Unix socket, stdio JSON-RPC, gRPC, or a human CLI.
+Without subcommands, the entrypoint still prints `agentd daemon skeleton` for the original smoke path.
+
+Start the local transport daemon:
+
+```bash
+go run ./cmd/agentd serve --socket /tmp/agentd.sock
+```
+
+The `serve` command exposes JSON HTTP over the Unix socket. It does not bind a TCP port.
+
+Run the deterministic fake planner against that socket:
+
+```bash
+go run ./cmd/fake-planner --socket /tmp/agentd.sock
+```
+
+The fake planner creates a small multi-pane scenario through the transport, waits for runtime events and snapshots, sends follow-up input, then cleans up the managed task by default. Use `--leave-open` when you want to inspect panes manually after the run.
 
 ## Runtime Service Shape
 
@@ -62,6 +80,23 @@ The core operations are:
 - `Reconcile` to align registry state with live Zellij pane metadata.
 - `Cleanup` to close daemon-managed panes while preserving unmanaged panes in the same session.
 
+## Transport API
+
+`agentd serve --socket <path>` exposes these local endpoints:
+
+- `GET /v1/health`
+- `POST /v1/panes`
+- `GET /v1/panes`
+- `POST /v1/panes/{pane_id}/input`
+- `POST /v1/panes/{pane_id}/snapshot`
+- `GET /v1/runtime`
+- `GET /v1/events/recent`
+- `GET /v1/events/stream`
+- `POST /v1/reconcile`
+- `POST /v1/cleanup`
+
+Requests and responses use logical daemon IDs (`pane_id`, `task_id`, `agent_id`) as the contract identifiers. Zellij pane IDs are returned only as backend metadata for debugging.
+
 ## Zellij Session Selection
 
 `zellij.NewBackend(zellij.Options{Session: "name"})` adds `--session name` to Zellij CLI calls. Tests also honor `ZELLIJ_SESSION_NAME` for real-Zellij integration and E2E runs:
@@ -88,9 +123,16 @@ AGENTD_ZELLIJ_E2E=1 go test ./internal/runtime -run '^TestE2ECreateTabAndFourPan
 
 See `docs/runtime-e2e-test.md` for the close-on-input E2E flow and cleanup notes.
 
+The external transport plus fake planner E2E is also opt-in:
+
+```bash
+AGENTD_TRANSPORT_E2E=1 go test ./internal/transport -run '^TestE2EFakePlannerOverUnixTransport$' -v -count=1
+```
+
 ## Invariants
 
 - Planners and clients must not invoke Zellij directly. They request outcomes through `RuntimeService`.
+- External clients should use the local transport or compatible client wrapper, which still delegates to `RuntimeService`.
 - `agentd` is the only owner of Zellij mutations for managed panes: create, input, subscribe, snapshot, reconcile, close, and cleanup.
 - Logical `PaneID` values are daemon-owned and stable. Zellij pane IDs are backend identifiers and may disappear or be reused.
 - The registry is the system of record for managed runtime state. Zellij is the execution runtime, not the durable state source.
@@ -103,6 +145,6 @@ See `docs/runtime-e2e-test.md` for the close-on-input E2E flow and cleanup notes
 - Local-only, in-memory runtime state.
 - No restart persistence beyond what can be rediscovered through reconciliation.
 - Rule-based semantic event matchers only.
-- No LLM planner integration yet.
-- No external transport or rich TUI dashboard yet.
+- Fake planner only; no LLM planner integration yet.
+- No rich TUI dashboard yet.
 # zellij-with-codeagent
