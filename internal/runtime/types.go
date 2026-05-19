@@ -21,17 +21,18 @@ type (
 	AgentID      = registry.AgentID
 	ZellijPaneID = registry.ZellijPaneID
 	ZellijTabID  = registry.ZellijTabID
-	PaneRole     = registry.PaneRole
 	PaneStatus   = registry.PaneStatus
 )
 
+type PaneRole string
+
 const (
-	PaneRoleUnknown = registry.PaneRoleUnknown
-	PaneRoleCoder   = registry.PaneRoleCoder
-	PaneRoleTest    = registry.PaneRoleTest
-	PaneRoleBuild   = registry.PaneRoleBuild
-	PaneRoleServer  = registry.PaneRoleServer
-	PaneRoleLog     = registry.PaneRoleLog
+	PaneRoleUnknown PaneRole = "unknown"
+	PaneRoleCoder   PaneRole = "coder"
+	PaneRoleTest    PaneRole = "test"
+	PaneRoleBuild   PaneRole = "build"
+	PaneRoleServer  PaneRole = "server"
+	PaneRoleLog     PaneRole = "log"
 
 	PaneStatusStarting = registry.PaneStatusStarting
 	PaneStatusRunning  = registry.PaneStatusRunning

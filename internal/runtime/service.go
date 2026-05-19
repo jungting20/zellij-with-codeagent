@@ -90,7 +90,7 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 		ZellijPaneID: registry.ZellijPaneID(zellijID),
 		ZellijTabID:  registryTabID(tabID),
 		TabName:      tabName,
-		Role:         registry.PaneRole(req.Role),
+		Role:         string(req.Role),
 		Command:      cloneStrings(req.Command),
 		CWD:          req.CWD,
 	})

@@ -18,7 +18,7 @@ func TestRegisterPaneCreatesStableLogicalRecord(t *testing.T) {
 		ZellijPaneID: "terminal_5",
 		ZellijTabID:  &tabID,
 		TabName:      "tests",
-		Role:         PaneRoleTest,
+		Role:         "test",
 		Command:      []string{"go", "test", "./..."},
 		CWD:          "/workspace",
 	})
@@ -76,7 +76,7 @@ func TestUpdatePaneStatusPreservesAssociations(t *testing.T) {
 		ZellijPaneID: "terminal_5",
 		ZellijTabID:  &tabID,
 		TabName:      "server",
-		Role:         PaneRoleServer,
+		Role:         "server",
 		Status:       PaneStatusRunning,
 	}); err != nil {
 		t.Fatalf("RegisterPane() error = %v", err)

@@ -12,17 +12,6 @@ type (
 	ZellijTabID  int
 )
 
-type PaneRole string
-
-const (
-	PaneRoleUnknown PaneRole = "unknown"
-	PaneRoleCoder   PaneRole = "coder"
-	PaneRoleTest    PaneRole = "test"
-	PaneRoleBuild   PaneRole = "build"
-	PaneRoleServer  PaneRole = "server"
-	PaneRoleLog     PaneRole = "log"
-)
-
 type PaneStatus string
 
 const (
@@ -41,7 +30,7 @@ type PaneRecord struct {
 	ZellijPaneID  ZellijPaneID
 	ZellijTabID   *ZellijTabID
 	TabName       string
-	Role          PaneRole
+	Role          string
 	Command       []string
 	CWD           string
 	Status        PaneStatus
@@ -58,7 +47,7 @@ type RegisterPaneRequest struct {
 	ZellijPaneID ZellijPaneID
 	ZellijTabID  *ZellijTabID
 	TabName      string
-	Role         PaneRole
+	Role         string
 	Command      []string
 	CWD          string
 	Status       PaneStatus
