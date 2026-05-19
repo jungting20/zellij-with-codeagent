@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"encoding/json"
 	"time"
 
 	"zellij-with-codeagent/internal/eventbus"
@@ -114,6 +115,35 @@ type CleanupFailure struct {
 type HealthResponse struct {
 	Status  string `json:"status"`
 	Version string `json:"version,omitempty"`
+}
+
+const RequestTypeExecutionPlan = "execution_plan"
+
+type RequestEnvelope struct {
+	Type      string          `json:"type"`
+	RequestID string          `json:"request_id"`
+	Payload   json.RawMessage `json:"payload"`
+}
+
+type ExecutionPlanPayload struct {
+	Session string              `json:"session"`
+	Layout  string              `json:"layout"`
+	Panes   []ExecutionPlanPane `json:"panes"`
+}
+
+type ExecutionPlanPane struct {
+	ID      string   `json:"id"`
+	Role    string   `json:"role,omitempty"`
+	AgentID string   `json:"agent_id,omitempty"`
+	Command []string `json:"command,omitempty"`
+	CWD     string   `json:"cwd,omitempty"`
+}
+
+type ExecutionPlanResponse struct {
+	RequestID string `json:"request_id"`
+	Session   string `json:"session"`
+	Layout    string `json:"layout"`
+	Panes     []Pane `json:"panes"`
 }
 
 type Pane struct {
@@ -316,6 +346,34 @@ func outputSummariesFromRuntime(summaries []rt.PaneOutputSummary) []PaneOutputSu
 		})
 	}
 	return out
+}
+
+func RuntimeApplyExecutionPlanRequest(reqID string, payload ExecutionPlanPayload) rt.ApplyExecutionPlanRequest {
+	panes := make([]rt.ExecutionPlanPaneSpec, 0, len(payload.Panes))
+	for _, pane := range payload.Panes {
+		panes = append(panes, rt.ExecutionPlanPaneSpec{
+			ID:      rt.PaneID(pane.ID),
+			Role:    rt.PaneRole(pane.Role),
+			AgentID: rt.AgentID(pane.AgentID),
+			Command: cloneStrings(pane.Command),
+			CWD:     pane.CWD,
+		})
+	}
+	return rt.ApplyExecutionPlanRequest{
+		RequestID: reqID,
+		Session:   payload.Session,
+		Layout:    payload.Layout,
+		Panes:     panes,
+	}
+}
+
+func ExecutionPlanFromRuntime(response rt.ApplyExecutionPlanResponse) ExecutionPlanResponse {
+	return ExecutionPlanResponse{
+		RequestID: response.RequestID,
+		Session:   response.Session,
+		Layout:    response.Layout,
+		Panes:     PanesFromRuntime(response.Panes),
+	}
 }
 
 func cloneStrings(values []string) []string {

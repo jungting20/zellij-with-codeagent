@@ -122,6 +122,10 @@ func (s *stubRuntime) Cleanup(context.Context, rt.CleanupRequest) (rt.CleanupRes
 	return rt.CleanupResponse{}, nil
 }
 
+func (s *stubRuntime) ApplyExecutionPlan(context.Context, rt.ApplyExecutionPlanRequest) (rt.ApplyExecutionPlanResponse, error) {
+	return rt.ApplyExecutionPlanResponse{}, nil
+}
+
 func (s *stubRuntime) SubscribeEvents(context.Context) (<-chan eventbus.Event, func(), error) {
 	return nil, func() {}, nil
 }

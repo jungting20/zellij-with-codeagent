@@ -52,6 +52,7 @@ type RuntimeService interface {
 	ClosePane(context.Context, ClosePaneRequest) (ClosePaneResponse, error)
 	Reconcile(context.Context, ReconcileRequest) (ReconcileResponse, error)
 	Cleanup(context.Context, CleanupRequest) (CleanupResponse, error)
+	ApplyExecutionPlan(context.Context, ApplyExecutionPlanRequest) (ApplyExecutionPlanResponse, error)
 	SubscribeEvents(context.Context) (<-chan eventbus.Event, func(), error)
 }
 

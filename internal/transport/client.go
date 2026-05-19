@@ -160,6 +160,20 @@ func (c *Client) Cleanup(ctx context.Context, req CleanupRequest) (CleanupRespon
 	return response, err
 }
 
+func (c *Client) SubmitExecutionPlan(ctx context.Context, requestID string, payload ExecutionPlanPayload) (ExecutionPlanResponse, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return ExecutionPlanResponse{}, err
+	}
+	var response ExecutionPlanResponse
+	err = c.do(ctx, http.MethodPost, "/v1/requests", RequestEnvelope{
+		Type:      RequestTypeExecutionPlan,
+		RequestID: requestID,
+		Payload:   raw,
+	}, &response)
+	return response, err
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body any, target any) error {
 	var reader io.Reader
 	if body != nil {

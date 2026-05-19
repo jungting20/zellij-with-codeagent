@@ -211,12 +211,14 @@ func newTestServer(t *testing.T, service *fakeRuntimeService) *Server {
 type fakeRuntimeService struct {
 	mu sync.Mutex
 
-	createCalled bool
-	createReq    rt.CreatePaneRequest
-	sendReq      rt.SendInputRequest
-	sendErr      error
-	recentReq    rt.RecentEventsRequest
-	cleanupErr   error
+	createCalled     bool
+	createReq        rt.CreatePaneRequest
+	applyPlanCalled  bool
+	applyPlanReq     rt.ApplyExecutionPlanRequest
+	sendReq          rt.SendInputRequest
+	sendErr          error
+	recentReq        rt.RecentEventsRequest
+	cleanupErr       error
 
 	subs []chan eventbus.Event
 }
@@ -312,6 +314,43 @@ func (f *fakeRuntimeService) Cleanup(context.Context, rt.CleanupRequest) (rt.Cle
 	return response, f.cleanupErr
 }
 
+func (f *fakeRuntimeService) ApplyExecutionPlan(_ context.Context, req rt.ApplyExecutionPlanRequest) (rt.ApplyExecutionPlanResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.applyPlanCalled = true
+	f.applyPlanReq = req
+	tabID := rt.ZellijTabID(7)
+	return rt.ApplyExecutionPlanResponse{
+		RequestID: req.RequestID,
+		Session:   req.Session,
+		Layout:    req.Layout,
+		Panes: []rt.Pane{
+			{
+				ID:           req.Panes[0].ID,
+				TaskID:       rt.TaskID(req.Session),
+				ZellijPaneID: "terminal_1",
+				ZellijTabID:  &tabID,
+				TabName:      req.Session,
+				Role:         req.Panes[0].Role,
+				Status:       rt.PaneStatusStarting,
+				CreatedAt:    time.Unix(1, 0),
+				UpdatedAt:    time.Unix(1, 0),
+			},
+			{
+				ID:           req.Panes[1].ID,
+				TaskID:       rt.TaskID(req.Session),
+				ZellijPaneID: "terminal_2",
+				ZellijTabID:  &tabID,
+				TabName:      req.Session,
+				Role:         req.Panes[1].Role,
+				Status:       rt.PaneStatusStarting,
+				CreatedAt:    time.Unix(1, 0),
+				UpdatedAt:    time.Unix(1, 0),
+			},
+		},
+	}, nil
+}
+
 func (f *fakeRuntimeService) SubscribeEvents(ctx context.Context) (<-chan eventbus.Event, func(), error) {
 	ch := make(chan eventbus.Event, 8)
 	f.mu.Lock()
@@ -369,6 +408,65 @@ func shortSocketPath(t *testing.T) string {
 		_ = os.Remove(path)
 	})
 	return path
+}
+
+func TestServerSubmitExecutionPlan(t *testing.T) {
+	service := newFakeRuntimeService()
+	server := newTestServer(t, service)
+	body := strings.NewReader(`{
+		"type":"execution_plan",
+		"request_id":"req_123",
+		"payload":{
+			"session":"feature-auth",
+			"layout":"triple-horizontal",
+			"panes":[
+				{"id":"planner","role":"planner"},
+				{"id":"frontend","role":"react-dev"}
+			]
+		}
+	}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/requests", body)
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	if !service.applyPlanCalled {
+		t.Fatal("ApplyExecutionPlan was not called")
+	}
+	if service.applyPlanReq.RequestID != "req_123" || service.applyPlanReq.Session != "feature-auth" {
+		t.Fatalf("ApplyExecutionPlan request = %#v, want req_123 feature-auth", service.applyPlanReq)
+	}
+	if len(service.applyPlanReq.Panes) != 2 || service.applyPlanReq.Panes[0].ID != "planner" {
+		t.Fatalf("ApplyExecutionPlan panes = %#v, want planner and frontend", service.applyPlanReq.Panes)
+	}
+
+	var decoded ExecutionPlanResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if decoded.RequestID != "req_123" || len(decoded.Panes) != 2 {
+		t.Fatalf("response = %#v, want echoed request_id and panes", decoded)
+	}
+}
+
+func TestServerSubmitExecutionPlanRejectsUnknownType(t *testing.T) {
+	service := newFakeRuntimeService()
+	server := newTestServer(t, service)
+	body := strings.NewReader(`{"type":"unknown","request_id":"req_1","payload":{}}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/requests", body)
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	if service.applyPlanCalled {
+		t.Fatal("ApplyExecutionPlan should not be called for unknown type")
+	}
 }
 
 func TestServerHealth(t *testing.T) {

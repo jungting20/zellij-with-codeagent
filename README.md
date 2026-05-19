@@ -85,6 +85,7 @@ The core operations are:
 `agentd serve --socket <path>` exposes these local endpoints:
 
 - `GET /v1/health`
+- `POST /v1/requests`
 - `POST /v1/panes`
 - `GET /v1/panes`
 - `POST /v1/panes/{pane_id}/input`
@@ -96,6 +97,25 @@ The core operations are:
 - `POST /v1/cleanup`
 
 Requests and responses use logical daemon IDs (`pane_id`, `task_id`, `agent_id`) as the contract identifiers. Zellij pane IDs are returned only as backend metadata for debugging.
+
+`POST /v1/requests` accepts typed envelopes. The `execution_plan` type creates all panes for one logical session in a single Zellij tab:
+
+```json
+{
+  "type": "execution_plan",
+  "request_id": "req_123",
+  "payload": {
+    "session": "feature-auth",
+    "layout": "triple-horizontal",
+    "panes": [
+      { "id": "planner", "role": "planner" },
+      { "id": "frontend", "role": "react-dev" }
+    ]
+  }
+}
+```
+
+In v1, `session` is used as both `task_id` and Zellij tab name. `layout` is validated metadata (`triple-horizontal` today); physical layout forcing is deferred.
 
 ## Zellij Session Selection
 

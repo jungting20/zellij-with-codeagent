@@ -73,6 +73,30 @@ func TestClientStreamsEvents(t *testing.T) {
 	}
 }
 
+func TestClientSubmitExecutionPlan(t *testing.T) {
+	service := newFakeRuntimeService()
+	client, cleanup := startUnixTransport(t, service)
+	defer cleanup()
+
+	response, err := client.SubmitExecutionPlan(context.Background(), "req_123", ExecutionPlanPayload{
+		Session: "feature-auth",
+		Layout:  "triple-horizontal",
+		Panes: []ExecutionPlanPane{
+			{ID: "planner", Role: "planner"},
+			{ID: "frontend", Role: "react-dev"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SubmitExecutionPlan() error = %v", err)
+	}
+	if response.RequestID != "req_123" || len(response.Panes) != 2 {
+		t.Fatalf("SubmitExecutionPlan() = %#v, want req_123 and two panes", response)
+	}
+	if !service.applyPlanCalled || service.applyPlanReq.Session != "feature-auth" {
+		t.Fatalf("runtime request = %#v, want execution plan applied", service.applyPlanReq)
+	}
+}
+
 func TestClientRecentEvents(t *testing.T) {
 	service := newFakeRuntimeService()
 	client, cleanup := startUnixTransport(t, service)
