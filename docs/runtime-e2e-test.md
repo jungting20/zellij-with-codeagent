@@ -6,8 +6,6 @@
 
 `TestIntegrationReconcileMarksExternallyClosedPaneTerminal`와 `TestIntegrationCleanupClosesManagedPanesOnly`는 `AGENTD_ZELLIJ_INTEGRATION=1`에서 실행되는 자동 검증이다. 실제 Zellij pane을 만들지만 테스트 종료 시 직접 cleanup하므로 수동 관찰용 E2E와 다르게 pane/tab을 의도적으로 남기지 않는다.
 
-`TestE2EFakePlannerOverUnixTransport`는 `agentd` transport server를 Unix socket으로 띄운 뒤 `cmd/fake-planner`와 같은 transport client 경로로 실제 Zellij pane들을 생성하고 cleanup하는 검증이다. 이 테스트는 planner가 `RuntimeService`나 Zellij CLI를 직접 호출하지 않고 외부 API만으로 사용 가능한지 확인한다.
-
 ## What It Does
 
 - 새 Zellij tab `agentd-e2e-four-panes`를 생성한다.
@@ -92,39 +90,3 @@ U6 reconciliation/cleanup 흐름만 확인하려면 아래처럼 실행한다.
 ```bash
 AGENTD_ZELLIJ_INTEGRATION=1 go test ./internal/runtime -run '^TestIntegration(Reconcile|Cleanup)' -v -count=1
 ```
-
-외부 transport와 Fake planner 흐름을 확인하려면 아래처럼 실행한다.
-
-```bash
-AGENTD_TRANSPORT_E2E=1 go test ./internal/transport -run '^TestE2EFakePlannerOverUnixTransport$' -v -count=1
-```
-
-특정 Zellij session을 대상으로 하고 싶으면 기존 integration 테스트와 동일하게 `ZELLIJ_SESSION_NAME`을 함께 지정한다.
-
-```bash
-ZELLIJ_SESSION_NAME=my-session AGENTD_TRANSPORT_E2E=1 go test ./internal/transport -run '^TestE2EFakePlannerOverUnixTransport$' -v -count=1
-```
-
-## Agentd Transport and Fake Planner
-
-수동으로 daemon과 Fake planner를 분리해서 실행할 수도 있다.
-
-```bash
-go run ./cmd/agentd serve --socket /tmp/agentd.sock
-```
-
-다른 terminal에서 실행한다.
-
-```bash
-go run ./cmd/fake-planner --socket /tmp/agentd.sock
-```
-
-기본 Fake planner는 `fake-planner-coder`, `fake-planner-test`, `fake-planner-build`, `fake-planner-server`, `fake-planner-log` pane을 만들고, `server_ready`, `test_failed`, `test_passed` 이벤트를 관찰한 뒤 task cleanup을 호출한다.
-
-관찰을 위해 pane을 남기려면 아래처럼 실행한다.
-
-```bash
-go run ./cmd/fake-planner --socket /tmp/agentd.sock --leave-open
-```
-
-`--leave-open`을 사용한 뒤에는 Zellij UI에서 직접 tab을 닫거나 transport cleanup endpoint를 호출해야 한다.

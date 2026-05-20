@@ -429,12 +429,12 @@ zellij CLI
 - pane이 `closed`, `exited`, `lost`가 되면 subscription lifecycle도 같이 종료되어야 한다.
 - supervisor/debug view도 planner와 같은 runtime introspection 데이터를 읽어야 한다.
 
-## 현재 transport / Fake planner
+## 현재 transport
 
 현재 외부 진입점은 `agentd serve --socket <path>`이다.
 
 ```text
-fake planner
+외부 Client
         ↓
 Unix socket JSON HTTP
         ↓
@@ -443,9 +443,8 @@ agentd transport
 RuntimeService
 ```
 
-Fake planner는 실제 LLM planner가 아니라 runtime contract 검증용 deterministic client다. 이 client도 production planner와 같은 규칙을 따른다.
+외부 client는 production planner와 같은 규칙을 따른다.
 
-- `cmd/fake-planner`는 `internal/transport.Client`만 사용한다.
 - pane 생성, 입력, event stream, recent events, snapshot, cleanup은 모두 transport API를 통한다.
 - 같은 task의 pane들은 logical `TaskID`로 묶고, cleanup도 `TaskID` 기준으로 수행한다.
 - live event stream이 끊겨도 `RecentEvents`와 snapshot으로 상태를 다시 확인할 수 있어야 한다.
@@ -456,7 +455,7 @@ Fake planner는 실제 LLM planner가 아니라 runtime contract 검증용 deter
 - daemon restart 후 durable recovery는 아직 없다.
 - semantic event는 MVP regex/heuristic 기반이다.
 - 외부 transport는 Unix socket JSON HTTP만 있다. TCP HTTP, stdio JSON-RPC, gRPC는 아직 없다.
-- Fake planner만 있으며, LLM planner reasoning loop는 아직 붙지 않았다.
+- LLM planner reasoning loop는 아직 붙지 않았다.
 - rich TUI dashboard는 아직 없다.
 
 ---

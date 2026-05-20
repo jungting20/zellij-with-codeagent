@@ -11,7 +11,6 @@
 - `internal/eventbus` publishes normalized runtime events and retains recent event history.
 - `internal/supervisor` builds a read-only status view from runtime introspection.
 - `internal/transport` exposes the runtime over local JSON HTTP on a Unix domain socket.
-- `cmd/fake-planner` is a deterministic planner-style client that verifies the external transport path.
 
 The transport is local-only and still intended for developer validation, but external clients no longer need to call the Go service in process.
 
@@ -44,14 +43,6 @@ go run ./cmd/agentd serve --socket /tmp/agentd.sock
 ```
 
 The `serve` command exposes JSON HTTP over the Unix socket. It does not bind a TCP port.
-
-Run the deterministic fake planner against that socket:
-
-```bash
-go run ./cmd/fake-planner --socket /tmp/agentd.sock
-```
-
-The fake planner creates a small multi-pane scenario through the transport, waits for runtime events and snapshots, sends follow-up input, then cleans up the managed task by default. Use `--leave-open` when you want to inspect panes manually after the run.
 
 ## Runtime Service Shape
 
@@ -143,12 +134,6 @@ AGENTD_ZELLIJ_E2E=1 go test ./internal/runtime -run '^TestE2ECreateTabAndFourPan
 
 See `docs/runtime-e2e-test.md` for the close-on-input E2E flow and cleanup notes.
 
-The external transport plus fake planner E2E is also opt-in:
-
-```bash
-AGENTD_TRANSPORT_E2E=1 go test ./internal/transport -run '^TestE2EFakePlannerOverUnixTransport$' -v -count=1
-```
-
 ## Invariants
 
 - Planners and clients must not invoke Zellij directly. They request outcomes through `RuntimeService`.
@@ -165,6 +150,5 @@ AGENTD_TRANSPORT_E2E=1 go test ./internal/transport -run '^TestE2EFakePlannerOve
 - Local-only, in-memory runtime state.
 - No restart persistence beyond what can be rediscovered through reconciliation.
 - Rule-based semantic event matchers only.
-- Fake planner only; no LLM planner integration yet.
 - No rich TUI dashboard yet.
 # zellij-with-codeagent
