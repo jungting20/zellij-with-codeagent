@@ -74,14 +74,24 @@
     }
     ```
 *   **실행 계획 요청 페이로드 (`ExecutionPlanPayload`)**:
-    *   Planner가 레이아웃과 초기 터미널 목록을 일괄 요청할 때 사용.
+    *   Planner가 레이아웃과 초기 터미널 목록을 일괄 요청할 때 사용. 각 Pane 실행 시 필요한 명령이나 열어야 할 파일 경로(Neovim 등)가 있다면 `command` 배열에 함께 인자값으로 명시합니다.
     ```json
     {
       "session": "feature-auth-fix",
       "layout": "triple-horizontal",
       "panes": [
-        {"id": "coder", "role": "editor", "cwd": "/Users/in05908_mac/project"},
-        {"id": "test", "role": "tester", "cwd": "/Users/in05908_mac/project"}
+        {
+          "id": "coder",
+          "role": "editor",
+          "cwd": "/Users/in05908_mac/project",
+          "command": ["nvim", "internal/auth/auth_service.go"]
+        },
+        {
+          "id": "test",
+          "role": "tester",
+          "cwd": "/Users/in05908_mac/project",
+          "command": ["go", "test", "./internal/auth/..."]
+        }
       ]
     }
     ```
