@@ -67,7 +67,37 @@ graph TD
 
 ---
 
-## 4. 최종 완성 시 전체 자율 협업 흐름 (Self-Healing Scenario)
+## 4. 1차 MVP 시나리오 및 최종 자율 협업 흐름 (Milestones)
+
+본 프로젝트의 1차 MVP는 사용자의 자연어 요청을 해석하여 알맞은 개발 환경(역할별 Pane)을 셋업하는 것까지를 목표로 합니다. 실시간 감시 및 에러 수정 등의 자율 자가치유 루프는 차기 개발 목표로 설정합니다.
+
+### 1) 1차 MVP 동작 시나리오 (환경 자동 구성)
+```
+[User]                      [Planner (AI)]                 [agentd Daemon]                [Zellij Terminal]
+  │                              │                               │                               │
+  │ 1. 자연어 Goal 요청 전달      │                               │                               │
+  ├─────────────────────────────>│                               │                               │
+  │                              │ 2. 필요한 역할(role) Pane 결정 │                               │
+  │                              │ 3. Execution Plan 요청        │                               │
+  │                              ├──────────────────────────────>│                               │
+  │                              │                               │ 4. Pane 생성 & Registry 등록  │
+  │                              │                               │├─────────────────────────────>│
+  │                              │ 5. ExecutionPlanResponse 응답 │                               │
+  │                              │<──────────────────────────────┤                               │
+  │ 6. 환경 생성 완료 보고        │                               │                               │
+  │<─────────────────────────────┤                               │                               │
+```
+1. **사용자 Goal 하달**: 사용자가 Planner에게 자연어 목표를 제시합니다.
+   * 예: *"Go 프로젝트 로그인 모듈 버그 고칠 수 있는 개발 환경 열어줘."*
+2. **개발 환경 역할(Role) 결정**: Planner가 자연어를 해석하여 필요한 환경 레이아웃을 정의합니다.
+   * 예: "코드 수정을 위해 `editor` 역할 Pane 1개, 테스트 구동을 위해 `tester` 역할 Pane 1개가 필요하겠군."
+3. **Execution Plan 요청**: Planner가 `agentd` 데몬의 UDS API에 `execution_plan` payload를 전송합니다.
+4. **Zellij Pane 생성**: 데몬이 요청에 부합하도록 Zellij CLI를 통해 실제 Pane을 실행하고, 에이전트가 관리할 Pane 메타데이터를 Registry에 안정적으로 등록합니다.
+5. **결과 응답**: 데몬이 생성이 완료된 최종 세션 및 Pane 목록(`ExecutionPlanResponse`)을 즉시 Planner에게 반환하고, Planner는 이 최종 환경 정보를 기반으로 사용자에게 환경 셋업이 완료되었음을 보고합니다.
+
+---
+
+### 2) 최종 완성 시 전체 자율 협업 흐름 (Self-Healing Scenario) - *MVP 이후 단계*
 
 데몬과 AI Planner(LLM 루프)가 완전히 결합되었을 때, 사용자의 골(Goal)을 해결하기 위한 전체 자율 자가치유(Self-Healing) 흐름은 다음과 같이 진행됩니다.
 
@@ -111,6 +141,12 @@ graph TD
     │                              ├──────────────────────────────>│ (터미널 종료)
     v                              v                               v
 ```
+
+1. **초기 셋업**: AI Planner가 `agentd`에 `execution_plan`을 호출하여 역할별 개발 환경 Pane을 생성합니다.
+2. **이벤트 감시**: Planner가 이벤트 스트림(`/v1/events`)을 구독하고, `SubscriptionManager`가 백그라운드에서 `zellij subscribe --format json`을 수행합니다.
+3. **오류 인지**: 테스트 실행 중 오류가 발생하여 화면에 `--- FAIL` 문자열이 감지되면 데몬이 `TypeTestFailed` 이벤트를 Planner로 발행합니다.
+4. **자율 수정 (Self-Healing)**: Planner가 오류 스택 트레이스 스냅샷을 분석하고 소스코드를 올바르게 수정한 후 테스트 Pane에 입력을 주입해 테스트를 재구동합니다.
+5. **검증 및 클린업**: 테스트 결과가 정상 통과(`ok` 또는 `PASS`)함을 수신한 뒤 작업을 마무리하고 생성된 모든 Pane에 대한 클린업을 요청합니다.
 
 ### 1단계: 사용자 Goal 하달
 사용자가 메인 Planner에 **"백엔드 인증 오류 버그를 고쳐줘"**라는 목표를 주입합니다.

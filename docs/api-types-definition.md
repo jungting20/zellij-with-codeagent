@@ -22,8 +22,9 @@
 
 ## 2. 각 흐름별 상세 데이터 구조 및 타입 정의
 
-### 1) User ↔️ Planner (자연어 및 고수준 리포트)
-사용자가 AI 에이전트(Planner)에게 최종 목표를 지시하고, Planner가 사용자에게 사고 과정 및 해결 결과를 요약 제공하는 타입입니다.
+### 1) User ↔️ Planner (자연어 요청 및 구성 결과)
+사용자가 AI 에이전트(Planner)에게 최종 목표를 자연어로 지시하면, Planner가 이에 부합하는 역할별 개발 환경(Pane)을 구성하여 Zellij 상에 즉시 생성합니다. 
+1차 MVP에서는 중간 사고 과정이나 복잡한 추적을 수행하는 `PlannerGoalResponse` 대신, 생성이 완료된 Zellij 세션 및 Pane 목록(`ExecutionPlanResponse`)을 최종 결과로 바로 반환합니다.
 
 *   **요청 타입 (`UserGoalRequest`)**:
     *   사용자가 주입하는 자연어 텍스트 데이터.
@@ -32,20 +33,29 @@
       "goal": "Go 언어로 짜여진 로그인 모듈의 세션 만료 버그를 찾아서 고치고 테스트를 통과시켜줘."
     }
     ```
-*   **응답 타입 (`PlannerGoalResponse`)**:
-    *   현재 Planner의 사고 진행 단계, 수행한 작업 로그, 최종 성공 여부를 리포팅하는 응답.
+*   **응답 타입 (`ExecutionPlanResponse`)**:
+    *   사용자의 자연어 요청에 따라 생성 완료된 최종 Zellij 환경 정보. (상세 구조는 'Planner ↔️ API' 섹션의 `ExecutionPlanResponse`와 동일)
     ```json
     {
-      "task_id": "task_auth_bugfix_109",
-      "status": "resolved", // starting | diagnosing | fixing | verifying | resolved | failed
-      "summary": "auth_service.go 45라인의 세션 유지 시간 연장 로직 수정 완료 및 유닛 테스트 통과 확인.",
-      "steps_executed": [
-        {"step": "환경 분석", "result": "Zellij 탭 및 Pane 4개(coder, test, server, log) 정상 구동 완료"},
-        {"step": "오류 식별", "result": "TestSessionTimeout 실패 감지 (expected 30m, got 30s)"},
-        {"step": "수정 조치", "result": "Time.Duration 단위 변환 오류 복구 (30 * time.Second -> 30 * time.Minute)"},
-        {"step": "최종 검증", "result": "go test ./internal/auth 실행 후 PASS 이벤트 확인"}
-      ],
-      "finished_at": "2026-05-20T14:25:00+09:00"
+      "request_id": "req_uuid_998",
+      "session": "feature-auth-fix",
+      "layout": "triple-horizontal",
+      "panes": [
+        {
+          "id": "coder",
+          "zellij_pane_id": "terminal_42",
+          "zellij_tab_id": 1,
+          "role": "editor",
+          "status": "running"
+        },
+        {
+          "id": "test",
+          "zellij_pane_id": "terminal_43",
+          "zellij_tab_id": 1,
+          "role": "tester",
+          "status": "running"
+        }
+      ]
     }
     ```
 
