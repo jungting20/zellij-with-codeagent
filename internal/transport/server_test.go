@@ -44,6 +44,57 @@ func TestServerCreatePane(t *testing.T) {
 	}
 }
 
+func TestServerCreatePaneWithRoles(t *testing.T) {
+	roles := []string{"coder", "network-tracker", "console-tracker"}
+
+	for _, role := range roles {
+		t.Run(role, func(t *testing.T) {
+			service := newFakeRuntimeService()
+			if service == nil {
+				t.Fatal("failed to initialize fake runtime service")
+			}
+			server := newTestServer(t, service)
+			if server == nil {
+				t.Fatal("failed to initialize test server")
+			}
+
+			payload := fmt.Sprintf(`{
+				"id": "pane-%s",
+				"task_id": "task-%s",
+				"agent_id": "agent-%s",
+				"role": "%s",
+				"new_tab": true,
+				"tab_name": "agentd-%s",
+				"command": ["./bin/agent-role", "%s"],
+				"cwd": "."
+			}`, role, role, role, role, role, role)
+
+			body := strings.NewReader(payload)
+			request := httptest.NewRequest(http.MethodPost, "/v1/panes", body)
+			response := httptest.NewRecorder()
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusCreated, response.Body.String())
+			}
+
+			if service.createReq.ID != rt.PaneID("pane-"+role) || service.createReq.Role != role {
+				t.Fatalf("CreatePane request = %#v, want role %s", service.createReq, role)
+			}
+
+			var decoded CreatePaneResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+
+			if decoded.Pane.ID != "pane-"+role || decoded.Pane.Role != role {
+				t.Fatalf("response pane = %#v, want role %s", decoded.Pane, role)
+			}
+		})
+	}
+}
+
 func TestServerSendInput(t *testing.T) {
 	service := newFakeRuntimeService()
 	server := newTestServer(t, service)

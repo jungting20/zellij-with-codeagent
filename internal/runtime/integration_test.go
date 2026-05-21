@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -896,4 +898,80 @@ func responseIncludesPane(panes []Pane, id PaneID) bool {
 		}
 	}
 	return false
+}
+
+func buildAgentRole(t *testing.T) {
+	t.Helper()
+	cmd := exec.Command("go", "build", "-o", "bin/agent-role", "./cmd/agent-role")
+	cmd.Dir = "../.."
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build agent-role failed: %v, output: %s", err, string(output))
+	}
+}
+
+func TestIntegrationCreatePaneWithAgentRoles(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	buildAgentRole(t)
+
+	service, backend := newIntegrationService(t, "integration-agent-role-coder")
+	if service == nil || backend == nil {
+		t.Fatal("failed to initialize integration service or backend")
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd failed: %v", err)
+	}
+	projectRoot := filepath.Clean(filepath.Join(wd, "../.."))
+
+	createdCoder, err := service.CreatePane(ctx, CreatePaneRequest{
+		ID:      "integration-agent-role-coder",
+		Role:    "coder",
+		Name:    "coder-role",
+		NewTab:  true,
+		TabName: "agent-roles-test",
+		Command: []string{"./bin/agent-role", "coder"},
+		CWD:     projectRoot,
+	})
+	if err != nil {
+		t.Fatalf("CreatePane(coder) error = %v", err)
+	}
+	if createdCoder.Pane.ZellijTabID == nil {
+		t.Fatalf("ZellijTabID is nil for coder pane")
+	}
+	tabID := *createdCoder.Pane.ZellijTabID
+
+	defer closeIntegrationPane(t, service, createdCoder.Pane.ID)
+
+	createdNetwork, err := service.CreatePane(ctx, CreatePaneRequest{
+		ID:          "integration-agent-role-network",
+		Role:        "network-tracker",
+		Name:        "network-role",
+		ZellijTabID: &tabID,
+		Command:     []string{"./bin/agent-role", "network-tracker", "--url", "https://html5test.co"},
+		CWD:         projectRoot,
+	})
+	if err != nil {
+		t.Fatalf("CreatePane(network-tracker) error = %v", err)
+	}
+	defer closeIntegrationPane(t, service, createdNetwork.Pane.ID)
+
+	createdConsole, err := service.CreatePane(ctx, CreatePaneRequest{
+		ID:          "integration-agent-role-console",
+		Role:        "console-tracker",
+		Name:        "console-role",
+		ZellijTabID: &tabID,
+		Command:     []string{"./bin/agent-role", "console-tracker", "--url", "https://html5test.co"},
+		CWD:         projectRoot,
+	})
+	if err != nil {
+		t.Fatalf("CreatePane(console-tracker) error = %v", err)
+	}
+	defer closeIntegrationPane(t, service, createdConsole.Pane.ID)
+
+	waitForSnapshotContains(ctx, t, service, createdCoder.Pane.ID, "[CODER AGENT]")
+	waitForSnapshotContains(ctx, t, service, createdNetwork.Pane.ID, "[NETWORK TRACKER]")
+	waitForSnapshotContains(ctx, t, service, createdConsole.Pane.ID, "[CONSOLE TRACKER]")
 }
