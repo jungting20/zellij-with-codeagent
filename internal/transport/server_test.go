@@ -371,34 +371,34 @@ func (f *fakeRuntimeService) ApplyExecutionPlan(_ context.Context, req rt.ApplyE
 	f.applyPlanCalled = true
 	f.applyPlanReq = req
 	tabID := rt.ZellijTabID(7)
+
+	var tabs []rt.ExecutionPlanTabResult
+	for _, tSpec := range req.Tabs {
+		var panes []rt.Pane
+		for _, pSpec := range tSpec.Panes {
+			panes = append(panes, rt.Pane{
+				ID:           pSpec.ID,
+				TaskID:       rt.TaskID(req.Session),
+				ZellijPaneID: "terminal_mock",
+				ZellijTabID:  &tabID,
+				TabName:      tSpec.Name,
+				Role:         pSpec.Role,
+				Status:       rt.PaneStatusStarting,
+				CreatedAt:    time.Unix(1, 0),
+				UpdatedAt:    time.Unix(1, 0),
+			})
+		}
+		tabs = append(tabs, rt.ExecutionPlanTabResult{
+			Name:  tSpec.Name,
+			Panes: panes,
+		})
+	}
+
 	return rt.ApplyExecutionPlanResponse{
 		RequestID: req.RequestID,
 		Session:   req.Session,
 		Layout:    req.Layout,
-		Panes: []rt.Pane{
-			{
-				ID:           req.Panes[0].ID,
-				TaskID:       rt.TaskID(req.Session),
-				ZellijPaneID: "terminal_1",
-				ZellijTabID:  &tabID,
-				TabName:      req.Session,
-				Role:         req.Panes[0].Role,
-				Status:       rt.PaneStatusStarting,
-				CreatedAt:    time.Unix(1, 0),
-				UpdatedAt:    time.Unix(1, 0),
-			},
-			{
-				ID:           req.Panes[1].ID,
-				TaskID:       rt.TaskID(req.Session),
-				ZellijPaneID: "terminal_2",
-				ZellijTabID:  &tabID,
-				TabName:      req.Session,
-				Role:         req.Panes[1].Role,
-				Status:       rt.PaneStatusStarting,
-				CreatedAt:    time.Unix(1, 0),
-				UpdatedAt:    time.Unix(1, 0),
-			},
-		},
+		Tabs:      tabs,
 	}, nil
 }
 
@@ -470,9 +470,14 @@ func TestServerSubmitExecutionPlan(t *testing.T) {
 		"payload":{
 			"session":"feature-auth",
 			"layout":"triple-horizontal",
-			"panes":[
-				{"id":"planner","role":"planner"},
-				{"id":"frontend","role":"react-dev"}
+			"tabs":[
+				{
+					"name": "feature-auth",
+					"panes": [
+						{"id":"planner","role":"planner"},
+						{"id":"frontend","role":"react-dev"}
+					]
+				}
 			]
 		}
 	}`)
@@ -490,16 +495,16 @@ func TestServerSubmitExecutionPlan(t *testing.T) {
 	if service.applyPlanReq.RequestID != "req_123" || service.applyPlanReq.Session != "feature-auth" {
 		t.Fatalf("ApplyExecutionPlan request = %#v, want req_123 feature-auth", service.applyPlanReq)
 	}
-	if len(service.applyPlanReq.Panes) != 2 || service.applyPlanReq.Panes[0].ID != "planner" {
-		t.Fatalf("ApplyExecutionPlan panes = %#v, want planner and frontend", service.applyPlanReq.Panes)
+	if len(service.applyPlanReq.Tabs) != 1 || len(service.applyPlanReq.Tabs[0].Panes) != 2 || service.applyPlanReq.Tabs[0].Panes[0].ID != "planner" {
+		t.Fatalf("ApplyExecutionPlan tabs = %#v, want planner and frontend in tab feature-auth", service.applyPlanReq.Tabs)
 	}
 
 	var decoded ExecutionPlanResponse
 	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if decoded.RequestID != "req_123" || len(decoded.Panes) != 2 {
-		t.Fatalf("response = %#v, want echoed request_id and panes", decoded)
+	if decoded.RequestID != "req_123" || len(decoded.Tabs) != 1 || len(decoded.Tabs[0].Panes) != 2 {
+		t.Fatalf("response = %#v, want echoed request_id and tabs with panes", decoded)
 	}
 }
 

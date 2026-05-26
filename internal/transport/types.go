@@ -126,9 +126,14 @@ type RequestEnvelope struct {
 }
 
 type ExecutionPlanPayload struct {
-	Session string              `json:"session"`
-	Layout  string              `json:"layout"`
-	Panes   []ExecutionPlanPane `json:"panes"`
+	Session string             `json:"session"`
+	Layout  string             `json:"layout"`
+	Tabs    []ExecutionPlanTab `json:"tabs"`
+}
+
+type ExecutionPlanTab struct {
+	Name  string              `json:"name"`
+	Panes []ExecutionPlanPane `json:"panes"`
 }
 
 type ExecutionPlanPane struct {
@@ -140,10 +145,15 @@ type ExecutionPlanPane struct {
 }
 
 type ExecutionPlanResponse struct {
-	RequestID string `json:"request_id"`
-	Session   string `json:"session"`
-	Layout    string `json:"layout"`
-	Panes     []Pane `json:"panes"`
+	RequestID string                      `json:"request_id"`
+	Session   string                      `json:"session"`
+	Layout    string                      `json:"layout"`
+	Tabs      []ExecutionPlanTabResponse  `json:"tabs"`
+}
+
+type ExecutionPlanTabResponse struct {
+	Name  string `json:"name"`
+	Panes []Pane `json:"panes"`
 }
 
 type Pane struct {
@@ -349,30 +359,60 @@ func outputSummariesFromRuntime(summaries []rt.PaneOutputSummary) []PaneOutputSu
 }
 
 func RuntimeApplyExecutionPlanRequest(reqID string, payload ExecutionPlanPayload) rt.ApplyExecutionPlanRequest {
-	panes := make([]rt.ExecutionPlanPaneSpec, 0, len(payload.Panes))
-	for _, pane := range payload.Panes {
-		panes = append(panes, rt.ExecutionPlanPaneSpec{
-			ID:      rt.PaneID(pane.ID),
-			Role:    pane.Role,
-			AgentID: rt.AgentID(pane.AgentID),
-			Command: cloneStrings(pane.Command),
-			CWD:     pane.CWD,
+	if payload.Tabs == nil {
+		return rt.ApplyExecutionPlanRequest{
+			RequestID: reqID,
+			Session:   payload.Session,
+			Layout:    payload.Layout,
+			Tabs:      nil,
+		}
+	}
+	tabs := make([]rt.ExecutionPlanTabSpec, 0, len(payload.Tabs))
+	for _, tab := range payload.Tabs {
+		panes := make([]rt.ExecutionPlanPaneSpec, 0, len(tab.Panes))
+		for _, pane := range tab.Panes {
+			panes = append(panes, rt.ExecutionPlanPaneSpec{
+				ID:      rt.PaneID(pane.ID),
+				Role:    pane.Role,
+				AgentID: rt.AgentID(pane.AgentID),
+				Command: cloneStrings(pane.Command),
+				CWD:     pane.CWD,
+			})
+		}
+		tabs = append(tabs, rt.ExecutionPlanTabSpec{
+			Name:  tab.Name,
+			Panes: panes,
 		})
 	}
 	return rt.ApplyExecutionPlanRequest{
 		RequestID: reqID,
 		Session:   payload.Session,
 		Layout:    payload.Layout,
-		Panes:     panes,
+		Tabs:      tabs,
 	}
 }
 
 func ExecutionPlanFromRuntime(response rt.ApplyExecutionPlanResponse) ExecutionPlanResponse {
+	if response.Tabs == nil {
+		return ExecutionPlanResponse{
+			RequestID: response.RequestID,
+			Session:   response.Session,
+			Layout:    response.Layout,
+			Tabs:      nil,
+		}
+	}
+	tabs := make([]ExecutionPlanTabResponse, 0, len(response.Tabs))
+	for _, tab := range response.Tabs {
+		tabs = append(tabs, ExecutionPlanTabResponse{
+			Name:  tab.Name,
+			Panes: PanesFromRuntime(tab.Panes),
+		})
+	}
 	return ExecutionPlanResponse{
 		RequestID: response.RequestID,
 		Session:   response.Session,
 		Layout:    response.Layout,
-		Panes:     PanesFromRuntime(response.Panes),
+		Tabs:      tabs,
 	}
 }
 

@@ -26,18 +26,28 @@ type ExecutionPlanPaneSpec struct {
 	CWD     string
 }
 
+type ExecutionPlanTabSpec struct {
+	Name  string
+	Panes []ExecutionPlanPaneSpec
+}
+
 type ApplyExecutionPlanRequest struct {
 	RequestID string
 	Session   string
 	Layout    string
-	Panes     []ExecutionPlanPaneSpec
+	Tabs      []ExecutionPlanTabSpec
+}
+
+type ExecutionPlanTabResult struct {
+	Name  string
+	Panes []Pane
 }
 
 type ApplyExecutionPlanResponse struct {
 	RequestID string
 	Session   string
 	Layout    string
-	Panes     []Pane
+	Tabs      []ExecutionPlanTabResult
 }
 
 func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlanRequest) (ApplyExecutionPlanResponse, error) {
@@ -46,44 +56,62 @@ func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlan
 	}
 
 	taskID := TaskID(req.Session)
-	tabName := req.Session
-	created := make([]Pane, 0, len(req.Panes))
+	createdAll := make([]Pane, 0)
+	tabResults := make([]ExecutionPlanTabResult, 0, len(req.Tabs))
 
-	for i, spec := range req.Panes {
-		createReq := CreatePaneRequest{
-			ID:      spec.ID,
-			TaskID:  taskID,
-			AgentID: spec.AgentID,
-			Role:    spec.Role,
-			Name:    string(spec.ID),
-			TabName: tabName,
-			CWD:     spec.CWD,
-			Command: executionPlanCommand(spec),
+	for _, tabSpec := range req.Tabs {
+		tabName := tabSpec.Name
+		if tabName == "" {
+			tabName = req.Session
 		}
-		if i == 0 {
-			createReq.NewTab = true
-		} else {
-			tabID := created[0].ZellijTabID
-			if tabID == nil {
-				_ = s.rollbackExecutionPlan(ctx, created)
-				return ApplyExecutionPlanResponse{}, fmt.Errorf("%w: first pane missing zellij tab id", ErrInvalidExecutionPlan)
+
+		var tabID *ZellijTabID
+		createdTabPanes := make([]Pane, 0, len(tabSpec.Panes))
+
+		for j, spec := range tabSpec.Panes {
+			createReq := CreatePaneRequest{
+				ID:      spec.ID,
+				TaskID:  taskID,
+				AgentID: spec.AgentID,
+				Role:    spec.Role,
+				Name:    string(spec.ID),
+				TabName: tabName,
+				CWD:     spec.CWD,
+				Command: executionPlanCommand(spec),
 			}
-			createReq.ZellijTabID = tabID
+			if j == 0 {
+				createReq.NewTab = true
+			} else {
+				if tabID == nil {
+					_ = s.rollbackExecutionPlan(ctx, createdAll)
+					return ApplyExecutionPlanResponse{}, fmt.Errorf("%w: first pane missing zellij tab id in tab %q", ErrInvalidExecutionPlan, tabName)
+				}
+				createReq.ZellijTabID = tabID
+			}
+
+			response, err := s.CreatePane(ctx, createReq)
+			if err != nil {
+				_ = s.rollbackExecutionPlan(ctx, createdAll)
+				return ApplyExecutionPlanResponse{}, err
+			}
+			if j == 0 {
+				tabID = response.Pane.ZellijTabID
+			}
+			createdTabPanes = append(createdTabPanes, response.Pane)
+			createdAll = append(createdAll, response.Pane)
 		}
 
-		response, err := s.CreatePane(ctx, createReq)
-		if err != nil {
-			_ = s.rollbackExecutionPlan(ctx, created)
-			return ApplyExecutionPlanResponse{}, err
-		}
-		created = append(created, response.Pane)
+		tabResults = append(tabResults, ExecutionPlanTabResult{
+			Name:  tabName,
+			Panes: createdTabPanes,
+		})
 	}
 
 	return ApplyExecutionPlanResponse{
 		RequestID: req.RequestID,
 		Session:   req.Session,
 		Layout:    req.Layout,
-		Panes:     created,
+		Tabs:      tabResults,
 	}, nil
 }
 
@@ -96,19 +124,24 @@ func validateExecutionPlan(req ApplyExecutionPlanRequest) error {
 			return fmt.Errorf("%w: unsupported layout %q", ErrInvalidExecutionPlan, req.Layout)
 		}
 	}
-	if len(req.Panes) == 0 {
-		return fmt.Errorf("%w: at least one pane is required", ErrInvalidExecutionPlan)
+	if len(req.Tabs) == 0 {
+		return fmt.Errorf("%w: at least one tab is required", ErrInvalidExecutionPlan)
 	}
 
-	seen := make(map[PaneID]struct{}, len(req.Panes))
-	for _, spec := range req.Panes {
-		if spec.ID == "" {
-			return fmt.Errorf("%w: pane id is required", ErrInvalidExecutionPlan)
+	seen := make(map[PaneID]struct{})
+	for _, tab := range req.Tabs {
+		if len(tab.Panes) == 0 {
+			return fmt.Errorf("%w: tab %q must contain at least one pane", ErrInvalidExecutionPlan, tab.Name)
 		}
-		if _, dup := seen[spec.ID]; dup {
-			return fmt.Errorf("%w: duplicate pane id %q", ErrInvalidExecutionPlan, spec.ID)
+		for _, spec := range tab.Panes {
+			if spec.ID == "" {
+				return fmt.Errorf("%w: pane id is required", ErrInvalidExecutionPlan)
+			}
+			if _, dup := seen[spec.ID]; dup {
+				return fmt.Errorf("%w: duplicate pane id %q", ErrInvalidExecutionPlan, spec.ID)
+			}
+			seen[spec.ID] = struct{}{}
 		}
-		seen[spec.ID] = struct{}{}
 	}
 	return nil
 }

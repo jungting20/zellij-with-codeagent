@@ -25,9 +25,14 @@ func TestApplyExecutionPlanCreatesPanesInOneTab(t *testing.T) {
 		RequestID: "req_123",
 		Session:   "feature-auth",
 		Layout:    "triple-horizontal",
-		Panes: []ExecutionPlanPaneSpec{
-			{ID: "planner", Role: "planner"},
-			{ID: "frontend", Role: "react-dev"},
+		Tabs: []ExecutionPlanTabSpec{
+			{
+				Name: "feature-auth",
+				Panes: []ExecutionPlanPaneSpec{
+					{ID: "planner", Role: "planner"},
+					{ID: "frontend", Role: "react-dev"},
+				},
+			},
 		},
 	})
 	if err != nil {
@@ -36,17 +41,19 @@ func TestApplyExecutionPlanCreatesPanesInOneTab(t *testing.T) {
 	if response.RequestID != "req_123" || response.Session != "feature-auth" || response.Layout != "triple-horizontal" {
 		t.Fatalf("ApplyExecutionPlan() metadata = %#v, want req/session/layout echoed", response)
 	}
-	if len(response.Panes) != 2 {
-		t.Fatalf("ApplyExecutionPlan() panes = %d, want 2", len(response.Panes))
+	if len(response.Tabs) != 1 || len(response.Tabs[0].Panes) != 2 {
+		t.Fatalf("ApplyExecutionPlan() tabs = %d, want 1 tab with 2 panes", len(response.Tabs))
 	}
-	if response.Panes[0].TaskID != "feature-auth" || response.Panes[0].TabName != "feature-auth" {
-		t.Fatalf("first pane = %#v, want task and tab name from session", response.Panes[0])
+	firstPane := response.Tabs[0].Panes[0]
+	secondPane := response.Tabs[0].Panes[1]
+	if firstPane.TaskID != "feature-auth" || firstPane.TabName != "feature-auth" {
+		t.Fatalf("first pane = %#v, want task and tab name from session", firstPane)
 	}
-	if response.Panes[0].ZellijTabID == nil || *response.Panes[0].ZellijTabID != tabID {
-		t.Fatalf("first pane tab = %v, want %d", response.Panes[0].ZellijTabID, tabID)
+	if firstPane.ZellijTabID == nil || *firstPane.ZellijTabID != tabID {
+		t.Fatalf("first pane tab = %v, want %d", firstPane.ZellijTabID, tabID)
 	}
-	if response.Panes[1].ZellijTabID == nil || *response.Panes[1].ZellijTabID != tabID {
-		t.Fatalf("second pane tab = %v, want %d", response.Panes[1].ZellijTabID, tabID)
+	if secondPane.ZellijTabID == nil || *secondPane.ZellijTabID != tabID {
+		t.Fatalf("second pane tab = %v, want %d", secondPane.ZellijTabID, tabID)
 	}
 
 	if len(backend.createTabRequests) != 1 {
@@ -74,7 +81,7 @@ func TestApplyExecutionPlanRejectsInvalidLayout(t *testing.T) {
 	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
 		Session: "feature-auth",
 		Layout:  "unknown-layout",
-		Panes:   []ExecutionPlanPaneSpec{{ID: "planner"}},
+		Tabs:    []ExecutionPlanTabSpec{{Name: "default", Panes: []ExecutionPlanPaneSpec{{ID: "planner"}}}},
 	})
 	if !errors.Is(err, ErrInvalidExecutionPlan) {
 		t.Fatalf("ApplyExecutionPlan() error = %v, want %v", err, ErrInvalidExecutionPlan)
@@ -96,8 +103,13 @@ func TestApplyExecutionPlanAllowsEmptyLayout(t *testing.T) {
 		RequestID: "req_empty_layout",
 		Session:   "feature-auth",
 		Layout:    "",
-		Panes: []ExecutionPlanPaneSpec{
-			{ID: "planner", Role: "planner"},
+		Tabs: []ExecutionPlanTabSpec{
+			{
+				Name: "feature-auth",
+				Panes: []ExecutionPlanPaneSpec{
+					{ID: "planner", Role: "planner"},
+				},
+			},
 		},
 	})
 	if err != nil {
@@ -120,9 +132,14 @@ func TestApplyExecutionPlanRollsBackOnSecondPaneFailure(t *testing.T) {
 	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
 		Session: "feature-auth",
 		Layout:  "triple-horizontal",
-		Panes: []ExecutionPlanPaneSpec{
-			{ID: "planner", Role: "planner"},
-			{ID: "frontend", Role: "react-dev"},
+		Tabs: []ExecutionPlanTabSpec{
+			{
+				Name: "feature-auth",
+				Panes: []ExecutionPlanPaneSpec{
+					{ID: "planner", Role: "planner"},
+					{ID: "frontend", Role: "react-dev"},
+				},
+			},
 		},
 	})
 	if err == nil {

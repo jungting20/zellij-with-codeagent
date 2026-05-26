@@ -14,25 +14,36 @@ curl --unix-socket "${SOCKET_PATH}" -X POST -H "Content-Type: application/json" 
     "type": "execution_plan",
     "request_id": "req_planner_manual_'"$(date +%s)"'",
     "payload": {
-      "session": "agent-planner-session",
-      "panes": [
+      "session": "zellij-with-code-agent",
+      "tabs": [
         {
-          "id": "coder-pane",
-          "role": "coder",
-          "cwd": "'"${CURRENT_DIR}"'",
-          "command": ["./bin/agent-role", "coder"]
-        },
-        {
-          "id": "network-pane",
-          "role": "network-tracker",
-          "cwd": "'"${CURRENT_DIR}"'",
-          "command": ["./bin/agent-role", "network-tracker", "--url", "'"${TARGET_URL}"'"]
-        },
-        {
-          "id": "console-pane",
-          "role": "console-tracker",
-          "cwd": "'"${CURRENT_DIR}"'",
-          "command": ["./bin/agent-role", "console-tracker", "--url", "'"${TARGET_URL}"'"]
+          "name": "main-tab",
+          "panes": [
+            {
+              "id": "coder-pane",
+              "role": "coder",
+              "cwd": "'"${CURRENT_DIR}"'",
+              "command": ["./bin/agent-role", "coder"]
+            },
+            {
+              "id": "network-pane",
+              "role": "network-tracker",
+              "cwd": "'"${CURRENT_DIR}"'",
+              "command": ["./bin/agent-role", "network-tracker", "--url", "'"${TARGET_URL}"'"]
+            },
+            {
+              "id": "console-pane",
+              "role": "console-tracker",
+              "cwd": "'"${CURRENT_DIR}"'",
+              "command": ["./bin/agent-role", "console-tracker", "--url", "'"${TARGET_URL}"'"]
+            },
+            {
+              "id": "editor-pane",
+              "role": "editor",
+              "cwd": "'"${CURRENT_DIR}"'",
+              "command": ["nvim", "/Users/in05908_mac/zellij-with-codeagent/README.md"]
+            }
+          ]
         }
       ]
     }
