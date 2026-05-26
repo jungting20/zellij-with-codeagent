@@ -15,7 +15,6 @@ curl --unix-socket "${SOCKET_PATH}" -X POST -H "Content-Type: application/json" 
     "request_id": "req_planner_manual_'"$(date +%s)"'",
     "payload": {
       "session": "agent-planner-session",
-      "layout": "triple-horizontal",
       "panes": [
         {
           "id": "coder-pane",

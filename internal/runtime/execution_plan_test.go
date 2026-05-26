@@ -81,6 +81,33 @@ func TestApplyExecutionPlanRejectsInvalidLayout(t *testing.T) {
 	}
 }
 
+func TestApplyExecutionPlanAllowsEmptyLayout(t *testing.T) {
+	tabID := ZellijTabID(15)
+	backend := &fakeBackend{
+		createTabID: zellij.TabID(tabID),
+		listPanes: []zellij.Pane{
+			{ID: "terminal_15a", TabID: int(tabID), TabName: "feature-auth"},
+		},
+		createIDs: []zellij.PaneID{"terminal_15a"},
+	}
+	service := newTestService(backend)
+
+	response, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
+		RequestID: "req_empty_layout",
+		Session:   "feature-auth",
+		Layout:    "",
+		Panes: []ExecutionPlanPaneSpec{
+			{ID: "planner", Role: "planner"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyExecutionPlan() with empty layout error = %v", err)
+	}
+	if response.Layout != "" {
+		t.Fatalf("ApplyExecutionPlan() response layout = %q, want empty", response.Layout)
+	}
+}
+
 func TestApplyExecutionPlanRollsBackOnSecondPaneFailure(t *testing.T) {
 	tabID := ZellijTabID(3)
 	backend := &fakeBackend{

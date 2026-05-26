@@ -91,11 +91,10 @@ func validateExecutionPlan(req ApplyExecutionPlanRequest) error {
 	if req.Session == "" {
 		return fmt.Errorf("%w: session is required", ErrInvalidExecutionPlan)
 	}
-	if req.Layout == "" {
-		return fmt.Errorf("%w: layout is required", ErrInvalidExecutionPlan)
-	}
-	if _, ok := SupportedExecutionPlanLayouts[req.Layout]; !ok {
-		return fmt.Errorf("%w: unsupported layout %q", ErrInvalidExecutionPlan, req.Layout)
+	if req.Layout != "" {
+		if _, ok := SupportedExecutionPlanLayouts[req.Layout]; !ok {
+			return fmt.Errorf("%w: unsupported layout %q", ErrInvalidExecutionPlan, req.Layout)
+		}
 	}
 	if len(req.Panes) == 0 {
 		return fmt.Errorf("%w: at least one pane is required", ErrInvalidExecutionPlan)
