@@ -44,6 +44,10 @@ func NewWithClock(now func() time.Time) *Registry {
 }
 
 func (r *Registry) RegisterPane(req RegisterPaneRequest) (PaneRecord, error) {
+	if err := req.Validate(); err != nil {
+		return PaneRecord{}, err
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

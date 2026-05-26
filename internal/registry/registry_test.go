@@ -65,6 +65,26 @@ func TestRegisterPaneRejectsDuplicateLogicalID(t *testing.T) {
 	}
 }
 
+func TestRegisterPaneValidation(t *testing.T) {
+	registry := newTestRegistry()
+
+	// Empty ID should be rejected
+	_, err := registry.RegisterPane(RegisterPaneRequest{ID: ""})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("RegisterPane() with empty ID error = %v, want %v", err, ErrInvalidRequest)
+	}
+
+	// Negative ZellijTabID should be rejected
+	negTabID := ZellijTabID(-1)
+	_, err = registry.RegisterPane(RegisterPaneRequest{
+		ID:          "pane-1",
+		ZellijTabID: &negTabID,
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("RegisterPane() with negative ZellijTabID error = %v, want %v", err, ErrInvalidRequest)
+	}
+}
+
 func TestUpdatePaneStatusPreservesAssociations(t *testing.T) {
 	registry := newTestRegistry()
 	tabID := ZellijTabID(2)

@@ -1,6 +1,10 @@
 package registry
 
-import "time"
+import (
+	"errors"
+	"fmt"
+	"time"
+)
 
 // Logical IDs are daemon-owned and remain stable even when Zellij pane IDs are
 // recreated or reused by the backend runtime.
@@ -72,4 +76,19 @@ type RegisterPaneRequest struct {
 	Command      []string
 	CWD          string
 	Status       PaneStatus
+}
+
+var ErrInvalidRequest = errors.New("invalid registry request")
+
+// Validate performs stateless validation of the RegisterPaneRequest.
+func (req RegisterPaneRequest) Validate() error {
+	if req.ID == "" {
+		return fmt.Errorf("%w: ID is required", ErrInvalidRequest)
+	}
+	if req.ZellijTabID != nil {
+		if *req.ZellijTabID < 0 {
+			return fmt.Errorf("%w: ZellijTabID cannot be negative", ErrInvalidRequest)
+		}
+	}
+	return nil
 }
