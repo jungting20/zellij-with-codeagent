@@ -10,18 +10,25 @@ import (
 )
 
 var (
-	ErrPaneNotFound   = errors.New("runtime pane not found")
-	ErrMissingPaneID  = errors.New("runtime pane id is required")
-	ErrCleanupPartial = errors.New("runtime cleanup partially failed")
+	ErrPaneNotFound    = errors.New("runtime pane not found")
+	ErrMissingPaneID   = errors.New("runtime pane id is required")
+	ErrCleanupPartial  = errors.New("runtime cleanup partially failed")
+	ErrSessionNotFound = errors.New("runtime session not found")
+	ErrTabNotFound     = errors.New("runtime tab not found")
 )
 
 type (
-	PaneID       = registry.PaneID
-	TaskID       = registry.TaskID
-	AgentID      = registry.AgentID
-	ZellijPaneID = registry.ZellijPaneID
-	ZellijTabID  = registry.ZellijTabID
-	PaneStatus   = registry.PaneStatus
+	PaneID        = registry.PaneID
+	TaskID        = registry.TaskID
+	AgentID       = registry.AgentID
+	ZellijPaneID  = registry.ZellijPaneID
+	ZellijTabID   = registry.ZellijTabID
+	PaneStatus    = registry.PaneStatus
+	SessionID     = registry.SessionID
+	TabID         = registry.TabID
+	SessionRecord = registry.SessionRecord
+	TabRecord     = registry.TabRecord
+	PaneRecord    = registry.PaneRecord
 )
 
 const (
@@ -46,6 +53,11 @@ type RuntimeService interface {
 	Cleanup(context.Context, CleanupRequest) (CleanupResponse, error)
 	ApplyExecutionPlan(context.Context, ApplyExecutionPlanRequest) (ApplyExecutionPlanResponse, error)
 	SubscribeEvents(context.Context) (<-chan eventbus.Event, func(), error)
+
+	ListSessions(context.Context) ([]SessionRecord, error)
+	GetSession(context.Context, SessionID) (SessionRecord, error)
+	ListTabs(context.Context, SessionID) ([]TabRecord, error)
+	GetTab(context.Context, SessionID, TabID) (TabRecord, error)
 }
 
 type CreatePaneRequest struct {
@@ -193,6 +205,8 @@ type CleanupResponse struct {
 
 type Pane struct {
 	ID            PaneID
+	SessionID     SessionID
+	TabID         TabID
 	TaskID        TaskID
 	AgentID       AgentID
 	ZellijPaneID  ZellijPaneID

@@ -492,6 +492,10 @@ type fakeBackend struct {
 	listCalls         []struct{}
 }
 
+func (b *fakeBackend) Session() string {
+	return "test-session"
+}
+
 func (b *fakeBackend) CreateTab(_ context.Context, req zellij.CreateTabRequest) (zellij.TabID, error) {
 	b.createTabRequests = append(b.createTabRequests, zellij.CreateTabRequest{
 		Name:    req.Name,
@@ -577,8 +581,67 @@ func (b *fakeBackend) DumpScreen(_ context.Context, req zellij.DumpScreenRequest
 }
 
 func (b *fakeBackend) SubscribeCommand(req zellij.SubscribeRequest) (zellij.CommandSpec, error) {
-	return zellij.CommandSpec{
-		Name: "zellij",
-		Args: []string{"subscribe", "--pane-id", string(req.PaneID)},
-	}, nil
+	return zellij.CommandSpec{}, nil
+}
+
+func TestService3DepthQueries(t *testing.T) {
+	backend := &fakeBackend{createID: "terminal_5"}
+	service := newTestService(backend)
+
+	ctx := context.Background()
+	_, err := service.CreatePane(ctx, CreatePaneRequest{
+		ID:      "pane-1",
+		Role:    "test",
+		TabName: "my-tab",
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+
+	sessions, err := service.ListSessions(ctx)
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Errorf("len(sessions) = %d, want 1", len(sessions))
+	}
+	sessionID := sessions[0].ID
+	if sessionID != "test-session" {
+		t.Errorf("sessionID = %q, want test-session", sessionID)
+	}
+
+	session, err := service.GetSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	if session.ID != sessionID {
+		t.Errorf("session.ID = %q, want %q", session.ID, sessionID)
+	}
+
+	tabs, err := service.ListTabs(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("ListTabs() error = %v", err)
+	}
+	if len(tabs) != 1 {
+		t.Errorf("len(tabs) = %d, want 1", len(tabs))
+	}
+
+	tabID := tabs[0].ID
+	tab, err := service.GetTab(ctx, sessionID, tabID)
+	if err != nil {
+		t.Fatalf("GetTab() error = %v", err)
+	}
+	if tab.ID != tabID {
+		t.Errorf("tab.ID = %q, want %q", tab.ID, tabID)
+	}
+
+	_, err = service.GetSession(ctx, "missing")
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("GetSession(missing) error = %v, want %v", err, ErrSessionNotFound)
+	}
+
+	_, err = service.GetTab(ctx, sessionID, "missing")
+	if !errors.Is(err, ErrTabNotFound) {
+		t.Errorf("GetTab(..., missing) error = %v, want %v", err, ErrTabNotFound)
+	}
 }

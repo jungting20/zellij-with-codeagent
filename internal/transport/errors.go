@@ -57,7 +57,7 @@ func ErrorFor(err error) (APIError, int) {
 		return APIError{}, http.StatusOK
 	}
 	switch {
-	case errors.Is(err, rt.ErrPaneNotFound):
+	case errors.Is(err, rt.ErrPaneNotFound), errors.Is(err, rt.ErrSessionNotFound), errors.Is(err, rt.ErrTabNotFound):
 		return APIError{Code: CodeNotFound, Message: err.Error()}, http.StatusNotFound
 	case errors.Is(err, rt.ErrMissingPaneID), errors.Is(err, rt.ErrInvalidExecutionPlan):
 		return APIError{Code: CodeBadRequest, Message: err.Error()}, http.StatusBadRequest

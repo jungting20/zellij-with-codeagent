@@ -540,3 +540,156 @@ func TestServerHealth(t *testing.T) {
 		t.Fatalf("body = %s, want ok status", response.Body.String())
 	}
 }
+
+func (f *fakeRuntimeService) ListSessions(context.Context) ([]rt.SessionRecord, error) {
+	tabID := rt.ZellijTabID(7)
+	pane := rt.PaneRecord{
+		ID:        "pane-1",
+		SessionID: "default",
+		TabID:     "tab-1",
+		ZellijTabID: &tabID,
+		TabName:   "agentd-test",
+		Role:      "test",
+		Status:    rt.PaneStatusStarting,
+	}
+	tab := rt.TabRecord{
+		ID:    "tab-1",
+		Name:  "agentd-test",
+		Panes: map[rt.PaneID]rt.PaneRecord{
+			"pane-1": pane,
+		},
+	}
+	session := rt.SessionRecord{
+		ID: "default",
+		Tabs: map[rt.TabID]rt.TabRecord{
+			"tab-1": tab,
+		},
+	}
+	return []rt.SessionRecord{session}, nil
+}
+
+func (f *fakeRuntimeService) GetSession(_ context.Context, id rt.SessionID) (rt.SessionRecord, error) {
+	if id != "default" {
+		return rt.SessionRecord{}, rt.ErrSessionNotFound
+	}
+	tabID := rt.ZellijTabID(7)
+	pane := rt.PaneRecord{
+		ID:        "pane-1",
+		SessionID: "default",
+		TabID:     "tab-1",
+		ZellijTabID: &tabID,
+		TabName:   "agentd-test",
+		Role:      "test",
+		Status:    rt.PaneStatusStarting,
+	}
+	tab := rt.TabRecord{
+		ID:    "tab-1",
+		Name:  "agentd-test",
+		Panes: map[rt.PaneID]rt.PaneRecord{
+			"pane-1": pane,
+		},
+	}
+	return rt.SessionRecord{
+		ID: "default",
+		Tabs: map[rt.TabID]rt.TabRecord{
+			"tab-1": tab,
+		},
+	}, nil
+}
+
+func (f *fakeRuntimeService) ListTabs(_ context.Context, sessionID rt.SessionID) ([]rt.TabRecord, error) {
+	if sessionID != "default" {
+		return nil, rt.ErrSessionNotFound
+	}
+	tabID := rt.ZellijTabID(7)
+	pane := rt.PaneRecord{
+		ID:        "pane-1",
+		SessionID: "default",
+		TabID:     "tab-1",
+		ZellijTabID: &tabID,
+		TabName:   "agentd-test",
+		Role:      "test",
+		Status:    rt.PaneStatusStarting,
+	}
+	tab := rt.TabRecord{
+		ID:    "tab-1",
+		Name:  "agentd-test",
+		Panes: map[rt.PaneID]rt.PaneRecord{
+			"pane-1": pane,
+		},
+	}
+	return []rt.TabRecord{tab}, nil
+}
+
+func (f *fakeRuntimeService) GetTab(_ context.Context, sessionID rt.SessionID, tabID rt.TabID) (rt.TabRecord, error) {
+	if sessionID != "default" {
+		return rt.TabRecord{}, rt.ErrSessionNotFound
+	}
+	if tabID != "tab-1" {
+		return rt.TabRecord{}, rt.ErrTabNotFound
+	}
+	tabIDVal := rt.ZellijTabID(7)
+	pane := rt.PaneRecord{
+		ID:        "pane-1",
+		SessionID: "default",
+		TabID:     "tab-1",
+		ZellijTabID: &tabIDVal,
+		TabName:   "agentd-test",
+		Role:      "test",
+		Status:    rt.PaneStatusStarting,
+	}
+	return rt.TabRecord{
+		ID:    "tab-1",
+		Name:  "agentd-test",
+		Panes: map[rt.PaneID]rt.PaneRecord{
+			"pane-1": pane,
+		},
+	}, nil
+}
+
+func TestServerSessionsAndTabs(t *testing.T) {
+	service := newFakeRuntimeService()
+	server := newTestServer(t, service)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/sessions", nil)
+	resp := httptest.NewRecorder()
+	server.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Errorf("GET /v1/sessions code = %d, want 200", resp.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/sessions/default", nil)
+	resp = httptest.NewRecorder()
+	server.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Errorf("GET /v1/sessions/default code = %d, want 200", resp.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/sessions/default/tabs", nil)
+	resp = httptest.NewRecorder()
+	server.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Errorf("GET /v1/sessions/default/tabs code = %d, want 200", resp.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/sessions/default/tabs/tab-1", nil)
+	resp = httptest.NewRecorder()
+	server.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Errorf("GET /v1/sessions/default/tabs/tab-1 code = %d, want 200", resp.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/sessions/default/tabs/tab-1/panes", nil)
+	resp = httptest.NewRecorder()
+	server.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Errorf("GET /v1/sessions/default/tabs/tab-1/panes code = %d, want 200", resp.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/sessions/missing", nil)
+	resp = httptest.NewRecorder()
+	server.ServeHTTP(resp, req)
+	if resp.Code != http.StatusNotFound {
+		t.Errorf("GET /v1/sessions/missing code = %d, want 404", resp.Code)
+	}
+}

@@ -37,6 +37,10 @@ func NewBackend(opts Options) *CLIBackend {
 	}
 }
 
+func (b *CLIBackend) Session() string {
+	return b.session
+}
+
 func (b *CLIBackend) CreateTab(ctx context.Context, req CreateTabRequest) (TabID, error) {
 	result, err := b.run(ctx, "create tab", createTabCommand(b.binary, b.session, req))
 	if err != nil {

@@ -129,3 +129,19 @@ func (s *stubRuntime) ApplyExecutionPlan(context.Context, rt.ApplyExecutionPlanR
 func (s *stubRuntime) SubscribeEvents(context.Context) (<-chan eventbus.Event, func(), error) {
 	return nil, func() {}, nil
 }
+
+func (s *stubRuntime) ListSessions(context.Context) ([]rt.SessionRecord, error) {
+	return nil, nil
+}
+
+func (s *stubRuntime) GetSession(context.Context, rt.SessionID) (rt.SessionRecord, error) {
+	return rt.SessionRecord{}, nil
+}
+
+func (s *stubRuntime) ListTabs(context.Context, rt.SessionID) ([]rt.TabRecord, error) {
+	return nil, nil
+}
+
+func (s *stubRuntime) GetTab(context.Context, rt.SessionID, rt.TabID) (rt.TabRecord, error) {
+	return rt.TabRecord{}, nil
+}

@@ -97,6 +97,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/health":
 		writeJSON(w, http.StatusOK, HealthResponse{Status: "ok", Version: s.version})
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/sessions":
+		s.handleListSessions(w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/sessions/"):
+		s.handleSessionRoute(w, r)
 	case r.URL.Path == "/v1/panes":
 		s.handlePanes(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/panes/"):
@@ -400,4 +404,105 @@ func prepareSocket(path string) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := s.requestContext(r)
+	defer cancel()
+	response, err := s.service.ListSessions(ctx)
+	if err != nil {
+		writeRuntimeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, SessionListResponse{Sessions: SessionsFromRuntime(response)})
+}
+
+func (s *Server) handleSessionRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, BadRequest("only GET is supported for session routes"), http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionID, tabID, subResource, ok := splitSessionPath(r.URL.Path)
+	if !ok || sessionID == "" {
+		writeAPIError(w, BadRequest("invalid session path"), http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := s.requestContext(r)
+	defer cancel()
+
+	if tabID == "" && subResource == "" {
+		session, err := s.service.GetSession(ctx, rt.SessionID(sessionID))
+		if err != nil {
+			writeRuntimeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, SessionResponse{Session: SessionFromRuntime(session)})
+		return
+	}
+
+	if tabID == "tabs" && subResource == "" {
+		tabs, err := s.service.ListTabs(ctx, rt.SessionID(sessionID))
+		if err != nil {
+			writeRuntimeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, TabListResponse{Tabs: TabsFromRuntime(tabs)})
+		return
+	}
+
+	if tabID == "tabs" && subResource != "" {
+		parts := strings.Split(subResource, "/")
+		actualTabID := parts[0]
+
+		if len(parts) == 1 {
+			tab, err := s.service.GetTab(ctx, rt.SessionID(sessionID), rt.TabID(actualTabID))
+			if err != nil {
+				writeRuntimeError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, TabResponse{Tab: TabFromRuntime(tab)})
+			return
+		}
+
+		if len(parts) == 2 && parts[1] == "panes" {
+			tab, err := s.service.GetTab(ctx, rt.SessionID(sessionID), rt.TabID(actualTabID))
+			if err != nil {
+				writeRuntimeError(w, err)
+				return
+			}
+			panes := make([]Pane, 0, len(tab.Panes))
+			for _, pane := range tab.Panes {
+				panes = append(panes, PaneFromRegistryRecord(pane))
+			}
+			for i := 0; i < len(panes); i++ {
+				for j := i + 1; j < len(panes); j++ {
+					if panes[i].ID > panes[j].ID {
+						panes[i], panes[j] = panes[j], panes[i]
+					}
+				}
+			}
+			writeJSON(w, http.StatusOK, ListPanesResponse{Panes: panes})
+			return
+		}
+	}
+
+	writeAPIError(w, APIError{Code: CodeNotFound, Message: "route not found"}, http.StatusNotFound)
+}
+
+func splitSessionPath(path string) (sessionID, tabID, subResource string, ok bool) {
+	rest := strings.TrimPrefix(path, "/v1/sessions/")
+	parts := strings.Split(rest, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return "", "", "", false
+	}
+	sessionID = parts[0]
+	if len(parts) > 1 {
+		tabID = parts[1]
+	}
+	if len(parts) > 2 {
+		subResource = strings.Join(parts[2:], "/")
+	}
+	return sessionID, tabID, subResource, true
 }

@@ -17,7 +17,7 @@ curl --unix-socket "${SOCKET_PATH}" -X POST -H "Content-Type: application/json" 
       "session": "zellij-with-code-agent",
       "tabs": [
         {
-          "name": "main-tab",
+          "name": "main-tab-1",
           "panes": [
             {
               "id": "coder-pane",

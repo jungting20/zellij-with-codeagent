@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"zellij-with-codeagent/internal/eventbus"
+	"zellij-with-codeagent/internal/registry"
 	rt "zellij-with-codeagent/internal/runtime"
 )
 
@@ -423,4 +424,116 @@ func cloneStrings(values []string) []string {
 	clone := make([]string, len(values))
 	copy(clone, values)
 	return clone
+}
+
+type Session struct {
+	ID        string    `json:"id"`
+	Tabs      []Tab     `json:"tabs,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type Tab struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Panes     []Pane    `json:"panes,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type SessionResponse struct {
+	Session Session `json:"session"`
+}
+
+type SessionListResponse struct {
+	Sessions []Session `json:"sessions"`
+}
+
+type TabResponse struct {
+	Tab Tab `json:"tab"`
+}
+
+type TabListResponse struct {
+	Tabs []Tab `json:"tabs"`
+}
+
+func SessionFromRuntime(rSession rt.SessionRecord) Session {
+	tabs := make([]Tab, 0, len(rSession.Tabs))
+	for _, tab := range rSession.Tabs {
+		tabs = append(tabs, TabFromRuntime(tab))
+	}
+	for i := 0; i < len(tabs); i++ {
+		for j := i + 1; j < len(tabs); j++ {
+			if tabs[i].ID > tabs[j].ID {
+				tabs[i], tabs[j] = tabs[j], tabs[i]
+			}
+		}
+	}
+	return Session{
+		ID:        string(rSession.ID),
+		Tabs:      tabs,
+		CreatedAt: rSession.CreatedAt,
+		UpdatedAt: rSession.UpdatedAt,
+	}
+}
+
+func PaneFromRegistryRecord(pane registry.PaneRecord) Pane {
+	var tabID *int
+	if pane.ZellijTabID != nil {
+		value := int(*pane.ZellijTabID)
+		tabID = &value
+	}
+	return Pane{
+		ID:            string(pane.ID),
+		TaskID:        string(pane.TaskID),
+		AgentID:       string(pane.AgentID),
+		ZellijPaneID:  string(pane.ZellijPaneID),
+		ZellijTabID:   tabID,
+		TabName:       pane.TabName,
+		Role:          string(pane.Role),
+		Command:       cloneStrings(pane.Command),
+		CWD:           pane.CWD,
+		Status:        string(pane.Status),
+		LastOutput:    pane.LastOutput,
+		StatusMessage: pane.StatusMessage,
+		CreatedAt:     pane.CreatedAt,
+		UpdatedAt:     pane.UpdatedAt,
+	}
+}
+
+func TabFromRuntime(rTab rt.TabRecord) Tab {
+	panes := make([]Pane, 0, len(rTab.Panes))
+	for _, pane := range rTab.Panes {
+		panes = append(panes, PaneFromRegistryRecord(pane))
+	}
+	for i := 0; i < len(panes); i++ {
+		for j := i + 1; j < len(panes); j++ {
+			if panes[i].ID > panes[j].ID {
+				panes[i], panes[j] = panes[j], panes[i]
+			}
+		}
+	}
+	return Tab{
+		ID:        string(rTab.ID),
+		Name:      rTab.Name,
+		Panes:     panes,
+		CreatedAt: rTab.CreatedAt,
+		UpdatedAt: rTab.UpdatedAt,
+	}
+}
+
+func SessionsFromRuntime(rSessions []rt.SessionRecord) []Session {
+	out := make([]Session, 0, len(rSessions))
+	for _, s := range rSessions {
+		out = append(out, SessionFromRuntime(s))
+	}
+	return out
+}
+
+func TabsFromRuntime(rTabs []rt.TabRecord) []Tab {
+	out := make([]Tab, 0, len(rTabs))
+	for _, t := range rTabs {
+		out = append(out, TabFromRuntime(t))
+	}
+	return out
 }

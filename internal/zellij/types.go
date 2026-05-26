@@ -22,6 +22,7 @@ type PaneID string
 type TabID int
 
 type Backend interface {
+	Session() string
 	CreateTab(ctx context.Context, req CreateTabRequest) (TabID, error)
 	CloseTab(ctx context.Context, req CloseTabRequest) error
 	CreatePane(ctx context.Context, req CreatePaneRequest) (PaneID, error)

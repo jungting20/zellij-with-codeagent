@@ -10,6 +10,8 @@ type (
 	PaneID       string
 	ZellijPaneID string
 	ZellijTabID  int
+	SessionID    string
+	TabID        string
 )
 
 type PaneStatus string
@@ -25,6 +27,8 @@ const (
 
 type PaneRecord struct {
 	ID            PaneID
+	SessionID     SessionID
+	TabID         TabID
 	TaskID        TaskID
 	AgentID       AgentID
 	ZellijPaneID  ZellijPaneID
@@ -40,8 +44,25 @@ type PaneRecord struct {
 	UpdatedAt     time.Time
 }
 
+type TabRecord struct {
+	ID        TabID
+	Name      string
+	Panes     map[PaneID]PaneRecord
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type SessionRecord struct {
+	ID        SessionID
+	Tabs      map[TabID]TabRecord
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type RegisterPaneRequest struct {
 	ID           PaneID
+	SessionID    SessionID
+	TabID        TabID
 	TaskID       TaskID
 	AgentID      AgentID
 	ZellijPaneID ZellijPaneID

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync/atomic"
 
 	"zellij-with-codeagent/internal/eventbus"
@@ -83,8 +84,17 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 		return CreatePaneResponse{}, errors.Join(err, cleanup(ctx))
 	}
 
+	var regTabID registry.TabID
+	if tabID != nil {
+		regTabID = registry.TabID(strconv.Itoa(int(*tabID)))
+	} else if tabName != "" {
+		regTabID = registry.TabID(tabName)
+	}
+
 	record, err := s.registry.RegisterPane(registry.RegisterPaneRequest{
 		ID:           registry.PaneID(id),
+		SessionID:    registry.SessionID(s.backend.Session()),
+		TabID:        regTabID,
 		TaskID:       registry.TaskID(req.TaskID),
 		AgentID:      registry.AgentID(req.AgentID),
 		ZellijPaneID: registry.ZellijPaneID(zellijID),
@@ -339,6 +349,8 @@ func sequentialPaneIDGenerator() PaneIDGenerator {
 func paneFromRecord(record registry.PaneRecord) Pane {
 	return Pane{
 		ID:            PaneID(record.ID),
+		SessionID:     SessionID(record.SessionID),
+		TabID:         TabID(record.TabID),
 		TaskID:        TaskID(record.TaskID),
 		AgentID:       AgentID(record.AgentID),
 		ZellijPaneID:  ZellijPaneID(record.ZellijPaneID),
@@ -363,4 +375,35 @@ func cloneStrings(values []string) []string {
 	clone := make([]string, len(values))
 	copy(clone, values)
 	return clone
+}
+
+func (s *Service) ListSessions(ctx context.Context) ([]SessionRecord, error) {
+	return s.registry.ListSessions(), nil
+}
+
+func (s *Service) GetSession(ctx context.Context, id SessionID) (SessionRecord, error) {
+	session, err := s.registry.GetSession(registry.SessionID(id))
+	if errors.Is(err, registry.ErrNotFound) {
+		return SessionRecord{}, ErrSessionNotFound
+	}
+	return session, err
+}
+
+func (s *Service) ListTabs(ctx context.Context, sessionID SessionID) ([]TabRecord, error) {
+	tabs, err := s.registry.ListTabs(registry.SessionID(sessionID))
+	if errors.Is(err, registry.ErrNotFound) {
+		return nil, ErrSessionNotFound
+	}
+	return tabs, err
+}
+
+func (s *Service) GetTab(ctx context.Context, sessionID SessionID, tabID TabID) (TabRecord, error) {
+	tab, err := s.registry.GetTab(registry.SessionID(sessionID), registry.TabID(tabID))
+	if errors.Is(err, registry.ErrNotFound) {
+		if _, sessErr := s.registry.GetSession(registry.SessionID(sessionID)); errors.Is(sessErr, registry.ErrNotFound) {
+			return TabRecord{}, ErrSessionNotFound
+		}
+		return TabRecord{}, ErrTabNotFound
+	}
+	return tab, err
 }
