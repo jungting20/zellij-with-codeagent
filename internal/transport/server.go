@@ -150,7 +150,7 @@ func (s *Server) handlePanes(w http.ResponseWriter, r *http.Request) {
 		}
 		ctx, cancel := s.requestContext(r)
 		defer cancel()
-		response, err := s.service.CreatePane(ctx, RuntimeCreatePaneRequest(req))
+		response, err := s.service.CreatePane(ctx, req.ToRuntime())
 		if err != nil {
 			writeRuntimeError(w, err)
 			return
@@ -328,7 +328,7 @@ func (s *Server) handleExecutionPlan(w http.ResponseWriter, r *http.Request, env
 
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
-	response, err := s.service.ApplyExecutionPlan(ctx, RuntimeApplyExecutionPlanRequest(envelope.RequestID, payload))
+	response, err := s.service.ApplyExecutionPlan(ctx, payload.ToRuntime(envelope.RequestID))
 	if err != nil {
 		writeRuntimeError(w, err)
 		return
@@ -343,7 +343,7 @@ func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
-	response, err := s.service.Cleanup(ctx, RuntimeCleanupRequest(req))
+	response, err := s.service.Cleanup(ctx, req.ToRuntime())
 	if err != nil && !errors.Is(err, rt.ErrCleanupPartial) {
 		writeRuntimeError(w, err)
 		return

@@ -186,7 +186,7 @@ type Event struct {
 	Time         time.Time `json:"time"`
 }
 
-func RuntimeCreatePaneRequest(req CreatePaneRequest) rt.CreatePaneRequest {
+func (req CreatePaneRequest) ToRuntime() rt.CreatePaneRequest {
 	var tabID *rt.ZellijTabID
 	if req.ZellijTabID != nil {
 		value := rt.ZellijTabID(*req.ZellijTabID)
@@ -206,7 +206,11 @@ func RuntimeCreatePaneRequest(req CreatePaneRequest) rt.CreatePaneRequest {
 	}
 }
 
-func RuntimeCleanupRequest(req CleanupRequest) rt.CleanupRequest {
+func RuntimeCreatePaneRequest(req CreatePaneRequest) rt.CreatePaneRequest {
+	return req.ToRuntime()
+}
+
+func (req CleanupRequest) ToRuntime() rt.CleanupRequest {
 	paneIDs := make([]rt.PaneID, 0, len(req.PaneIDs))
 	for _, id := range req.PaneIDs {
 		if id != "" {
@@ -218,6 +222,10 @@ func RuntimeCleanupRequest(req CleanupRequest) rt.CleanupRequest {
 		TaskID:  rt.TaskID(req.TaskID),
 		Role:    req.Role,
 	}
+}
+
+func RuntimeCleanupRequest(req CleanupRequest) rt.CleanupRequest {
+	return req.ToRuntime()
 }
 
 func PaneFromRuntime(pane rt.Pane) Pane {
@@ -363,7 +371,7 @@ func outputSummariesFromRuntime(summaries []rt.PaneOutputSummary) []PaneOutputSu
 	return out
 }
 
-func RuntimeApplyExecutionPlanRequest(reqID string, payload ExecutionPlanPayload) rt.ApplyExecutionPlanRequest {
+func (payload ExecutionPlanPayload) ToRuntime(reqID string) rt.ApplyExecutionPlanRequest {
 	if payload.Tabs == nil {
 		return rt.ApplyExecutionPlanRequest{
 			RequestID: reqID,
@@ -374,20 +382,7 @@ func RuntimeApplyExecutionPlanRequest(reqID string, payload ExecutionPlanPayload
 	}
 	tabs := make([]rt.ExecutionPlanTabSpec, 0, len(payload.Tabs))
 	for _, tab := range payload.Tabs {
-		panes := make([]rt.ExecutionPlanPaneSpec, 0, len(tab.Panes))
-		for _, pane := range tab.Panes {
-			panes = append(panes, rt.ExecutionPlanPaneSpec{
-				ID:      rt.PaneID(pane.ID),
-				Role:    pane.Role,
-				AgentID: rt.AgentID(pane.AgentID),
-				Command: cloneStrings(pane.Command),
-				CWD:     pane.CWD,
-			})
-		}
-		tabs = append(tabs, rt.ExecutionPlanTabSpec{
-			Name:  tab.Name,
-			Panes: panes,
-		})
+		tabs = append(tabs, tab.ToRuntime())
 	}
 	return rt.ApplyExecutionPlanRequest{
 		RequestID: reqID,
@@ -395,6 +390,31 @@ func RuntimeApplyExecutionPlanRequest(reqID string, payload ExecutionPlanPayload
 		Layout:    payload.Layout,
 		Tabs:      tabs,
 	}
+}
+
+func (tab ExecutionPlanTab) ToRuntime() rt.ExecutionPlanTabSpec {
+	panes := make([]rt.ExecutionPlanPaneSpec, 0, len(tab.Panes))
+	for _, pane := range tab.Panes {
+		panes = append(panes, pane.ToRuntime())
+	}
+	return rt.ExecutionPlanTabSpec{
+		Name:  tab.Name,
+		Panes: panes,
+	}
+}
+
+func (pane ExecutionPlanPane) ToRuntime() rt.ExecutionPlanPaneSpec {
+	return rt.ExecutionPlanPaneSpec{
+		ID:      rt.PaneID(pane.ID),
+		Role:    pane.Role,
+		AgentID: rt.AgentID(pane.AgentID),
+		Command: cloneStrings(pane.Command),
+		CWD:     pane.CWD,
+	}
+}
+
+func RuntimeApplyExecutionPlanRequest(reqID string, payload ExecutionPlanPayload) rt.ApplyExecutionPlanRequest {
+	return payload.ToRuntime(reqID)
 }
 
 func ExecutionPlanFromRuntime(response rt.ApplyExecutionPlanResponse) ExecutionPlanResponse {
