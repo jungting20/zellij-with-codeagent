@@ -436,6 +436,8 @@ func fakePane(id rt.PaneID) rt.Pane {
 	tabID := rt.ZellijTabID(7)
 	return rt.Pane{
 		ID:           id,
+		SessionID:    "default",
+		TabID:        "tab-1",
 		TaskID:       "task-1",
 		AgentID:      "agent-1",
 		ZellijPaneID: "terminal_1",
@@ -544,17 +546,17 @@ func TestServerHealth(t *testing.T) {
 func (f *fakeRuntimeService) ListSessions(context.Context) ([]rt.SessionRecord, error) {
 	tabID := rt.ZellijTabID(7)
 	pane := rt.PaneRecord{
-		ID:        "pane-1",
-		SessionID: "default",
-		TabID:     "tab-1",
+		ID:          "pane-1",
+		SessionID:   "default",
+		TabID:       "tab-1",
 		ZellijTabID: &tabID,
-		TabName:   "agentd-test",
-		Role:      "test",
-		Status:    rt.PaneStatusStarting,
+		TabName:     "agentd-test",
+		Role:        "test",
+		Status:      rt.PaneStatusStarting,
 	}
 	tab := rt.TabRecord{
-		ID:    "tab-1",
-		Name:  "agentd-test",
+		ID:   "tab-1",
+		Name: "agentd-test",
 		Panes: map[rt.PaneID]rt.PaneRecord{
 			"pane-1": pane,
 		},
@@ -574,17 +576,17 @@ func (f *fakeRuntimeService) GetSession(_ context.Context, id rt.SessionID) (rt.
 	}
 	tabID := rt.ZellijTabID(7)
 	pane := rt.PaneRecord{
-		ID:        "pane-1",
-		SessionID: "default",
-		TabID:     "tab-1",
+		ID:          "pane-1",
+		SessionID:   "default",
+		TabID:       "tab-1",
 		ZellijTabID: &tabID,
-		TabName:   "agentd-test",
-		Role:      "test",
-		Status:    rt.PaneStatusStarting,
+		TabName:     "agentd-test",
+		Role:        "test",
+		Status:      rt.PaneStatusStarting,
 	}
 	tab := rt.TabRecord{
-		ID:    "tab-1",
-		Name:  "agentd-test",
+		ID:   "tab-1",
+		Name: "agentd-test",
 		Panes: map[rt.PaneID]rt.PaneRecord{
 			"pane-1": pane,
 		},
@@ -603,17 +605,17 @@ func (f *fakeRuntimeService) ListTabs(_ context.Context, sessionID rt.SessionID)
 	}
 	tabID := rt.ZellijTabID(7)
 	pane := rt.PaneRecord{
-		ID:        "pane-1",
-		SessionID: "default",
-		TabID:     "tab-1",
+		ID:          "pane-1",
+		SessionID:   "default",
+		TabID:       "tab-1",
 		ZellijTabID: &tabID,
-		TabName:   "agentd-test",
-		Role:      "test",
-		Status:    rt.PaneStatusStarting,
+		TabName:     "agentd-test",
+		Role:        "test",
+		Status:      rt.PaneStatusStarting,
 	}
 	tab := rt.TabRecord{
-		ID:    "tab-1",
-		Name:  "agentd-test",
+		ID:   "tab-1",
+		Name: "agentd-test",
 		Panes: map[rt.PaneID]rt.PaneRecord{
 			"pane-1": pane,
 		},
@@ -630,17 +632,17 @@ func (f *fakeRuntimeService) GetTab(_ context.Context, sessionID rt.SessionID, t
 	}
 	tabIDVal := rt.ZellijTabID(7)
 	pane := rt.PaneRecord{
-		ID:        "pane-1",
-		SessionID: "default",
-		TabID:     "tab-1",
+		ID:          "pane-1",
+		SessionID:   "default",
+		TabID:       "tab-1",
 		ZellijTabID: &tabIDVal,
-		TabName:   "agentd-test",
-		Role:      "test",
-		Status:    rt.PaneStatusStarting,
+		TabName:     "agentd-test",
+		Role:        "test",
+		Status:      rt.PaneStatusStarting,
 	}
 	return rt.TabRecord{
-		ID:    "tab-1",
-		Name:  "agentd-test",
+		ID:   "tab-1",
+		Name: "agentd-test",
 		Panes: map[rt.PaneID]rt.PaneRecord{
 			"pane-1": pane,
 		},

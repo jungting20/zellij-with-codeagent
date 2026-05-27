@@ -81,26 +81,6 @@ type stubRuntime struct {
 	recentReq rt.RecentEventsRequest
 }
 
-func (s *stubRuntime) CreatePane(context.Context, rt.CreatePaneRequest) (rt.CreatePaneResponse, error) {
-	return rt.CreatePaneResponse{}, nil
-}
-
-func (s *stubRuntime) SendInput(context.Context, rt.SendInputRequest) error {
-	return nil
-}
-
-func (s *stubRuntime) ListPanes(context.Context) (rt.ListPanesResponse, error) {
-	return rt.ListPanesResponse{}, nil
-}
-
-func (s *stubRuntime) InspectPane(context.Context, rt.InspectPaneRequest) (rt.InspectPaneResponse, error) {
-	return rt.InspectPaneResponse{}, nil
-}
-
-func (s *stubRuntime) SnapshotOutput(context.Context, rt.SnapshotOutputRequest) (rt.SnapshotOutputResponse, error) {
-	return rt.SnapshotOutputResponse{}, nil
-}
-
 func (s *stubRuntime) InspectRuntime(context.Context, rt.InspectRuntimeRequest) (rt.InspectRuntimeResponse, error) {
 	return s.status, s.statusErr
 }
@@ -108,40 +88,4 @@ func (s *stubRuntime) InspectRuntime(context.Context, rt.InspectRuntimeRequest) 
 func (s *stubRuntime) RecentEvents(_ context.Context, req rt.RecentEventsRequest) (rt.RecentEventsResponse, error) {
 	s.recentReq = req
 	return s.events, s.eventsErr
-}
-
-func (s *stubRuntime) ClosePane(context.Context, rt.ClosePaneRequest) (rt.ClosePaneResponse, error) {
-	return rt.ClosePaneResponse{}, nil
-}
-
-func (s *stubRuntime) Reconcile(context.Context, rt.ReconcileRequest) (rt.ReconcileResponse, error) {
-	return rt.ReconcileResponse{}, nil
-}
-
-func (s *stubRuntime) Cleanup(context.Context, rt.CleanupRequest) (rt.CleanupResponse, error) {
-	return rt.CleanupResponse{}, nil
-}
-
-func (s *stubRuntime) ApplyExecutionPlan(context.Context, rt.ApplyExecutionPlanRequest) (rt.ApplyExecutionPlanResponse, error) {
-	return rt.ApplyExecutionPlanResponse{}, nil
-}
-
-func (s *stubRuntime) SubscribeEvents(context.Context) (<-chan eventbus.Event, func(), error) {
-	return nil, func() {}, nil
-}
-
-func (s *stubRuntime) ListSessions(context.Context) ([]rt.SessionRecord, error) {
-	return nil, nil
-}
-
-func (s *stubRuntime) GetSession(context.Context, rt.SessionID) (rt.SessionRecord, error) {
-	return rt.SessionRecord{}, nil
-}
-
-func (s *stubRuntime) ListTabs(context.Context, rt.SessionID) ([]rt.TabRecord, error) {
-	return nil, nil
-}
-
-func (s *stubRuntime) GetTab(context.Context, rt.SessionID, rt.TabID) (rt.TabRecord, error) {
-	return rt.TabRecord{}, nil
 }

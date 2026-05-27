@@ -2,10 +2,10 @@ package transport
 
 import (
 	"encoding/json"
+	"sort"
 	"time"
 
 	"zellij-with-codeagent/internal/eventbus"
-	"zellij-with-codeagent/internal/registry"
 	rt "zellij-with-codeagent/internal/runtime"
 )
 
@@ -146,10 +146,10 @@ type ExecutionPlanPane struct {
 }
 
 type ExecutionPlanResponse struct {
-	RequestID string                      `json:"request_id"`
-	Session   string                      `json:"session"`
-	Layout    string                      `json:"layout"`
-	Tabs      []ExecutionPlanTabResponse  `json:"tabs"`
+	RequestID string                     `json:"request_id"`
+	Session   string                     `json:"session"`
+	Layout    string                     `json:"layout"`
+	Tabs      []ExecutionPlanTabResponse `json:"tabs"`
 }
 
 type ExecutionPlanTabResponse struct {
@@ -159,6 +159,8 @@ type ExecutionPlanTabResponse struct {
 
 type Pane struct {
 	ID            string    `json:"id"`
+	SessionID     string    `json:"session_id,omitempty"`
+	TabID         string    `json:"tab_id,omitempty"`
 	TaskID        string    `json:"task_id,omitempty"`
 	AgentID       string    `json:"agent_id,omitempty"`
 	ZellijPaneID  string    `json:"zellij_pane_id,omitempty"`
@@ -226,6 +228,8 @@ func PaneFromRuntime(pane rt.Pane) Pane {
 	}
 	return Pane{
 		ID:            string(pane.ID),
+		SessionID:     string(pane.SessionID),
+		TabID:         string(pane.TabID),
 		TaskID:        string(pane.TaskID),
 		AgentID:       string(pane.AgentID),
 		ZellijPaneID:  string(pane.ZellijPaneID),
@@ -462,13 +466,7 @@ func SessionFromRuntime(rSession rt.SessionRecord) Session {
 	for _, tab := range rSession.Tabs {
 		tabs = append(tabs, TabFromRuntime(tab))
 	}
-	for i := 0; i < len(tabs); i++ {
-		for j := i + 1; j < len(tabs); j++ {
-			if tabs[i].ID > tabs[j].ID {
-				tabs[i], tabs[j] = tabs[j], tabs[i]
-			}
-		}
-	}
+	sortTabsByID(tabs)
 	return Session{
 		ID:        string(rSession.ID),
 		Tabs:      tabs,
@@ -477,7 +475,7 @@ func SessionFromRuntime(rSession rt.SessionRecord) Session {
 	}
 }
 
-func PaneFromRegistryRecord(pane registry.PaneRecord) Pane {
+func PaneFromRuntimeRecord(pane rt.PaneRecord) Pane {
 	var tabID *int
 	if pane.ZellijTabID != nil {
 		value := int(*pane.ZellijTabID)
@@ -485,6 +483,8 @@ func PaneFromRegistryRecord(pane registry.PaneRecord) Pane {
 	}
 	return Pane{
 		ID:            string(pane.ID),
+		SessionID:     string(pane.SessionID),
+		TabID:         string(pane.TabID),
 		TaskID:        string(pane.TaskID),
 		AgentID:       string(pane.AgentID),
 		ZellijPaneID:  string(pane.ZellijPaneID),
@@ -502,24 +502,22 @@ func PaneFromRegistryRecord(pane registry.PaneRecord) Pane {
 }
 
 func TabFromRuntime(rTab rt.TabRecord) Tab {
-	panes := make([]Pane, 0, len(rTab.Panes))
-	for _, pane := range rTab.Panes {
-		panes = append(panes, PaneFromRegistryRecord(pane))
-	}
-	for i := 0; i < len(panes); i++ {
-		for j := i + 1; j < len(panes); j++ {
-			if panes[i].ID > panes[j].ID {
-				panes[i], panes[j] = panes[j], panes[i]
-			}
-		}
-	}
 	return Tab{
 		ID:        string(rTab.ID),
 		Name:      rTab.Name,
-		Panes:     panes,
+		Panes:     PanesFromRuntimeRecords(rTab.Panes),
 		CreatedAt: rTab.CreatedAt,
 		UpdatedAt: rTab.UpdatedAt,
 	}
+}
+
+func PanesFromRuntimeRecords(records map[rt.PaneID]rt.PaneRecord) []Pane {
+	panes := make([]Pane, 0, len(records))
+	for _, pane := range records {
+		panes = append(panes, PaneFromRuntimeRecord(pane))
+	}
+	sortPanesByID(panes)
+	return panes
 }
 
 func SessionsFromRuntime(rSessions []rt.SessionRecord) []Session {
@@ -535,5 +533,18 @@ func TabsFromRuntime(rTabs []rt.TabRecord) []Tab {
 	for _, t := range rTabs {
 		out = append(out, TabFromRuntime(t))
 	}
+	sortTabsByID(out)
 	return out
+}
+
+func sortTabsByID(tabs []Tab) {
+	sort.Slice(tabs, func(i, j int) bool {
+		return tabs[i].ID < tabs[j].ID
+	})
+}
+
+func sortPanesByID(panes []Pane) {
+	sort.Slice(panes, func(i, j int) bool {
+		return panes[i].ID < panes[j].ID
+	})
 }

@@ -22,7 +22,12 @@ type View struct {
 	RecentEvents []rt.EventSummary
 }
 
-func BuildView(ctx context.Context, service rt.RuntimeService, opts ViewOptions) (View, error) {
+type ViewService interface {
+	rt.RuntimeInspectionService
+	rt.EventHistoryService
+}
+
+func BuildView(ctx context.Context, service ViewService, opts ViewOptions) (View, error) {
 	status, err := service.InspectRuntime(ctx, rt.InspectRuntimeRequest{})
 	if err != nil {
 		return View{}, err

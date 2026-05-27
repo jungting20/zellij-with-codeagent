@@ -19,14 +19,24 @@ import (
 const DefaultRequestTimeout = 30 * time.Second
 
 type ServerOptions struct {
-	Service        rt.RuntimeService
+	Service        ServerRuntime
 	SocketPath     string
 	RequestTimeout time.Duration
 	Version        string
 }
 
+type ServerRuntime interface {
+	rt.PaneService
+	rt.RuntimeInspectionService
+	rt.EventService
+	rt.ReconciliationService
+	rt.CleanupService
+	rt.ExecutionPlanService
+	rt.SessionInspectionService
+}
+
 type Server struct {
-	service        rt.RuntimeService
+	service        ServerRuntime
 	socketPath     string
 	requestTimeout time.Duration
 	version        string
@@ -472,18 +482,7 @@ func (s *Server) handleSessionRoute(w http.ResponseWriter, r *http.Request) {
 				writeRuntimeError(w, err)
 				return
 			}
-			panes := make([]Pane, 0, len(tab.Panes))
-			for _, pane := range tab.Panes {
-				panes = append(panes, PaneFromRegistryRecord(pane))
-			}
-			for i := 0; i < len(panes); i++ {
-				for j := i + 1; j < len(panes); j++ {
-					if panes[i].ID > panes[j].ID {
-						panes[i], panes[j] = panes[j], panes[i]
-					}
-				}
-			}
-			writeJSON(w, http.StatusOK, ListPanesResponse{Panes: panes})
+			writeJSON(w, http.StatusOK, ListPanesResponse{Panes: PanesFromRuntimeRecords(tab.Panes)})
 			return
 		}
 	}

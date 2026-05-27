@@ -40,24 +40,59 @@ const (
 	PaneStatusError    = registry.PaneStatusError
 )
 
-type RuntimeService interface {
+type PaneService interface {
 	CreatePane(context.Context, CreatePaneRequest) (CreatePaneResponse, error)
 	SendInput(context.Context, SendInputRequest) error
 	ListPanes(context.Context) (ListPanesResponse, error)
 	InspectPane(context.Context, InspectPaneRequest) (InspectPaneResponse, error)
 	SnapshotOutput(context.Context, SnapshotOutputRequest) (SnapshotOutputResponse, error)
-	InspectRuntime(context.Context, InspectRuntimeRequest) (InspectRuntimeResponse, error)
-	RecentEvents(context.Context, RecentEventsRequest) (RecentEventsResponse, error)
 	ClosePane(context.Context, ClosePaneRequest) (ClosePaneResponse, error)
-	Reconcile(context.Context, ReconcileRequest) (ReconcileResponse, error)
-	Cleanup(context.Context, CleanupRequest) (CleanupResponse, error)
-	ApplyExecutionPlan(context.Context, ApplyExecutionPlanRequest) (ApplyExecutionPlanResponse, error)
-	SubscribeEvents(context.Context) (<-chan eventbus.Event, func(), error)
+}
 
+type RuntimeInspectionService interface {
+	InspectRuntime(context.Context, InspectRuntimeRequest) (InspectRuntimeResponse, error)
+}
+
+type EventHistoryService interface {
+	RecentEvents(context.Context, RecentEventsRequest) (RecentEventsResponse, error)
+}
+
+type EventStreamService interface {
+	SubscribeEvents(context.Context) (<-chan eventbus.Event, func(), error)
+}
+
+type EventService interface {
+	EventHistoryService
+	EventStreamService
+}
+
+type ReconciliationService interface {
+	Reconcile(context.Context, ReconcileRequest) (ReconcileResponse, error)
+}
+
+type CleanupService interface {
+	Cleanup(context.Context, CleanupRequest) (CleanupResponse, error)
+}
+
+type ExecutionPlanService interface {
+	ApplyExecutionPlan(context.Context, ApplyExecutionPlanRequest) (ApplyExecutionPlanResponse, error)
+}
+
+type SessionInspectionService interface {
 	ListSessions(context.Context) ([]SessionRecord, error)
 	GetSession(context.Context, SessionID) (SessionRecord, error)
 	ListTabs(context.Context, SessionID) ([]TabRecord, error)
 	GetTab(context.Context, SessionID, TabID) (TabRecord, error)
+}
+
+type RuntimeService interface {
+	PaneService
+	RuntimeInspectionService
+	EventService
+	ReconciliationService
+	CleanupService
+	ExecutionPlanService
+	SessionInspectionService
 }
 
 type CreatePaneRequest struct {

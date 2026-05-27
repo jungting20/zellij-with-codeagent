@@ -78,7 +78,7 @@ func parseSocketArg(args []string) (string, bool) {
 	return args[1], true
 }
 
-func newRuntimeService() agentruntime.RuntimeService {
+func newRuntimeService() *agentruntime.Service {
 	return agentruntime.NewService(agentruntime.Options{
 		Registry:           registry.New(),
 		Backend:            zellij.NewBackend(zellij.Options{}),
