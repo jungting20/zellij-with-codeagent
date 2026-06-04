@@ -44,6 +44,18 @@ go run ./cmd/agentd serve --socket /tmp/agentd.sock
 
 The `serve` command exposes JSON HTTP over the Unix socket. It does not bind a TCP port.
 
+Use `agentctl` as the thin command-line client for the local socket:
+
+```bash
+go run ./cmd/agentctl health --socket /tmp/agentd.sock
+go run ./cmd/agentctl status --socket /tmp/agentd.sock
+go run ./cmd/agentctl plan --socket /tmp/agentd.sock --file plan.json
+go run ./cmd/agentctl events --socket /tmp/agentd.sock --limit 20
+go run ./cmd/agentctl cleanup --socket /tmp/agentd.sock --task feature-auth
+```
+
+`agentctl plan` accepts either a raw execution plan payload or a full `/v1/requests` envelope.
+
 ## Runtime Service Shape
 
 Future planners and developer harnesses should call `RuntimeService`, not Zellij directly:
@@ -89,7 +101,7 @@ The core operations are:
 
 Requests and responses use logical daemon IDs (`pane_id`, `task_id`, `agent_id`) as the contract identifiers. Zellij pane IDs are returned only as backend metadata for debugging.
 
-`POST /v1/requests` accepts typed envelopes. The `execution_plan` type creates all panes for one logical session in a single Zellij tab:
+`POST /v1/requests` accepts typed envelopes. The `execution_plan` type creates all panes for one logical session across one or more Zellij tabs:
 
 ```json
 {
@@ -98,15 +110,20 @@ Requests and responses use logical daemon IDs (`pane_id`, `task_id`, `agent_id`)
   "payload": {
     "session": "feature-auth",
     "layout": "triple-horizontal",
-    "panes": [
-      { "id": "planner", "role": "planner" },
-      { "id": "frontend", "role": "react-dev" }
+    "tabs": [
+      {
+        "name": "feature-auth",
+        "panes": [
+          { "id": "planner", "role": "planner" },
+          { "id": "frontend", "role": "react-dev" }
+        ]
+      }
     ]
   }
 }
 ```
 
-In v1, `session` is used as both `task_id` and Zellij tab name. `layout` is validated metadata (`triple-horizontal` today); physical layout forcing is deferred.
+In v1, `session` is used as `task_id`; a tab name defaults to the session when omitted. `layout` is validated metadata (`triple-horizontal` today); physical layout forcing is deferred.
 
 ## Zellij Session Selection
 
