@@ -57,6 +57,19 @@ func TestCleanupRequestToRuntimeFiltersEmptyPaneIDs(t *testing.T) {
 	}
 }
 
+func TestSendMessageRequestToRuntimePreservesPayload(t *testing.T) {
+	converted := SendMessageRequest{
+		From: "planner",
+		To:   "tester",
+		Type: "task_request",
+		Body: "run tests",
+	}.ToRuntime()
+
+	if converted.FromPaneID != "planner" || converted.ToPaneID != "tester" || converted.Type != "task_request" || converted.Body != "run tests" {
+		t.Fatalf("SendMessageRequest.ToRuntime() = %#v, want payload fields preserved", converted)
+	}
+}
+
 func TestExecutionPlanPayloadToRuntimePreservesNestedPayload(t *testing.T) {
 	source := ExecutionPlanPayload{
 		Session: "feature-auth",

@@ -46,6 +46,28 @@ func TestClientReturnsStructuredTransportError(t *testing.T) {
 	}
 }
 
+func TestClientSendMessage(t *testing.T) {
+	service := newFakeRuntimeService()
+	client, cleanup := startUnixTransport(t, service)
+	defer cleanup()
+
+	response, err := client.SendMessage(context.Background(), SendMessageRequest{
+		From: "planner",
+		To:   "tester",
+		Type: "task_request",
+		Body: "run tests",
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() error = %v", err)
+	}
+	if response.From.ID != "planner" || response.To.ID != "tester" || response.Body != "run tests" {
+		t.Fatalf("SendMessage() = %#v, want planner to tester response", response)
+	}
+	if service.messageReq.FromPaneID != "planner" || service.messageReq.ToPaneID != "tester" {
+		t.Fatalf("runtime message request = %#v, want planner to tester", service.messageReq)
+	}
+}
+
 func TestClientStreamsEvents(t *testing.T) {
 	service := newFakeRuntimeService()
 	client, cleanup := startUnixTransport(t, service)

@@ -112,6 +112,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handlePanes(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/panes/"):
 		s.handlePaneAction(w, r)
+	case r.URL.Path == "/v1/messages":
+		s.handleMessages(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/runtime":
 		s.handleInspectRuntime(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/events/recent":

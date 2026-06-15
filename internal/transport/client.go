@@ -66,6 +66,12 @@ func (c *Client) SendInput(ctx context.Context, paneID string, req SendInputRequ
 	return c.do(ctx, http.MethodPost, "/v1/panes/"+url.PathEscape(paneID)+"/input", req, nil)
 }
 
+func (c *Client) SendMessage(ctx context.Context, req SendMessageRequest) (SendMessageResponse, error) {
+	var response SendMessageResponse
+	err := c.do(ctx, http.MethodPost, "/v1/messages", req, &response)
+	return response, err
+}
+
 func (c *Client) SnapshotOutput(ctx context.Context, paneID string, req SnapshotOutputRequest) (SnapshotOutputResponse, error) {
 	var response SnapshotOutputResponse
 	err := c.do(ctx, http.MethodPost, "/v1/panes/"+url.PathEscape(paneID)+"/snapshot", req, &response)

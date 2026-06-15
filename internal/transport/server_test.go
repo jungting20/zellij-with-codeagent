@@ -111,6 +111,29 @@ func TestServerSendInput(t *testing.T) {
 	}
 }
 
+func TestServerSendMessage(t *testing.T) {
+	service := newFakeRuntimeService()
+	server := newTestServer(t, service)
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"from":"planner","to":"tester","type":"task_request","body":"run tests"}`))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if service.messageReq.FromPaneID != "planner" || service.messageReq.ToPaneID != "tester" || service.messageReq.Type != "task_request" {
+		t.Fatalf("SendMessage request = %#v, want decoded message", service.messageReq)
+	}
+	var decoded SendMessageResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if decoded.From.ID != "planner" || decoded.To.ID != "tester" || decoded.Type != "task_request" {
+		t.Fatalf("response = %#v, want planner to tester", decoded)
+	}
+}
+
 func TestServerInvalidJSONDoesNotCallRuntime(t *testing.T) {
 	service := newFakeRuntimeService()
 	server := newTestServer(t, service)
@@ -268,6 +291,8 @@ type fakeRuntimeService struct {
 	applyPlanReq    rt.ApplyExecutionPlanRequest
 	sendReq         rt.SendInputRequest
 	sendErr         error
+	messageReq      rt.SendMessageRequest
+	messageErr      error
 	recentReq       rt.RecentEventsRequest
 	cleanupErr      error
 
@@ -305,6 +330,19 @@ func (f *fakeRuntimeService) SendInput(_ context.Context, req rt.SendInputReques
 	defer f.mu.Unlock()
 	f.sendReq = req
 	return f.sendErr
+}
+
+func (f *fakeRuntimeService) SendMessage(_ context.Context, req rt.SendMessageRequest) (rt.SendMessageResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.messageReq = req
+	return rt.SendMessageResponse{
+		From:          fakePane(req.FromPaneID),
+		To:            fakePane(req.ToPaneID),
+		Type:          req.Type,
+		Body:          req.Body,
+		DeliveredText: "[agentd] message\n" + req.Body + "\n",
+	}, f.messageErr
 }
 
 func (f *fakeRuntimeService) ListPanes(context.Context) (rt.ListPanesResponse, error) {

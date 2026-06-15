@@ -30,6 +30,21 @@ type SendInputRequest struct {
 	Text string `json:"text"`
 }
 
+type SendMessageRequest struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	Type string `json:"type,omitempty"`
+	Body string `json:"body,omitempty"`
+}
+
+type SendMessageResponse struct {
+	From          Pane   `json:"from"`
+	To            Pane   `json:"to"`
+	Type          string `json:"type"`
+	Body          string `json:"body,omitempty"`
+	DeliveredText string `json:"delivered_text"`
+}
+
 type SnapshotOutputRequest struct {
 	Full bool `json:"full,omitempty"`
 	ANSI bool `json:"ansi,omitempty"`
@@ -210,6 +225,19 @@ func RuntimeCreatePaneRequest(req CreatePaneRequest) rt.CreatePaneRequest {
 	return req.ToRuntime()
 }
 
+func (req SendMessageRequest) ToRuntime() rt.SendMessageRequest {
+	return rt.SendMessageRequest{
+		FromPaneID: rt.PaneID(req.From),
+		ToPaneID:   rt.PaneID(req.To),
+		Type:       req.Type,
+		Body:       req.Body,
+	}
+}
+
+func RuntimeSendMessageRequest(req SendMessageRequest) rt.SendMessageRequest {
+	return req.ToRuntime()
+}
+
 func (req CleanupRequest) ToRuntime() rt.CleanupRequest {
 	paneIDs := make([]rt.PaneID, 0, len(req.PaneIDs))
 	for _, id := range req.PaneIDs {
@@ -299,6 +327,16 @@ func CleanupFromRuntime(response rt.CleanupResponse) CleanupResponse {
 		Closed:  PanesFromRuntime(response.Closed),
 		Failed:  failures,
 		Skipped: PanesFromRuntime(response.Skipped),
+	}
+}
+
+func MessageFromRuntime(response rt.SendMessageResponse) SendMessageResponse {
+	return SendMessageResponse{
+		From:          PaneFromRuntime(response.From),
+		To:            PaneFromRuntime(response.To),
+		Type:          response.Type,
+		Body:          response.Body,
+		DeliveredText: response.DeliveredText,
 	}
 }
 

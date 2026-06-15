@@ -11,6 +11,7 @@ const (
 	TypeTestFailed     EventType = "test_failed"
 	TypeTestPassed     EventType = "test_passed"
 	TypePaneClosed     EventType = "pane_closed"
+	TypeMessageSent    EventType = "message_sent"
 	TypeHealthChanged  EventType = "health_changed"
 	TypeSubscribeError EventType = "subscribe_error"
 )

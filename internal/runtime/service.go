@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync/atomic"
+	"time"
 
 	"zellij-with-codeagent/internal/eventbus"
 	"zellij-with-codeagent/internal/registry"
@@ -198,6 +200,61 @@ func (s *Service) SendInput(ctx context.Context, req SendInputRequest) error {
 	return nil
 }
 
+func (s *Service) SendMessage(ctx context.Context, req SendMessageRequest) (SendMessageResponse, error) {
+	if req.FromPaneID == "" {
+		return SendMessageResponse{}, fmt.Errorf("%w: from pane id is required", ErrInvalidMessage)
+	}
+	if req.ToPaneID == "" {
+		return SendMessageResponse{}, fmt.Errorf("%w: to pane id is required", ErrInvalidMessage)
+	}
+
+	fromRecord, err := s.lookupPane(req.FromPaneID)
+	if err != nil {
+		return SendMessageResponse{}, err
+	}
+	toRecord, err := s.lookupPane(req.ToPaneID)
+	if err != nil {
+		return SendMessageResponse{}, err
+	}
+	if !sameManagedTab(fromRecord, toRecord) {
+		return SendMessageResponse{}, fmt.Errorf("%w: panes %s and %s are not in the same tab", ErrInvalidMessage, req.FromPaneID, req.ToPaneID)
+	}
+
+	messageType := strings.TrimSpace(req.Type)
+	if messageType == "" {
+		messageType = "message"
+	}
+	deliveredText := formatPaneMessage(fromRecord.ID, messageType, req.Body)
+
+	if err := s.backend.SendInput(ctx, zellij.SendInputRequest{
+		PaneID: zellij.PaneID(toRecord.ZellijPaneID),
+		Text:   deliveredText,
+	}); err != nil {
+		_, _ = s.registry.UpdatePaneStatus(registry.PaneID(req.ToPaneID), registry.PaneStatusError, err.Error())
+		return SendMessageResponse{}, err
+	}
+
+	if s.bus != nil {
+		s.bus.Publish(eventbus.Event{
+			Type:         eventbus.TypeMessageSent,
+			PaneID:       string(toRecord.ID),
+			TaskID:       string(toRecord.TaskID),
+			AgentID:      string(toRecord.AgentID),
+			ZellijPaneID: string(toRecord.ZellijPaneID),
+			Message:      fmt.Sprintf("from=%s to=%s type=%s", fromRecord.ID, toRecord.ID, messageType),
+			Time:         time.Now(),
+		})
+	}
+
+	return SendMessageResponse{
+		From:          paneFromRecord(fromRecord),
+		To:            paneFromRecord(toRecord),
+		Type:          messageType,
+		Body:          req.Body,
+		DeliveredText: deliveredText,
+	}, nil
+}
+
 func (s *Service) ListPanes(context.Context) (ListPanesResponse, error) {
 	records := s.registry.ListPanes()
 	panes := make([]Pane, 0, len(records))
@@ -289,6 +346,21 @@ func (s *Service) lookupPane(id PaneID) (registry.PaneRecord, error) {
 	}
 
 	return record, nil
+}
+
+func sameManagedTab(a, b registry.PaneRecord) bool {
+	if a.ZellijTabID != nil && b.ZellijTabID != nil {
+		return *a.ZellijTabID == *b.ZellijTabID
+	}
+	return a.SessionID != "" && a.SessionID == b.SessionID && a.TabID != "" && a.TabID == b.TabID
+}
+
+func formatPaneMessage(from registry.PaneID, messageType, body string) string {
+	text := fmt.Sprintf("[agentd] message from=%s type=%s\n%s", from, messageType, body)
+	if !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	return text
 }
 
 func (s *Service) findPaneByID(ctx context.Context, paneID zellij.PaneID) (zellij.Pane, error) {

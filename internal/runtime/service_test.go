@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -218,6 +219,74 @@ func TestSendInputUnknownPaneDoesNotCallBackend(t *testing.T) {
 	}
 	if len(backend.sendRequests) != 0 {
 		t.Fatalf("backend SendInput calls = %d, want 0", len(backend.sendRequests))
+	}
+}
+
+func TestSendMessageRoutesWithinSameTab(t *testing.T) {
+	tabID := ZellijTabID(7)
+	backend := &fakeBackend{
+		createIDs: []zellij.PaneID{"terminal_from", "terminal_to"},
+		listPanes: []zellij.Pane{
+			{ID: "terminal_from", TabID: 7, TabName: "agentd-test"},
+			{ID: "terminal_to", TabID: 7, TabName: "agentd-test"},
+		},
+	}
+	service := newTestService(backend)
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "from-pane", ZellijTabID: &tabID}); err != nil {
+		t.Fatalf("CreatePane(from) error = %v", err)
+	}
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "to-pane", ZellijTabID: &tabID}); err != nil {
+		t.Fatalf("CreatePane(to) error = %v", err)
+	}
+
+	response, err := service.SendMessage(context.Background(), SendMessageRequest{
+		FromPaneID: "from-pane",
+		ToPaneID:   "to-pane",
+		Type:       "task_request",
+		Body:       "run tests",
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() error = %v", err)
+	}
+
+	if response.From.ID != "from-pane" || response.To.ID != "to-pane" || response.Type != "task_request" {
+		t.Fatalf("SendMessage() = %#v, want from/to/type response", response)
+	}
+	if len(backend.sendRequests) != 1 {
+		t.Fatalf("backend SendInput calls = %d, want 1", len(backend.sendRequests))
+	}
+	got := backend.sendRequests[0]
+	if got.PaneID != "terminal_to" || !strings.Contains(got.Text, "from=from-pane") || !strings.Contains(got.Text, "run tests") {
+		t.Fatalf("backend SendInput request = %#v, want formatted message to terminal_to", got)
+	}
+}
+
+func TestSendMessageRejectsDifferentTabs(t *testing.T) {
+	backend := &fakeBackend{
+		createIDs: []zellij.PaneID{"terminal_from", "terminal_to"},
+		listPanes: []zellij.Pane{
+			{ID: "terminal_from", TabID: 7, TabName: "agentd-a"},
+			{ID: "terminal_to", TabID: 8, TabName: "agentd-b"},
+		},
+	}
+	service := newTestService(backend)
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "from-pane"}); err != nil {
+		t.Fatalf("CreatePane(from) error = %v", err)
+	}
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "to-pane"}); err != nil {
+		t.Fatalf("CreatePane(to) error = %v", err)
+	}
+
+	_, err := service.SendMessage(context.Background(), SendMessageRequest{
+		FromPaneID: "from-pane",
+		ToPaneID:   "to-pane",
+		Body:       "should not send",
+	})
+	if !errors.Is(err, ErrInvalidMessage) {
+		t.Fatalf("SendMessage() error = %v, want %v", err, ErrInvalidMessage)
+	}
+	if len(backend.sendRequests) != 0 {
+		t.Fatalf("backend SendInput calls = %#v, want none", backend.sendRequests)
 	}
 }
 

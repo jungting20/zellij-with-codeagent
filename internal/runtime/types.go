@@ -15,6 +15,7 @@ var (
 	ErrCleanupPartial  = errors.New("runtime cleanup partially failed")
 	ErrSessionNotFound = errors.New("runtime session not found")
 	ErrTabNotFound     = errors.New("runtime tab not found")
+	ErrInvalidMessage  = errors.New("runtime: invalid message")
 )
 
 type (
@@ -43,6 +44,7 @@ const (
 type PaneService interface {
 	CreatePane(context.Context, CreatePaneRequest) (CreatePaneResponse, error)
 	SendInput(context.Context, SendInputRequest) error
+	SendMessage(context.Context, SendMessageRequest) (SendMessageResponse, error)
 	ListPanes(context.Context) (ListPanesResponse, error)
 	InspectPane(context.Context, InspectPaneRequest) (InspectPaneResponse, error)
 	SnapshotOutput(context.Context, SnapshotOutputRequest) (SnapshotOutputResponse, error)
@@ -117,6 +119,21 @@ type CreatePaneResponse struct {
 type SendInputRequest struct {
 	PaneID PaneID
 	Text   string
+}
+
+type SendMessageRequest struct {
+	FromPaneID PaneID
+	ToPaneID   PaneID
+	Type       string
+	Body       string
+}
+
+type SendMessageResponse struct {
+	From          Pane
+	To            Pane
+	Type          string
+	Body          string
+	DeliveredText string
 }
 
 type ListPanesResponse struct {
