@@ -112,7 +112,9 @@ func (c *Client) StreamEvents(ctx context.Context) (*EventStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	response, err := c.http.Do(req)
+	streamHTTP := *c.http
+	streamHTTP.Timeout = 0
+	response, err := streamHTTP.Do(req)
 	if err != nil {
 		return nil, err
 	}

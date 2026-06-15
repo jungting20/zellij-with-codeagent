@@ -143,6 +143,128 @@ func TestRunEventsPassesFilters(t *testing.T) {
 	}
 }
 
+func TestRunEventsFollowStreamsAndFilters(t *testing.T) {
+	events := make(chan transport.Event, 2)
+	events <- transport.Event{Type: "raw_output", PaneID: "coder", Message: "ignored", Time: time.Unix(1, 0)}
+	events <- transport.Event{Type: "message_sent", PaneID: "tester", Message: "delivered", Time: time.Unix(2, 0)}
+	close(events)
+	errs := make(chan error)
+	client := &fakeAgentClient{
+		eventStream: &transport.EventStream{
+			Events: events,
+			Errors: errs,
+			Close:  func() error { return nil },
+		},
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"events", "--follow", "--type", "message_sent"}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	output := stdout.String()
+	if !client.streamEventsCalled {
+		t.Fatal("StreamEvents was not called")
+	}
+	if strings.Contains(output, "raw_output") || !strings.Contains(output, "type=message_sent pane=tester") {
+		t.Fatalf("stdout = %q, want only filtered message_sent event", output)
+	}
+}
+
+func TestRunInputSendsText(t *testing.T) {
+	client := &fakeAgentClient{}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"input", "pane-1", "--text", "hello\n"}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if client.inputPaneID != "pane-1" || client.inputRequest.Text != "hello\n" {
+		t.Fatalf("input request = pane %q %#v, want pane-1 hello", client.inputPaneID, client.inputRequest)
+	}
+	if !strings.Contains(stdout.String(), "sent input pane=pane-1 bytes=6") {
+		t.Fatalf("stdout = %q, want input summary", stdout.String())
+	}
+}
+
+func TestRunInputReadsStdin(t *testing.T) {
+	client := &fakeAgentClient{}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"input", "pane-1", "--file", "-"}, strings.NewReader("from stdin"), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if client.inputRequest.Text != "from stdin" {
+		t.Fatalf("input text = %q, want stdin payload", client.inputRequest.Text)
+	}
+}
+
+func TestRunSnapshotPrintsOutput(t *testing.T) {
+	client := &fakeAgentClient{
+		snapshotResponse: transport.SnapshotOutputResponse{
+			Output: "pane output\n",
+		},
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"snapshot", "pane-1", "--full", "--ansi"}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if client.snapshotPaneID != "pane-1" || !client.snapshotRequest.Full || !client.snapshotRequest.ANSI {
+		t.Fatalf("snapshot request = pane %q %#v, want full ansi", client.snapshotPaneID, client.snapshotRequest)
+	}
+	if stdout.String() != "pane output\n" {
+		t.Fatalf("stdout = %q, want raw output", stdout.String())
+	}
+}
+
+func TestRunMessageSendsBody(t *testing.T) {
+	client := &fakeAgentClient{}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"message", "--from", "planner", "--to", "tester", "--type", "task", "--body", "run tests"}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if client.messageRequest.From != "planner" || client.messageRequest.To != "tester" || client.messageRequest.Type != "task" || client.messageRequest.Body != "run tests" {
+		t.Fatalf("message request = %#v, want planner to tester task", client.messageRequest)
+	}
+	if !strings.Contains(stdout.String(), "delivered from=planner to=tester type=task bytes=9") {
+		t.Fatalf("stdout = %q, want delivery summary", stdout.String())
+	}
+}
+
+func TestRunForwardSnapshotSendsSnapshotOutput(t *testing.T) {
+	client := &fakeAgentClient{
+		snapshotResponse: transport.SnapshotOutputResponse{
+			Output: "screen dump",
+		},
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"forward-snapshot", "coder", "reviewer", "--full"}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if client.snapshotPaneID != "coder" || !client.snapshotRequest.Full {
+		t.Fatalf("snapshot request = pane %q %#v, want coder full", client.snapshotPaneID, client.snapshotRequest)
+	}
+	if client.messageRequest.From != "coder" || client.messageRequest.To != "reviewer" || client.messageRequest.Type != "screen_dump" || client.messageRequest.Body != "screen dump" {
+		t.Fatalf("message request = %#v, want forwarded snapshot", client.messageRequest)
+	}
+	if !strings.Contains(stdout.String(), "delivered from=coder to=reviewer type=screen_dump bytes=11") {
+		t.Fatalf("stdout = %q, want delivery summary", stdout.String())
+	}
+}
+
 func TestRunCleanupPassesFilters(t *testing.T) {
 	client := &fakeAgentClient{
 		cleanupResponse: transport.CleanupResponse{
@@ -198,16 +320,26 @@ type fakeAgentClient struct {
 	socketPath string
 	timeout    time.Duration
 
-	healthResponse  transport.HealthResponse
-	statusResponse  transport.InspectRuntimeResponse
-	eventsResponse  transport.RecentEventsResponse
-	cleanupResponse transport.CleanupResponse
+	healthResponse   transport.HealthResponse
+	statusResponse   transport.InspectRuntimeResponse
+	snapshotResponse transport.SnapshotOutputResponse
+	eventsResponse   transport.RecentEventsResponse
+	cleanupResponse  transport.CleanupResponse
+	messageResponse  transport.SendMessageResponse
+	eventStream      *transport.EventStream
 
 	planRequestID string
 	planPayload   transport.ExecutionPlanPayload
 
-	eventsLimit int
-	eventTypes  []string
+	inputPaneID     string
+	inputRequest    transport.SendInputRequest
+	snapshotPaneID  string
+	snapshotRequest transport.SnapshotOutputRequest
+	messageRequest  transport.SendMessageRequest
+
+	eventsLimit        int
+	eventTypes         []string
+	streamEventsCalled bool
 
 	cleanupRequest transport.CleanupRequest
 }
@@ -218,6 +350,31 @@ func (c *fakeAgentClient) Health(context.Context) (transport.HealthResponse, err
 
 func (c *fakeAgentClient) InspectRuntime(context.Context) (transport.InspectRuntimeResponse, error) {
 	return c.statusResponse, nil
+}
+
+func (c *fakeAgentClient) SendInput(_ context.Context, paneID string, req transport.SendInputRequest) error {
+	c.inputPaneID = paneID
+	c.inputRequest = req
+	return nil
+}
+
+func (c *fakeAgentClient) SnapshotOutput(_ context.Context, paneID string, req transport.SnapshotOutputRequest) (transport.SnapshotOutputResponse, error) {
+	c.snapshotPaneID = paneID
+	c.snapshotRequest = req
+	return c.snapshotResponse, nil
+}
+
+func (c *fakeAgentClient) SendMessage(_ context.Context, req transport.SendMessageRequest) (transport.SendMessageResponse, error) {
+	c.messageRequest = req
+	if c.messageResponse.From.ID != "" || c.messageResponse.To.ID != "" {
+		return c.messageResponse, nil
+	}
+	return transport.SendMessageResponse{
+		From: transport.Pane{ID: req.From},
+		To:   transport.Pane{ID: req.To},
+		Type: req.Type,
+		Body: req.Body,
+	}, nil
 }
 
 func (c *fakeAgentClient) SubmitExecutionPlan(_ context.Context, requestID string, payload transport.ExecutionPlanPayload) (transport.ExecutionPlanResponse, error) {
@@ -242,6 +399,21 @@ func (c *fakeAgentClient) RecentEvents(_ context.Context, limit int, eventTypes 
 	c.eventsLimit = limit
 	c.eventTypes = append([]string(nil), eventTypes...)
 	return c.eventsResponse, nil
+}
+
+func (c *fakeAgentClient) StreamEvents(context.Context) (*transport.EventStream, error) {
+	c.streamEventsCalled = true
+	if c.eventStream != nil {
+		return c.eventStream, nil
+	}
+	events := make(chan transport.Event)
+	close(events)
+	errs := make(chan error)
+	return &transport.EventStream{
+		Events: events,
+		Errors: errs,
+		Close:  func() error { return nil },
+	}, nil
 }
 
 func (c *fakeAgentClient) Cleanup(_ context.Context, req transport.CleanupRequest) (transport.CleanupResponse, error) {

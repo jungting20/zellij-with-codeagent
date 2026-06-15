@@ -19,8 +19,12 @@ const defaultSocketPath = "/tmp/agentd.sock"
 type agentClient interface {
 	Health(context.Context) (transport.HealthResponse, error)
 	InspectRuntime(context.Context) (transport.InspectRuntimeResponse, error)
+	SendInput(context.Context, string, transport.SendInputRequest) error
+	SnapshotOutput(context.Context, string, transport.SnapshotOutputRequest) (transport.SnapshotOutputResponse, error)
+	SendMessage(context.Context, transport.SendMessageRequest) (transport.SendMessageResponse, error)
 	SubmitExecutionPlan(context.Context, string, transport.ExecutionPlanPayload) (transport.ExecutionPlanResponse, error)
 	RecentEvents(context.Context, int, ...string) (transport.RecentEventsResponse, error)
+	StreamEvents(context.Context) (*transport.EventStream, error)
 	Cleanup(context.Context, transport.CleanupRequest) (transport.CleanupResponse, error)
 }
 
@@ -48,6 +52,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient cli
 		return runStatus(args[1:], stdout, stderr, newClient)
 	case "plan":
 		return runPlan(args[1:], stdin, stdout, stderr, newClient)
+	case "input":
+		return runInput(args[1:], stdin, stdout, stderr, newClient)
+	case "snapshot":
+		return runSnapshot(args[1:], stdout, stderr, newClient)
+	case "message":
+		return runMessage(args[1:], stdin, stdout, stderr, newClient)
+	case "forward-snapshot":
+		return runForwardSnapshot(args[1:], stdout, stderr, newClient)
 	case "events":
 		return runEvents(args[1:], stdout, stderr, newClient)
 	case "cleanup":
@@ -61,7 +73,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient cli
 
 func runHealth(args []string, stdout, stderr io.Writer, newClient clientFactory) int {
 	fs, opts := newFlagSet("health", stderr)
-	if err := fs.Parse(args); err != nil {
+	if err := parseInterspersed(fs, args); err != nil {
 		return 2
 	}
 
@@ -83,7 +95,7 @@ func runHealth(args []string, stdout, stderr io.Writer, newClient clientFactory)
 
 func runStatus(args []string, stdout, stderr io.Writer, newClient clientFactory) int {
 	fs, opts := newFlagSet("status", stderr)
-	if err := fs.Parse(args); err != nil {
+	if err := parseInterspersed(fs, args); err != nil {
 		return 2
 	}
 
@@ -96,6 +108,140 @@ func runStatus(args []string, stdout, stderr io.Writer, newClient clientFactory)
 		return 1
 	}
 	printRuntimeStatus(stdout, response)
+	return 0
+}
+
+func runInput(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient clientFactory) int {
+	fs, opts := newFlagSet("input", stderr)
+	text := fs.String("text", "", "text to send to the pane")
+	filePath := fs.String("file", "", "file containing text to send, or - for stdin")
+	if err := parseInterspersed(fs, args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(stderr, "input requires <pane-id>")
+		return 2
+	}
+	payload, err := readTextPayload(*text, *filePath, stdin)
+	if err != nil {
+		fmt.Fprintf(stderr, "read input text: %v\n", err)
+		return 1
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	defer cancel()
+
+	paneID := fs.Arg(0)
+	if err := newClient(opts.socketPath, opts.timeout).SendInput(ctx, paneID, transport.SendInputRequest{Text: payload}); err != nil {
+		fmt.Fprintf(stderr, "agentctl input failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "sent input pane=%s bytes=%d\n", paneID, len(payload))
+	return 0
+}
+
+func runSnapshot(args []string, stdout, stderr io.Writer, newClient clientFactory) int {
+	fs, opts := newFlagSet("snapshot", stderr)
+	full := fs.Bool("full", false, "dump full scrollback when supported")
+	ansi := fs.Bool("ansi", false, "preserve ANSI escape sequences")
+	if err := parseInterspersed(fs, args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(stderr, "snapshot requires <pane-id>")
+		return 2
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	defer cancel()
+
+	response, err := newClient(opts.socketPath, opts.timeout).SnapshotOutput(ctx, fs.Arg(0), transport.SnapshotOutputRequest{
+		Full: *full,
+		ANSI: *ansi,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "agentctl snapshot failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprint(stdout, response.Output)
+	return 0
+}
+
+func runMessage(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient clientFactory) int {
+	fs, opts := newFlagSet("message", stderr)
+	from := fs.String("from", "", "source logical pane id")
+	to := fs.String("to", "", "target logical pane id")
+	messageType := fs.String("type", "message", "message type")
+	body := fs.String("body", "", "message body")
+	filePath := fs.String("file", "", "file containing message body, or - for stdin")
+	if err := parseInterspersed(fs, args); err != nil {
+		return 2
+	}
+	if *from == "" || *to == "" {
+		fmt.Fprintln(stderr, "message requires --from <pane-id> and --to <pane-id>")
+		return 2
+	}
+	payload, err := readTextPayload(*body, *filePath, stdin)
+	if err != nil {
+		fmt.Fprintf(stderr, "read message body: %v\n", err)
+		return 1
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	defer cancel()
+
+	response, err := newClient(opts.socketPath, opts.timeout).SendMessage(ctx, transport.SendMessageRequest{
+		From: *from,
+		To:   *to,
+		Type: *messageType,
+		Body: payload,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "agentctl message failed: %v\n", err)
+		return 1
+	}
+	printMessageResponse(stdout, response)
+	return 0
+}
+
+func runForwardSnapshot(args []string, stdout, stderr io.Writer, newClient clientFactory) int {
+	fs, opts := newFlagSet("forward-snapshot", stderr)
+	full := fs.Bool("full", false, "dump full scrollback when supported")
+	ansi := fs.Bool("ansi", false, "preserve ANSI escape sequences")
+	messageType := fs.String("type", "screen_dump", "message type")
+	if err := parseInterspersed(fs, args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 2 {
+		fmt.Fprintln(stderr, "forward-snapshot requires <source-pane-id> <target-pane-id>")
+		return 2
+	}
+	sourcePaneID := fs.Arg(0)
+	targetPaneID := fs.Arg(1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	defer cancel()
+
+	client := newClient(opts.socketPath, opts.timeout)
+	snapshot, err := client.SnapshotOutput(ctx, sourcePaneID, transport.SnapshotOutputRequest{
+		Full: *full,
+		ANSI: *ansi,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "agentctl forward-snapshot snapshot failed: %v\n", err)
+		return 1
+	}
+	response, err := client.SendMessage(ctx, transport.SendMessageRequest{
+		From: sourcePaneID,
+		To:   targetPaneID,
+		Type: *messageType,
+		Body: snapshot.Output,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "agentctl forward-snapshot message failed: %v\n", err)
+		return 1
+	}
+	printMessageResponse(stdout, response)
 	return 0
 }
 
@@ -138,10 +284,15 @@ func runPlan(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient
 func runEvents(args []string, stdout, stderr io.Writer, newClient clientFactory) int {
 	fs, opts := newFlagSet("events", stderr)
 	limit := fs.Int("limit", 20, "maximum number of recent events")
+	follow := fs.Bool("follow", false, "stream events until interrupted")
 	var eventTypes repeatedStrings
 	fs.Var(&eventTypes, "type", "event type filter; can be repeated")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+
+	if *follow {
+		return runFollowEvents(opts, eventTypes, stdout, stderr, newClient)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
@@ -154,6 +305,36 @@ func runEvents(args []string, stdout, stderr io.Writer, newClient clientFactory)
 	}
 	printEvents(stdout, response.Events)
 	return 0
+}
+
+func runFollowEvents(opts *commandOptions, eventTypes []string, stdout, stderr io.Writer, newClient clientFactory) int {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stream, err := newClient(opts.socketPath, opts.timeout).StreamEvents(ctx)
+	if err != nil {
+		fmt.Fprintf(stderr, "agentctl events --follow failed: %v\n", err)
+		return 1
+	}
+	defer stream.Close()
+
+	for {
+		select {
+		case event, ok := <-stream.Events:
+			if !ok {
+				return 0
+			}
+			if eventMatchesTypes(event, eventTypes) {
+				printEvents(stdout, []transport.Event{event})
+			}
+		case err, ok := <-stream.Errors:
+			if ok && err != nil && !errors.Is(err, context.Canceled) {
+				fmt.Fprintf(stderr, "agentctl events --follow failed: %v\n", err)
+				return 1
+			}
+			return 0
+		}
+	}
 }
 
 func runCleanup(args []string, stdout, stderr io.Writer, newClient clientFactory) int {
@@ -196,6 +377,41 @@ func newFlagSet(name string, stderr io.Writer) (*flag.FlagSet, *commandOptions) 
 	return fs, opts
 }
 
+func parseInterspersed(fs *flag.FlagSet, args []string) error {
+	var flagArgs []string
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			positional = append(positional, arg)
+			continue
+		}
+
+		flagArgs = append(flagArgs, arg)
+		name := strings.TrimLeft(arg, "-")
+		if idx := strings.IndexByte(name, '='); idx >= 0 {
+			name = name[:idx]
+		}
+		if f := fs.Lookup(name); f != nil {
+			if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
+				continue
+			}
+		}
+		if strings.Contains(arg, "=") {
+			continue
+		}
+		if i+1 < len(args) {
+			i++
+			flagArgs = append(flagArgs, args[i])
+		}
+	}
+	return fs.Parse(append(flagArgs, positional...))
+}
+
 func loadExecutionPlan(filePath string, stdin io.Reader) (transport.ExecutionPlanPayload, string, error) {
 	var data []byte
 	var err error
@@ -228,6 +444,36 @@ func loadExecutionPlan(filePath string, stdin io.Reader) (transport.ExecutionPla
 		return transport.ExecutionPlanPayload{}, "", err
 	}
 	return payload, "", nil
+}
+
+func readTextPayload(text, filePath string, stdin io.Reader) (string, error) {
+	if filePath != "" {
+		data, err := readFileOrStdin(filePath, stdin)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	}
+	return text, nil
+}
+
+func readFileOrStdin(filePath string, stdin io.Reader) ([]byte, error) {
+	if filePath == "-" {
+		return io.ReadAll(stdin)
+	}
+	return os.ReadFile(filePath)
+}
+
+func eventMatchesTypes(event transport.Event, eventTypes []string) bool {
+	if len(eventTypes) == 0 {
+		return true
+	}
+	for _, eventType := range eventTypes {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
 }
 
 func printRuntimeStatus(w io.Writer, response transport.InspectRuntimeResponse) {
@@ -278,6 +524,15 @@ func printEvents(w io.Writer, events []transport.Event) {
 	}
 }
 
+func printMessageResponse(w io.Writer, response transport.SendMessageResponse) {
+	fmt.Fprintf(w, "delivered from=%s to=%s type=%s bytes=%d\n",
+		response.From.ID,
+		response.To.ID,
+		response.Type,
+		len(response.Body),
+	)
+}
+
 func printCleanupResponse(w io.Writer, response transport.CleanupResponse) {
 	fmt.Fprintf(w, "closed=%d failed=%d skipped=%d\n", len(response.Closed), len(response.Failed), len(response.Skipped))
 	for _, pane := range response.Closed {
@@ -295,6 +550,11 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  health    Check the agentd socket")
 	fmt.Fprintln(w, "  status    Inspect managed runtime state")
 	fmt.Fprintln(w, "  plan      Submit an execution plan JSON file")
+	fmt.Fprintln(w, "  input     Send text to a managed pane")
+	fmt.Fprintln(w, "  snapshot  Dump managed pane output")
+	fmt.Fprintln(w, "  message   Send a tab-scoped message between managed panes")
+	fmt.Fprintln(w, "  forward-snapshot")
+	fmt.Fprintln(w, "            Send one pane's screen dump to another pane")
 	fmt.Fprintln(w, "  events    Print recent runtime events")
 	fmt.Fprintln(w, "  cleanup   Close managed panes")
 }
