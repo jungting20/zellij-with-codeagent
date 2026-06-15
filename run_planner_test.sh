@@ -1,53 +1,16 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Default socket path and target URL
-SOCKET_PATH="/tmp/agentd.sock"
-TARGET_URL="https://html5test.co"
+SOCKET_PATH="${AGENTD_SOCKET:-/tmp/agentd.sock}"
+PLAN_FILE="${AGENTD_PLAN_FILE:-examples/plans/agent-role-demo.json}"
+REQUEST_ID="${AGENTD_REQUEST_ID:-req_planner_manual_$(date +%s)}"
 
-# Use current working directory as default CWD
-CURRENT_DIR=$(pwd)
+echo "Submitting execution plan ${PLAN_FILE} to agentd via socket: ${SOCKET_PATH}"
 
-echo "Sending execution plan to agentd via socket: ${SOCKET_PATH}..."
+go run ./cmd/agentctl plan \
+  --socket "${SOCKET_PATH}" \
+  --file "${PLAN_FILE}" \
+  --request-id "${REQUEST_ID}"
 
-curl --unix-socket "${SOCKET_PATH}" -X POST -H "Content-Type: application/json" \
-  -d '{
-    "type": "execution_plan",
-    "request_id": "req_planner_manual_'"$(date +%s)"'",
-    "payload": {
-      "session": "zellij-with-code-agent",
-      "tabs": [
-        {
-          "name": "main-tab-1",
-          "panes": [
-            {
-              "id": "coder-pane",
-              "role": "coder",
-              "cwd": "'"${CURRENT_DIR}"'",
-              "command": ["./bin/agent-role", "coder"]
-            },
-            {
-              "id": "network-pane",
-              "role": "network-tracker",
-              "cwd": "'"${CURRENT_DIR}"'",
-              "command": ["./bin/agent-role", "network-tracker", "--url", "'"${TARGET_URL}"'"]
-            },
-            {
-              "id": "console-pane",
-              "role": "console-tracker",
-              "cwd": "'"${CURRENT_DIR}"'",
-              "command": ["./bin/agent-role", "console-tracker", "--url", "'"${TARGET_URL}"'"]
-            },
-            {
-              "id": "editor-pane",
-              "role": "editor",
-              "cwd": "'"${CURRENT_DIR}"'",
-              "command": ["nvim", "/Users/in05908_mac/zellij-with-codeagent/README.md"]
-            }
-          ]
-        }
-      ]
-    }
-  }' \
-  http://localhost/v1/requests
-
-echo -e "\n\nExecution plan request sent."
+echo
+echo "Execution plan request sent."

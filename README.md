@@ -28,6 +28,14 @@ From the repository root:
 go test ./...
 ```
 
+Build the local binaries when you want to use the checked-in scripts:
+
+```bash
+go build -o bin/agentd ./cmd/agentd
+go build -o bin/agentctl ./cmd/agentctl
+go build -o bin/agent-role ./cmd/agent-role
+```
+
 Start the current daemon entrypoint:
 
 ```bash
@@ -49,8 +57,11 @@ Use `agentctl` as the thin command-line client for the local socket:
 ```bash
 go run ./cmd/agentctl health --socket /tmp/agentd.sock
 go run ./cmd/agentctl status --socket /tmp/agentd.sock
-go run ./cmd/agentctl plan --socket /tmp/agentd.sock --file plan.json
+go run ./cmd/agentctl plan --socket /tmp/agentd.sock --file examples/plans/agent-role-demo.json
 go run ./cmd/agentctl events --socket /tmp/agentd.sock --limit 20
+go run ./cmd/agentctl events --socket /tmp/agentd.sock --follow --type raw_output
+go run ./cmd/agentctl input --socket /tmp/agentd.sock coder --text $'go test ./...\n'
+go run ./cmd/agentctl snapshot --socket /tmp/agentd.sock coder --full
 go run ./cmd/agentctl cleanup --socket /tmp/agentd.sock --task feature-auth
 ```
 
@@ -150,6 +161,8 @@ AGENTD_ZELLIJ_E2E=1 go test ./internal/runtime -run '^TestE2ECreateTabAndFourPan
 ```
 
 See `docs/runtime-e2e-test.md` for the close-on-input E2E flow and cleanup notes.
+
+For a current manual CLI flow, see `docs/manual-smoke-test.md`.
 
 ## Invariants
 

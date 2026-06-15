@@ -1,0 +1,31 @@
+{
+  "session": "zellij-with-code-agent",
+  "layout": "triple-horizontal",
+  "tabs": [
+    {
+      "name": "main-tab-1",
+      "panes": [
+        {
+          "id": "coder",
+          "role": "coder",
+          "command": ["./bin/agent-role", "coder"]
+        },
+        {
+          "id": "network-tracker",
+          "role": "network-tracker",
+          "command": ["./bin/agent-role", "network-tracker", "--url", "https://html5test.co"]
+        },
+        {
+          "id": "console-tracker",
+          "role": "console-tracker",
+          "command": ["./bin/agent-role", "console-tracker", "--url", "https://html5test.co"]
+        },
+        {
+          "id": "editor",
+          "role": "editor",
+          "command": ["nvim", "README.md"]
+        }
+      ]
+    }
+  ]
+}

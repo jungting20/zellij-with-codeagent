@@ -1,0 +1,14 @@
+.DS_Store
+*.test
+
+# Local build outputs.
+bin/
+
+# Local runtime artifacts.
+*.sock
+*.log
+*.pid
+agentd.sock
+
+# Temporary files created by smoke scripts.
+tmp/

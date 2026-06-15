@@ -1,38 +1,38 @@
 # Next Steps Todo List
 
-Updated: 2026-06-04
+Updated: 2026-06-15
 
 ## Current Baseline
 
 - [x] `agentd serve --socket <path>` exposes the local Unix socket transport.
 - [x] `transport.Client` wraps the JSON HTTP API.
-- [x] `agentctl` now provides a thin CLI for `health`, `status`, `plan`, `events`, and `cleanup`.
-- [x] `go test ./...` passes after the `agentctl` addition.
+- [x] `agentctl` provides a thin CLI for `health`, `status`, `plan`, `events`, `events --follow`, `input`, `snapshot`, `message`, `forward-snapshot`, and `cleanup`.
+- [x] `go test ./...` passes.
 
 ## P0. Finish The Current CLI Slice
 
-- [ ] Review and commit the current `agentctl` change.
+- [ ] Review and commit the current CLI/runtime documentation slice.
   - Files: `cmd/agentctl/main.go`, `cmd/agentctl/main_test.go`, `README.md`
   - Verify: `go test ./...`
 
-- [ ] Add repository hygiene for generated local files.
+- [x] Add repository hygiene for generated local files.
   - Add `.gitignore` entries for `.DS_Store`, `*.test`, and local socket/log artifacts.
-  - Remove tracked local artifacts from Git history in a normal non-destructive commit flow.
-  - Verify: `git status --short` only shows intended source/doc changes.
+  - Next commit should remove tracked local artifacts with `git rm --cached` in a normal non-destructive flow.
+  - Verify: `git status --short` only shows intended source/doc changes and staged artifact removals.
 
 ## P1. Make The CLI Easy To Use Manually
 
-- [ ] Add a checked-in sample execution plan.
+- [x] Add a checked-in sample execution plan.
   - Suggested file: `examples/plans/agent-role-demo.json`
   - Move the current `run_planner_test.sh` payload into JSON using `tabs[].panes[]`.
   - Include panes for `coder`, `network-tracker`, `console-tracker`, and `editor`.
   - Verify: `go run ./cmd/agentctl plan --file examples/plans/agent-role-demo.json`
 
-- [ ] Replace or simplify `run_planner_test.sh` to call `agentctl plan`.
+- [x] Replace or simplify `run_planner_test.sh` to call `agentctl plan`.
   - Keep the script as a convenience wrapper, not the source of the API payload.
   - Verify: start `agentd`, run the script, then inspect with `agentctl status`.
 
-- [ ] Add build instructions for all local binaries.
+- [x] Add build instructions for all local binaries.
   - Commands:
     - `go build -o bin/agentd ./cmd/agentd`
     - `go build -o bin/agentctl ./cmd/agentctl`
@@ -41,7 +41,7 @@ Updated: 2026-06-04
 
 ## P2. Add A Real Manual Smoke Flow
 
-- [ ] Create a single manual smoke document.
+- [x] Create a single manual smoke document.
   - Suggested file: `docs/manual-smoke-test.md`
   - Cover:
     - start Zellij session
@@ -52,25 +52,25 @@ Updated: 2026-06-04
     - cleanup managed panes
   - Verify the documented commands from a clean terminal.
 
-- [ ] Add a smoke script that fails clearly when prerequisites are missing.
+- [x] Add a smoke script that fails clearly when prerequisites are missing.
   - Suggested file: `scripts/smoke-agentctl.sh`
   - Check for `zellij`, built binaries, and socket availability.
   - Avoid closing unmanaged user panes.
 
 ## P3. Improve Runtime Observability
 
-- [ ] Add `agentctl events --follow`.
+- [x] Add `agentctl events --follow`.
   - Use `transport.Client.StreamEvents`.
   - Print newline summaries as events arrive.
   - Support `--type` filters if the server API gains stream filtering; otherwise filter client-side.
   - Verify with a fake client unit test and a manual real-Zellij event flow.
 
-- [ ] Add `agentctl snapshot <pane-id>`.
+- [x] Add `agentctl snapshot <pane-id>`.
   - Wrap `POST /v1/panes/{pane_id}/snapshot`.
   - Support `--full` and `--ansi`.
   - Verify with unit tests and a manual pane snapshot.
 
-- [ ] Add `agentctl input <pane-id> --text ...`.
+- [x] Add `agentctl input <pane-id> --text ...`.
   - Wrap `POST /v1/panes/{pane_id}/input`.
   - Keep text handling explicit; avoid shell-escaping surprises.
   - Verify by sending a marker line to a managed pane.
@@ -94,6 +94,7 @@ Updated: 2026-06-04
 
 ## Recommended Next Task To Start
 
-- [ ] Start with **P1: Add a checked-in sample execution plan**.
-  - It is the smallest step that turns the new `agentctl plan` command into a repeatable user workflow.
-  - It also gives the later smoke script, manual docs, and planner preset a stable fixture to reuse.
+- [ ] Start with **P4: Define a minimal planner adapter contract**.
+  - Input: natural language goal plus optional working directory.
+  - Output: `ExecutionPlanPayload`.
+  - Keep LLM reasoning outside `agentd`; only submit structured plans through the transport.
