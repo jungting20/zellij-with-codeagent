@@ -40,20 +40,25 @@
       "request_id": "req_uuid_998",
       "session": "feature-auth-fix",
       "layout": "triple-horizontal",
-      "panes": [
+      "tabs": [
         {
-          "id": "coder",
-          "zellij_pane_id": "terminal_42",
-          "zellij_tab_id": 1,
-          "role": "editor",
-          "status": "running"
-        },
-        {
-          "id": "test",
-          "zellij_pane_id": "terminal_43",
-          "zellij_tab_id": 1,
-          "role": "tester",
-          "status": "running"
+          "name": "feature-auth-fix",
+          "panes": [
+            {
+              "id": "coder",
+              "zellij_pane_id": "terminal_42",
+              "zellij_tab_id": 1,
+              "role": "editor",
+              "status": "running"
+            },
+            {
+              "id": "test",
+              "zellij_pane_id": "terminal_43",
+              "zellij_tab_id": 1,
+              "role": "tester",
+              "status": "running"
+            }
+          ]
         }
       ]
     }
@@ -68,9 +73,9 @@
     *   모든 Planner 요청의 상위 공통 래핑 규격.
     ```json
     {
-      "type": "execution_plan", // execution_plan | create_pane | send_input | snapshot | cleanup
+      "type": "execution_plan",
       "request_id": "req_uuid_998",
-      "payload": { ... } // 각 요청타입별 상세 Payload
+      "payload": { ... } // execution_plan 상세 Payload
     }
     ```
 *   **실행 계획 요청 페이로드 (`ExecutionPlanPayload`)**:
@@ -79,18 +84,23 @@
     {
       "session": "feature-auth-fix",
       "layout": "triple-horizontal",
-      "panes": [
+      "tabs": [
         {
-          "id": "coder",
-          "role": "editor",
-          "cwd": "/Users/in05908_mac/project",
-          "command": ["nvim", "internal/auth/auth_service.go"]
-        },
-        {
-          "id": "test",
-          "role": "tester",
-          "cwd": "/Users/in05908_mac/project",
-          "command": ["go", "test", "./internal/auth/..."]
+          "name": "feature-auth-fix",
+          "panes": [
+            {
+              "id": "coder",
+              "role": "editor",
+              "cwd": "/Users/in05908_mac/project",
+              "command": ["nvim", "internal/auth/auth_service.go"]
+            },
+            {
+              "id": "test",
+              "role": "tester",
+              "cwd": "/Users/in05908_mac/project",
+              "command": ["go", "test", "./internal/auth/..."]
+            }
+          ]
         }
       ]
     }
@@ -102,16 +112,21 @@
       "request_id": "req_uuid_998",
       "session": "feature-auth-fix",
       "layout": "triple-horizontal",
-      "panes": [
+      "tabs": [
         {
-          "id": "coder",
-          "task_id": "feature-auth-fix",
-          "zellij_pane_id": "terminal_42",
-          "zellij_tab_id": 1,
-          "tab_name": "feature-auth-fix",
-          "role": "editor",
-          "status": "running",
-          "created_at": "2026-05-20T14:24:00Z"
+          "name": "feature-auth-fix",
+          "panes": [
+            {
+              "id": "coder",
+              "task_id": "feature-auth-fix",
+              "zellij_pane_id": "terminal_42",
+              "zellij_tab_id": 1,
+              "tab_name": "feature-auth-fix",
+              "role": "editor",
+              "status": "running",
+              "created_at": "2026-05-20T14:24:00Z"
+            }
+          ]
         }
       ]
     }

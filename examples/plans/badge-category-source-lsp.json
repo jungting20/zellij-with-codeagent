@@ -2,8 +2,6 @@
   "type": "execution_plan",
   "request_id": "req_badge_category_source_lsp",
   "payload": {
-    "url": "/Users/in05908_mac/mysunny/sku-admin-front/sku-manager-front/src/certification/badge/category/ui/logic/BadgeCategoryManagementListContainer.tsx",
-    "resolved_source": "/Users/in05908_mac/mysunny/sku-admin-front/sku-manager-front/src/certification/badge/category/ui/logic/BadgeCategoryManagementListContainer.tsx",
     "session": "badge-category-source-lsp",
     "layout": "triple-horizontal",
     "tabs": [

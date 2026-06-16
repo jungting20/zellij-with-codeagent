@@ -33,6 +33,7 @@ Build the local binaries when you want to use the checked-in scripts:
 ```bash
 go build -o bin/agentd ./cmd/agentd
 go build -o bin/agentctl ./cmd/agentctl
+go build -o bin/agent-planner ./cmd/agent-planner
 go build -o bin/agent-role ./cmd/agent-role
 ```
 
@@ -58,6 +59,9 @@ Use `agentctl` as the thin command-line client for the local socket:
 go run ./cmd/agentctl health --socket /tmp/agentd.sock
 go run ./cmd/agentctl status --socket /tmp/agentd.sock
 go run ./cmd/agentctl plan --socket /tmp/agentd.sock --file examples/plans/agent-role-demo.json
+go run ./cmd/agent-planner page --socket /tmp/agentd.sock --url http://localhost:8000/example/aa --cwd "$PWD" --mock-source "$PWD/README.md" --ui
+go run ./cmd/agent-planner validate --file plan.json
+go run ./cmd/agent-planner submit --socket /tmp/agentd.sock --file plan.json --ui
 go run ./cmd/agentctl events --socket /tmp/agentd.sock --limit 20
 go run ./cmd/agentctl events --socket /tmp/agentd.sock --follow --type raw_output
 go run ./cmd/agentctl input --socket /tmp/agentd.sock coder --text $'go test ./...\n'
@@ -66,6 +70,8 @@ go run ./cmd/agentctl cleanup --socket /tmp/agentd.sock --task feature-auth
 ```
 
 `agentctl plan` accepts either a raw execution plan payload or a full `/v1/requests` envelope.
+`agent-planner page` is a mock planner path for URL-based page inspection. It resolves the page source from `--mock-source`, generates a canonical `/v1/requests` `execution_plan`, and submits panes for editor, LSP, network, and console inspection. Add `--dry-run` to print the envelope without contacting `agentd`.
+`agent-planner validate` and `agent-planner submit` accept AI-generated JSON files, require the canonical `/v1/requests` envelope, and reject legacy or unknown payload fields before submission.
 
 ## Runtime Service Shape
 

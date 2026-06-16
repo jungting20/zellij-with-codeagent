@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +118,30 @@ func TestRunPlanAcceptsRequestEnvelopeFromStdin(t *testing.T) {
 	}
 	if client.planRequestID != "req_from_stdin" || client.planPayload.Session != "demo" {
 		t.Fatalf("submitted plan = request %q payload %#v, want stdin envelope", client.planRequestID, client.planPayload)
+	}
+}
+
+func TestRunPlanAcceptsCanonicalBadgeCategoryEnvelope(t *testing.T) {
+	planPath := filepath.Join("..", "..", "examples", "plans", "badge-category-source-lsp.json")
+	client := &fakeAgentClient{}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"plan", "--file", planPath}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if client.planRequestID != "req_badge_category_source_lsp" {
+		t.Fatalf("request id = %q, want req_badge_category_source_lsp", client.planRequestID)
+	}
+	if client.planPayload.Session != "badge-category-source-lsp" || client.planPayload.Layout != "triple-horizontal" {
+		t.Fatalf("payload = %#v, want canonical badge-category payload", client.planPayload)
+	}
+	if len(client.planPayload.Tabs) != 1 || len(client.planPayload.Tabs[0].Panes) != 2 {
+		t.Fatalf("tabs = %#v, want one tab with editor and lsp panes", client.planPayload.Tabs)
+	}
+	if client.planPayload.Tabs[0].Panes[0].ID != "badge-category-editor" || client.planPayload.Tabs[0].Panes[1].ID != "badge-category-lsp" {
+		t.Fatalf("panes = %#v, want editor and lsp", client.planPayload.Tabs[0].Panes)
 	}
 }
 

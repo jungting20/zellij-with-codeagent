@@ -13,7 +13,7 @@ URL 형태의 입력 payload를 받아 새 Zellij tab을 만들고, 같은 tab �
 /Users/in05908_mac/mysunny/sku-admin-front/sku-manager-front/src/certification/badge/category/ui/logic/BadgeCategoryManagementListContainer.tsx
 ```
 
-현재 런타임의 `ExecutionPlanPayload` 정식 필드는 `session`, `layout`, `tabs`다. 이 시나리오의 `url`과 `resolved_source`는 route resolver/planner가 넘긴 입력 메타데이터로 기록하고, 실제 pane 생성은 `tabs[].panes[]` 명령으로 수행한다.
+현재 런타임의 `ExecutionPlanPayload` 정식 필드는 `session`, `layout`, `tabs`다. URL과 source resolve 결과는 planner 내부 메타데이터이며, `agentd` 요청 payload에는 포함하지 않는다.
 
 ## Prerequisites
 
@@ -32,8 +32,6 @@ URL 형태의 입력 payload를 받아 새 Zellij tab을 만들고, 같은 tab �
   "type": "execution_plan",
   "request_id": "req_badge_category_source_lsp",
   "payload": {
-    "url": "/Users/in05908_mac/mysunny/sku-admin-front/sku-manager-front/src/certification/badge/category/ui/logic/BadgeCategoryManagementListContainer.tsx",
-    "resolved_source": "/Users/in05908_mac/mysunny/sku-admin-front/sku-manager-front/src/certification/badge/category/ui/logic/BadgeCategoryManagementListContainer.tsx",
     "session": "badge-category-source-lsp",
     "layout": "triple-horizontal",
     "tabs": [
