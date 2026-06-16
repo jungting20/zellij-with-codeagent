@@ -7,6 +7,7 @@ import (
 
 	"zellij-with-codeagent/cmd/agent-role/coder"
 	"zellij-with-codeagent/cmd/agent-role/console"
+	"zellij-with-codeagent/cmd/agent-role/lsp"
 	"zellij-with-codeagent/cmd/agent-role/network"
 )
 
@@ -15,6 +16,7 @@ func printUsage() {
 	fmt.Println("Usage: agent-role <role> [options]")
 	fmt.Println("Available roles:")
 	fmt.Println("  coder                   - Visualizes coding agent status")
+	fmt.Println("  lsp [options] <file>    - Prints a TypeScript/TSX call and component tree")
 	fmt.Println("  network-tracker --url   - Visualizes network tracking for a specific URL")
 	fmt.Println("  console-tracker --url   - Visualizes console log tracking for a specific URL")
 }
@@ -29,6 +31,8 @@ func main() {
 	switch role {
 	case "coder":
 		coder.Run()
+	case "lsp":
+		lsp.Run(os.Args[2:])
 	case "network-tracker":
 		runNetworkTracker(os.Args[2:])
 	case "console-tracker":
