@@ -33,7 +33,7 @@ func TestReconcileUpdatesManagedPaneLifecycleAndReportsUnmanaged(t *testing.T) {
 
 	assertPaneStatus(t, service, "pane-live", PaneStatusRunning)
 	assertPaneStatus(t, service, "pane-missing", PaneStatusLost)
-	assertPaneStatus(t, service, "pane-exited", PaneStatusExited)
+	assertPaneMissing(t, service, "pane-exited")
 
 	if len(response.Active) != 1 || response.Active[0].ID != "pane-live" {
 		t.Fatalf("Reconcile() active = %#v, want pane-live", response.Active)
@@ -99,5 +99,13 @@ func assertPaneStatus(t *testing.T, service *Service, id PaneID, want PaneStatus
 	}
 	if response.Pane.Status != want {
 		t.Fatalf("InspectPane(%s) status = %q, want %q", id, response.Pane.Status, want)
+	}
+}
+
+func assertPaneMissing(t *testing.T, service *Service, id PaneID) {
+	t.Helper()
+	_, err := service.InspectPane(context.Background(), InspectPaneRequest{PaneID: id})
+	if !errors.Is(err, ErrPaneNotFound) {
+		t.Fatalf("InspectPane(%s) error = %v, want %v", id, err, ErrPaneNotFound)
 	}
 }

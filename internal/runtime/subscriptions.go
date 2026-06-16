@@ -207,12 +207,13 @@ func (m *SubscriptionManager) handlePaneClosed(logicalID registry.PaneID) {
 	if m.opts.Registry == nil {
 		return
 	}
-	if _, err := m.opts.Registry.UpdatePaneStatus(logicalID, registry.PaneStatusExited, "pane_closed event from zellij subscribe"); err != nil {
+	removed, err := m.opts.Registry.RemovePane(logicalID)
+	if err != nil {
 		m.publishStreamError(logicalID, err)
 		return
 	}
 
-	base := m.baseEvent(logicalID)
+	base := eventFromRecord(removed, m.opts.Now())
 	e := base
 	e.Type = eventbus.TypePaneClosed
 	e.Message = "pane_closed"
@@ -264,12 +265,16 @@ func (m *SubscriptionManager) baseEvent(logicalID registry.PaneID) eventbus.Even
 			Time:   m.opts.Now(),
 		}
 	}
+	return eventFromRecord(record, m.opts.Now())
+}
+
+func eventFromRecord(record registry.PaneRecord, now time.Time) eventbus.Event {
 	return eventbus.Event{
 		PaneID:       string(record.ID),
 		TaskID:       string(record.TaskID),
 		AgentID:      string(record.AgentID),
 		ZellijPaneID: string(record.ZellijPaneID),
-		Time:         m.opts.Now(),
+		Time:         now,
 	}
 }
 

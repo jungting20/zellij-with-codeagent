@@ -63,6 +63,14 @@ func (s *Service) Reconcile(ctx context.Context, _ ReconcileRequest) (ReconcileR
 }
 
 func (s *Service) reconcileRecord(record registry.PaneRecord, liveByZellijID map[registry.ZellijPaneID]zellij.Pane) (registry.PaneRecord, error) {
+	if record.Status == registry.PaneStatusExited {
+		removed, err := s.registry.RemovePane(record.ID)
+		if err == nil && s.subs != nil {
+			s.subs.StopPane(record.ID)
+		}
+		return removed, err
+	}
+
 	if record.ZellijPaneID == "" || isTerminalStatus(record.Status) {
 		if s.subs != nil {
 			s.subs.StopPane(record.ID)
@@ -80,11 +88,13 @@ func (s *Service) reconcileRecord(record registry.PaneRecord, liveByZellijID map
 	}
 
 	if live.Exited {
-		updated, err := s.registry.UpdatePaneStatus(record.ID, registry.PaneStatusExited, "zellij pane exited during reconcile")
+		removed, err := s.registry.RemovePane(record.ID)
 		if err == nil && s.subs != nil {
 			s.subs.StopPane(record.ID)
 		}
-		return updated, err
+		removed.Status = registry.PaneStatusExited
+		removed.StatusMessage = "zellij pane exited during reconcile"
+		return removed, err
 	}
 
 	if record.Status == registry.PaneStatusRunning {

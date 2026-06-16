@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -155,6 +156,59 @@ func TestSubscriptionManagerDedupesIdenticalViewport(t *testing.T) {
 			}
 			return
 		}
+	}
+}
+
+func TestSubscriptionManagerRemovesPaneOnPaneClosed(t *testing.T) {
+	reg := registry.New()
+	bus := eventbus.New()
+
+	if _, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "pane-1",
+		TaskID:       "task-1",
+		AgentID:      "agent-1",
+		ZellijPaneID: "terminal_5",
+	}); err != nil {
+		t.Fatalf("RegisterPane: %v", err)
+	}
+
+	runner := &scriptedSubscriptionRunner{
+		fn: func(ctx context.Context, spec zellij.CommandSpec, pw *io.PipeWriter) {
+			_, _ = io.WriteString(pw, `{"name":"pane_closed","pane_id":"terminal_5"}`+"\n")
+		},
+	}
+
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{
+		Registry: reg,
+		Backend:  zellij.NewBackend(zellij.Options{}),
+		Bus:      bus,
+		Runner:   runner,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	out, _ := bus.Subscribe(ctx)
+	mgr.StartPane("pane-1")
+
+	var sawClosed bool
+	deadline := time.After(2 * time.Second)
+	for !sawClosed {
+		select {
+		case ev := <-out:
+			if ev.Type == eventbus.TypePaneClosed {
+				if ev.PaneID != "pane-1" || ev.TaskID != "task-1" || ev.AgentID != "agent-1" || ev.ZellijPaneID != "terminal_5" {
+					t.Fatalf("pane_closed event = %#v, want removed pane metadata", ev)
+				}
+				sawClosed = true
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for pane_closed event")
+		}
+	}
+
+	if _, err := reg.GetPane("pane-1"); !errors.Is(err, registry.ErrNotFound) {
+		t.Fatalf("GetPane() error = %v, want %v", err, registry.ErrNotFound)
 	}
 }
 
