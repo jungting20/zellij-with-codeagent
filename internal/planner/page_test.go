@@ -2,6 +2,7 @@ package planner
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -56,6 +57,29 @@ func TestBuildPagePlanCreatesFourPagePanes(t *testing.T) {
 	}
 	if panes[3].ID != "page-console" || panes[3].Command[3] != "http://localhost:8000/example/aa" {
 		t.Fatalf("console pane = %#v, want target URL", panes[3])
+	}
+}
+
+func TestBuildPagePlanUsesRoleCommandPrefix(t *testing.T) {
+	payload, err := BuildPagePlan(PagePlanRequest{
+		URL:              "http://localhost:8000/example/aa",
+		CWD:              "/tmp/app",
+		AgentRoleCommand: []string{"/tmp/bin/zellij-agent", "role"},
+	}, ResolveSourceResult{
+		URL:        "http://localhost:8000/example/aa",
+		SourcePath: "/tmp/app/src/pages/example/aa.tsx",
+		CWD:        "/tmp/app",
+	})
+	if err != nil {
+		t.Fatalf("BuildPagePlan() error = %v", err)
+	}
+
+	panes := payload.Tabs[0].Panes
+	if got := panes[0].Command; len(got) != 4 || got[0] != "/tmp/bin/zellij-agent" || got[1] != "role" || got[2] != "editor" {
+		t.Fatalf("editor command = %#v, want zellij-agent role editor prefix", got)
+	}
+	if got := panes[1].Command[2]; !strings.Contains(got, "'/tmp/bin/zellij-agent' 'role' lsp") {
+		t.Fatalf("lsp command = %q, want zellij-agent role lsp prefix", got)
 	}
 }
 

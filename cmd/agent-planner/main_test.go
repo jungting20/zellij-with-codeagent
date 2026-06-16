@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,16 +84,29 @@ func TestRunPageSubmitsGeneratedPlan(t *testing.T) {
 	}
 }
 
-func TestRunPageRequiresMockSource(t *testing.T) {
+func TestRunPageUsesDefaultMockSource(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"page", "--url", "http://localhost:8000/example/aa"}, &stdout, &stderr, fakeFactory(&fakeAgentClient{}))
+	code := run([]string{"page", "--url", "http://localhost:8000/example/aa", "--dry-run"}, &stdout, &stderr, fakeFactory(&fakeAgentClient{}))
 
-	if code != 2 {
-		t.Fatalf("run() exit code = %d, want 2", code)
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "page requires --mock-source") {
-		t.Fatalf("stderr = %q, want missing mock source error", stderr.String())
+	if !strings.Contains(stdout.String(), "README.md") {
+		t.Fatalf("stdout = %q, want default README.md mock source", stdout.String())
+	}
+}
+
+func TestDefaultAgentRoleBinUsesPathLookup(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "agent-role")
+	if err := os.WriteFile(binPath, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("PATH", dir)
+
+	if got := defaultAgentRoleBin(); got != binPath {
+		t.Fatalf("defaultAgentRoleBin() = %q, want PATH match %q", got, binPath)
 	}
 }
 
@@ -189,6 +203,145 @@ func TestRunSubmitRequiresFile(t *testing.T) {
 	}
 }
 
+func TestRunTUIDryRunPrintsEnvelopeFromNaturalLanguageRequest(t *testing.T) {
+	client := &fakeAgentClient{}
+	var stdout, stderr bytes.Buffer
+
+	code := runWithInput([]string{
+		"tui",
+		"--goal", "localhost:8000/example/aa page source를 열고 네트워크와 콘솔을 확인해줘",
+		"--agent-role-bin", "/tmp/runtime/bin/agent-role",
+		"--dry-run",
+	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("runWithInput() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if client.requestID != "" {
+		t.Fatalf("requestID = %q, want no submit during dry-run", client.requestID)
+	}
+	var envelope transport.RequestEnvelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatalf("dry-run JSON decode error = %v; output=%q", err, stdout.String())
+	}
+	if envelope.Type != transport.RequestTypeExecutionPlan || envelope.RequestID != "req_page-example-aa" {
+		t.Fatalf("envelope = %#v, want execution_plan req_page-example-aa", envelope)
+	}
+	if !strings.Contains(stderr.String(), "[AI PLANNER]") || !strings.Contains(stderr.String(), "agentd=ok(test)") || !strings.Contains(stderr.String(), "request_text=localhost:8000/example/aa") || !strings.Contains(stderr.String(), "mock_source=") {
+		t.Fatalf("stderr = %q, want TUI natural language summary", stderr.String())
+	}
+}
+
+func TestRunTUISubmitsAfterConfirmation(t *testing.T) {
+	client := &fakeAgentClient{}
+	var stdout, stderr bytes.Buffer
+	input := strings.Join([]string{
+		"http://localhost:8000/example/aa page source를 열어줘",
+		"y",
+		"",
+	}, "\n")
+
+	code := runWithInput([]string{
+		"tui",
+		"--socket", "/tmp/custom.sock",
+		"--agent-role-bin", "/tmp/runtime/bin/agent-role",
+		"--request-id", "req_tui",
+	}, strings.NewReader(input), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("runWithInput() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if client.socketPath != "/tmp/custom.sock" || client.requestID != "req_tui" {
+		t.Fatalf("client = socket %q request %q, want custom socket and req_tui", client.socketPath, client.requestID)
+	}
+	if client.payload.Session != "page-example-aa" || len(client.payload.Tabs[0].Panes) != 4 {
+		t.Fatalf("payload = %#v, want page-example-aa with four panes", client.payload)
+	}
+	if !strings.Contains(stdout.String(), "request=req_tui session=page-example-aa") {
+		t.Fatalf("stdout = %q, want submit summary", stdout.String())
+	}
+}
+
+func TestRunTUICancelPrintsEnvelopeWithoutSubmitting(t *testing.T) {
+	client := &fakeAgentClient{}
+	var stdout, stderr bytes.Buffer
+	input := strings.Join([]string{
+		"localhost:8000/example/aa page source를 열어줘",
+		"n",
+		"",
+	}, "\n")
+
+	code := runWithInput([]string{
+		"tui",
+		"--agent-role-bin", "/tmp/runtime/bin/agent-role",
+	}, strings.NewReader(input), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("runWithInput() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if client.requestID != "" {
+		t.Fatalf("requestID = %q, want no submit after cancel", client.requestID)
+	}
+	if !strings.Contains(stderr.String(), "submit cancelled") {
+		t.Fatalf("stderr = %q, want cancellation message", stderr.String())
+	}
+	var envelope transport.RequestEnvelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatalf("cancel output JSON decode error = %v; output=%q", err, stdout.String())
+	}
+	if envelope.RequestID != "req_page-example-aa" {
+		t.Fatalf("envelope request = %q, want default request id", envelope.RequestID)
+	}
+}
+
+func TestRunTUIRequiresURLInChatMessage(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := runWithInput([]string{"tui", "--dry-run"}, strings.NewReader("페이지 열어줘\n"), &stdout, &stderr, fakeFactory(&fakeAgentClient{}))
+
+	if code != 2 {
+		t.Fatalf("runWithInput() exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "request must include a URL") {
+		t.Fatalf("stderr = %q, want missing URL error", stderr.String())
+	}
+}
+
+func TestRunTUIShowsUnreachableAgentd(t *testing.T) {
+	client := &fakeAgentClient{healthErr: errors.New("dial failed")}
+	var stdout, stderr bytes.Buffer
+
+	code := runWithInput([]string{
+		"tui",
+		"--goal", "localhost:8000/example/aa 페이지 열어줘",
+		"--dry-run",
+	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("runWithInput() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "agentd=unreachable") {
+		t.Fatalf("stderr = %q, want unreachable health status", stderr.String())
+	}
+}
+
+func TestExtractURL(t *testing.T) {
+	tests := []struct {
+		text string
+		want string
+	}{
+		{text: "localhost:8000/example/aa 페이지 열어줘", want: "http://localhost:8000/example/aa"},
+		{text: "http://localhost:8000/example/aa 확인", want: "http://localhost:8000/example/aa"},
+		{text: "https://example.test/path).", want: "https://example.test/path"},
+	}
+	for _, tt := range tests {
+		got, ok := extractURL(tt.text)
+		if !ok || got != tt.want {
+			t.Fatalf("extractURL(%q) = %q, %v; want %q, true", tt.text, got, ok, tt.want)
+		}
+	}
+}
+
 func fakeFactory(client *fakeAgentClient) clientFactory {
 	return func(socketPath string, timeout time.Duration) agentClient {
 		client.socketPath = socketPath
@@ -211,6 +364,14 @@ type fakeAgentClient struct {
 	timeout    time.Duration
 	requestID  string
 	payload    transport.ExecutionPlanPayload
+	healthErr  error
+}
+
+func (c *fakeAgentClient) Health(context.Context) (transport.HealthResponse, error) {
+	if c.healthErr != nil {
+		return transport.HealthResponse{}, c.healthErr
+	}
+	return transport.HealthResponse{Status: "ok", Version: "test"}, nil
 }
 
 func (c *fakeAgentClient) SubmitExecutionPlan(_ context.Context, requestID string, payload transport.ExecutionPlanPayload) (transport.ExecutionPlanResponse, error) {

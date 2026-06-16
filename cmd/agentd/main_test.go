@@ -77,19 +77,18 @@ func TestRunInvalidArgument(t *testing.T) {
 	}
 }
 
-func TestRunServeRequiresSocket(t *testing.T) {
+func TestRunServeDefaultsSocket(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"serve"}, &stdout, &stderr)
+	code := runContext(ctx, []string{"serve"}, &stdout, &stderr)
 
-	if code != 2 {
-		t.Fatalf("run() exit code = %d, want 2", code)
+	if code != 0 {
+		t.Fatalf("runContext() exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
-	}
-	if !strings.Contains(stderr.String(), "serve requires --socket") {
-		t.Fatalf("stderr = %q, want missing socket error", stderr.String())
+	if !strings.Contains(stdout.String(), "/tmp/agentd.sock") {
+		t.Fatalf("stdout = %q, want default socket path", stdout.String())
 	}
 }
 

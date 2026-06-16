@@ -22,13 +22,21 @@ The transport is local-only and still intended for developer validation, but ext
 
 ## Run
 
+For a command-by-command smoke flow covering daemon startup, TUI submission, pane creation, and cleanup, see `docs/zellij-agent-quickstart.md`.
+
 From the repository root:
 
 ```bash
 go test ./...
 ```
 
-Build the local binaries when you want to use the checked-in scripts:
+Build the unified local binary:
+
+```bash
+go build -o bin/zellij-agent ./cmd/zellij-agent
+```
+
+The legacy entrypoints are still available as compatibility wrappers when needed:
 
 ```bash
 go build -o bin/agentd ./cmd/agentd
@@ -40,7 +48,7 @@ go build -o bin/agent-role ./cmd/agent-role
 Start the current daemon entrypoint:
 
 ```bash
-go run ./cmd/agentd
+./bin/zellij-agent daemon
 ```
 
 Without subcommands, the entrypoint still prints `agentd daemon skeleton` for the original smoke path.
@@ -48,30 +56,33 @@ Without subcommands, the entrypoint still prints `agentd daemon skeleton` for th
 Start the local transport daemon:
 
 ```bash
-go run ./cmd/agentd serve --socket /tmp/agentd.sock
+./bin/zellij-agent daemon serve
 ```
 
-The `serve` command exposes JSON HTTP over the Unix socket. It does not bind a TCP port.
+The `serve` command exposes JSON HTTP over the default Unix socket `/tmp/agentd.sock`. It does not bind a TCP port. Pass `--socket <path>` only when you need an override.
+Use the built `zellij-agent` binary for planner flows so generated panes can call back into the same stable executable path.
 
-Use `agentctl` as the thin command-line client for the local socket:
+Use `zellij-agent ctl` as the thin command-line client for the local socket:
 
 ```bash
-go run ./cmd/agentctl health --socket /tmp/agentd.sock
-go run ./cmd/agentctl status --socket /tmp/agentd.sock
-go run ./cmd/agentctl plan --socket /tmp/agentd.sock --file examples/plans/agent-role-demo.json
-go run ./cmd/agent-planner page --socket /tmp/agentd.sock --url http://localhost:8000/example/aa --cwd "$PWD" --mock-source "$PWD/README.md" --ui
-go run ./cmd/agent-planner validate --file plan.json
-go run ./cmd/agent-planner submit --socket /tmp/agentd.sock --file plan.json --ui
-go run ./cmd/agentctl events --socket /tmp/agentd.sock --limit 20
-go run ./cmd/agentctl events --socket /tmp/agentd.sock --follow --type raw_output
-go run ./cmd/agentctl input --socket /tmp/agentd.sock coder --text $'go test ./...\n'
-go run ./cmd/agentctl snapshot --socket /tmp/agentd.sock coder --full
-go run ./cmd/agentctl cleanup --socket /tmp/agentd.sock --task feature-auth
+./bin/zellij-agent ctl health
+./bin/zellij-agent ctl status
+./bin/zellij-agent ctl plan --file examples/plans/agent-role-demo.json
+./bin/zellij-agent planner page --url http://localhost:8000/example/aa --cwd "$PWD" --ui
+./bin/zellij-agent planner tui
+./bin/zellij-agent planner validate --file plan.json
+./bin/zellij-agent planner submit --file plan.json --ui
+./bin/zellij-agent ctl events --limit 20
+./bin/zellij-agent ctl events --follow --type raw_output
+./bin/zellij-agent ctl input coder --text $'go test ./...\n'
+./bin/zellij-agent ctl snapshot coder --full
+./bin/zellij-agent ctl cleanup --task feature-auth
 ```
 
-`agentctl plan` accepts either a raw execution plan payload or a full `/v1/requests` envelope.
-`agent-planner page` is a mock planner path for URL-based page inspection. It resolves the page source from `--mock-source`, generates a canonical `/v1/requests` `execution_plan`, and submits panes for editor, LSP, network, and console inspection. Add `--dry-run` to print the envelope without contacting `agentd`.
-`agent-planner validate` and `agent-planner submit` accept AI-generated JSON files, require the canonical `/v1/requests` envelope, and reject legacy or unknown payload fields before submission.
+`zellij-agent ctl plan` accepts either a raw execution plan payload or a full `/v1/requests` envelope.
+`zellij-agent planner page` is a mock planner path for URL-based page inspection. It uses a built-in mock source by default, generates a canonical `/v1/requests` `execution_plan`, and submits panes for editor, LSP, network, and console inspection. Add `--dry-run` to print the envelope without contacting `agentd`.
+`zellij-agent planner tui` provides the same mock planner path through a single chat-style prompt. Include the URL in the natural-language request, for example `localhost:8000/example/aa 페이지 소스 열고 네트워크/콘솔 확인해줘`; the mock source and cwd default from the current repo, and generated panes call back into `zellij-agent role`.
+`zellij-agent planner validate` and `zellij-agent planner submit` accept AI-generated JSON files, require the canonical `/v1/requests` envelope, and reject legacy or unknown payload fields before submission.
 
 ## Runtime Service Shape
 
@@ -102,7 +113,7 @@ The core operations are:
 
 ## Transport API
 
-`agentd serve --socket <path>` exposes these local endpoints:
+`zellij-agent daemon serve` exposes these local endpoints on `/tmp/agentd.sock` by default:
 
 - `GET /v1/health`
 - `POST /v1/requests`

@@ -11,6 +11,7 @@ var ErrMissingMockSource = errors.New("planner: mock source is required")
 
 type MockSourceResolver struct {
 	SourcePath string
+	Reason     string
 }
 
 func (r MockSourceResolver) ResolveSource(_ context.Context, req ResolveSourceRequest) (ResolveSourceResult, error) {
@@ -21,10 +22,14 @@ func (r MockSourceResolver) ResolveSource(_ context.Context, req ResolveSourceRe
 	if strings.TrimSpace(req.URL) == "" {
 		return ResolveSourceResult{}, fmt.Errorf("%w: url is required", ErrInvalidResolveSourceRequest)
 	}
+	reason := strings.TrimSpace(r.Reason)
+	if reason == "" {
+		reason = "provided by --mock-source"
+	}
 	return ResolveSourceResult{
 		URL:        req.URL,
 		SourcePath: sourcePath,
 		CWD:        req.CWD,
-		Reason:     "provided by --mock-source",
+		Reason:     reason,
 	}, nil
 }
