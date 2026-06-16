@@ -23,7 +23,7 @@
         {
           "id": "editor",
           "role": "editor",
-          "command": ["nvim", "README.md"]
+          "command": ["./bin/agent-role", "editor", "README.md"]
         }
       ]
     }

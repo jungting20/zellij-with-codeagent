@@ -1,24 +1,28 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 
 	"zellij-with-codeagent/cmd/agent-role/coder"
 	"zellij-with-codeagent/cmd/agent-role/console"
+	"zellij-with-codeagent/cmd/agent-role/editor"
 	"zellij-with-codeagent/cmd/agent-role/lsp"
 	"zellij-with-codeagent/cmd/agent-role/network"
+	"zellij-with-codeagent/internal/roles"
 )
 
 // Print usage helper
 func printUsage() {
 	fmt.Println("Usage: agent-role <role> [options]")
 	fmt.Println("Available roles:")
-	fmt.Println("  coder                   - Visualizes coding agent status")
-	fmt.Println("  lsp [options] <file>    - Prints a TypeScript/TSX call and component tree")
-	fmt.Println("  network-tracker --url   - Visualizes network tracking for a specific URL")
-	fmt.Println("  console-tracker --url   - Visualizes console log tracking for a specific URL")
+	for _, role := range roles.All() {
+		fmt.Printf("  %-28s - %s\n", role.Usage, role.Description)
+	}
+	fmt.Println("  roles [--json]              - Lists available role descriptions")
 }
 
 func main() {
@@ -29,18 +33,53 @@ func main() {
 
 	role := os.Args[1]
 	switch role {
-	case "coder":
+	case roles.RoleCoder:
 		coder.Run()
-	case "lsp":
+	case roles.RoleEditor:
+		editor.Run(os.Args[2:])
+	case roles.RoleLSP:
 		lsp.Run(os.Args[2:])
-	case "network-tracker":
+	case roles.RoleNetworkTracker:
 		runNetworkTracker(os.Args[2:])
-	case "console-tracker":
+	case roles.RoleConsoleTracker:
 		runConsoleTracker(os.Args[2:])
+	case "roles":
+		runRoles(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown role '%s'\n", role)
 		printUsage()
 		os.Exit(1)
+	}
+}
+
+func runRoles(args []string) {
+	fs := flag.NewFlagSet("roles", flag.ExitOnError)
+	jsonOutput := fs.Bool("json", false, "print role descriptions as JSON")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
+		os.Exit(2)
+	}
+	if fs.NArg() != 0 {
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	roleSpecs := roles.All()
+	if *jsonOutput {
+		var buf bytes.Buffer
+		encoder := json.NewEncoder(&buf)
+		encoder.SetEscapeHTML(false)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(roleSpecs); err != nil {
+			fmt.Fprintf(os.Stderr, "Error encoding roles: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(buf.String())
+		return
+	}
+
+	for _, role := range roleSpecs {
+		fmt.Printf("%-28s %s\n", role.Usage, role.Description)
 	}
 }
 

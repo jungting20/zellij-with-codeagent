@@ -1,0 +1,37 @@
+{
+  "type": "execution_plan",
+  "request_id": "req_badge_category_source_lsp",
+  "payload": {
+    "url": "/Users/in05908_mac/mysunny/sku-admin-front/sku-manager-front/src/certification/badge/category/ui/logic/BadgeCategoryManagementListContainer.tsx",
+    "resolved_source": "/Users/in05908_mac/mysunny/sku-admin-front/sku-manager-front/src/certification/badge/category/ui/logic/BadgeCategoryManagementListContainer.tsx",
+    "session": "badge-category-source-lsp",
+    "layout": "triple-horizontal",
+    "tabs": [
+      {
+        "name": "badge-category-source-lsp",
+        "panes": [
+          {
+            "id": "badge-category-editor",
+            "role": "editor",
+            "cwd": "/Users/in05908_mac/mysunny/sku-admin-front/sku-manager-front",
+            "command": [
+              "/Users/in05908_mac/zellij-with-codeagent/bin/agent-role",
+              "editor",
+              "/Users/in05908_mac/mysunny/sku-admin-front/sku-manager-front/src/certification/badge/category/ui/logic/BadgeCategoryManagementListContainer.tsx"
+            ]
+          },
+          {
+            "id": "badge-category-lsp",
+            "role": "lsp",
+            "cwd": "/Users/in05908_mac/mysunny/sku-admin-front/sku-manager-front",
+            "command": [
+              "sh",
+              "-lc",
+              "/Users/in05908_mac/zellij-with-codeagent/bin/agent-role lsp --max-depth 2 /Users/in05908_mac/mysunny/sku-admin-front/sku-manager-front/src/certification/badge/category/ui/logic/BadgeCategoryManagementListContainer.tsx; printf '\\n[lsp role finished; shell kept open for inspection]\\n'; exec sh"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
