@@ -45,9 +45,9 @@ func Run(args []string) int {
 	case roles.RoleLSP:
 		lsp.Run(args[1:])
 	case roles.RoleNetworkTracker:
-		runNetworkTracker(args[1:])
+		return network.Run(args[1:])
 	case roles.RoleConsoleTracker:
-		runConsoleTracker(args[1:])
+		return console.Run(args[1:])
 	case roles.RoleCodingAgent:
 		return codingagent.Run(args[1:])
 	case "roles":
@@ -89,42 +89,4 @@ func runRoles(args []string) {
 	for _, role := range roleSpecs {
 		fmt.Printf("%-28s %s\n", role.Usage, role.Description)
 	}
-}
-
-// runNetworkTracker handles network tracker command arguments
-func runNetworkTracker(args []string) {
-	fs := flag.NewFlagSet("network-tracker", flag.ExitOnError)
-	urlPtr := fs.String("url", "", "Target URL to track network activity")
-
-	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
-		os.Exit(1)
-	}
-
-	if urlPtr == nil || *urlPtr == "" {
-		fmt.Fprintln(os.Stderr, "Error: --url parameter is required for network-tracker")
-		fs.Usage()
-		os.Exit(1)
-	}
-
-	network.Run(*urlPtr)
-}
-
-// runConsoleTracker handles console tracker command arguments
-func runConsoleTracker(args []string) {
-	fs := flag.NewFlagSet("console-tracker", flag.ExitOnError)
-	urlPtr := fs.String("url", "", "Target URL to track console logs")
-
-	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
-		os.Exit(1)
-	}
-
-	if urlPtr == nil || *urlPtr == "" {
-		fmt.Fprintln(os.Stderr, "Error: --url parameter is required for console-tracker")
-		fs.Usage()
-		os.Exit(1)
-	}
-
-	console.Run(*urlPtr)
 }

@@ -2,9 +2,10 @@ package network
 
 import (
 	"context"
+	"flag"
 	"fmt"
-	"log"
 	"net/url"
+	"os"
 	"sync"
 	"time"
 
@@ -20,16 +21,37 @@ type requestInfo struct {
 	Timestamp time.Time
 }
 
-// Run starts the network tracker using chromedp to capture real network traffic
-func Run(targetURL string) {
+// Run parses network tracker arguments and starts browser network monitoring.
+func Run(args []string) int {
+	fs := flag.NewFlagSet("network-tracker", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	urlPtr := fs.String("url", "", "Target URL to track network activity")
+
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	if urlPtr == nil || *urlPtr == "" {
+		fmt.Fprintln(os.Stderr, "Error: --url parameter is required for network-tracker")
+		fs.Usage()
+		return 1
+	}
+
+	return run(*urlPtr)
+}
+
+// run starts the network tracker using chromedp to capture real network traffic.
+func run(targetURL string) int {
 	if targetURL == "" {
-		log.Fatal("Error: target URL is empty")
+		fmt.Fprintln(os.Stderr, "Error: target URL is empty")
+		return 1
 	}
 
 	// Parse URL to display host info
 	parsed, err := url.Parse(targetURL)
 	if err != nil {
-		log.Fatalf("Invalid URL: %v", err)
+		fmt.Fprintf(os.Stderr, "Invalid URL: %v\n", err)
+		return 1
 	}
 	host := parsed.Host
 
@@ -94,7 +116,7 @@ func Run(targetURL string) {
 			// Format network log line
 			sizeKB := float64(ev.Response.EncodedDataLength) / 1024.0
 			logLine := formatNetworkLog(method, path, int(ev.Response.Status), sizeKB, int(latency))
-			
+
 			logs = append(logs, logLine)
 			if len(logs) > maxLogs {
 				logs = logs[1:]
@@ -130,7 +152,8 @@ func Run(targetURL string) {
 		chromedp.Navigate(targetURL),
 	)
 	if err != nil {
-		log.Fatalf("Error running chromedp: %v", err)
+		fmt.Fprintf(os.Stderr, "Error running chromedp: %v\n", err)
+		return 1
 	}
 
 	// Keep browser alive and listen to events infinitely

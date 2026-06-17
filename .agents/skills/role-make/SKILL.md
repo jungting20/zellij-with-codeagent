@@ -14,6 +14,7 @@ Use this skill to add roles consistently in this repository. A role normally has
 - Role implementation under `cmd/agent-role/<package>/`
 
 Follow the existing role style. Use `coding-agent` as the reference pattern for roles that launch an external command.
+For roles with arguments, keep argument parsing inside the role package, not in `internal/cli/role/role.go`.
 
 ## Workflow
 
@@ -43,14 +44,16 @@ Follow the existing role style. Use `coding-agent` as the reference pattern for 
 5. Add the implementation package.
    - Create `cmd/agent-role/<package>/<package>.go`.
    - Expose `Run(args []string) int`.
-   - Put argument validation and command construction in small helper functions so tests can run without launching external interactive tools.
+   - Parse and validate role-specific arguments inside `Run(args []string) int`; return non-zero instead of calling `os.Exit`.
+   - Put command construction or long-running role startup in small helper functions so tests can run without launching external interactive tools.
    - Wire `os.Stdin`, `os.Stdout`, and `os.Stderr` only in `Run`.
    - Return child process exit codes when launching external commands.
 
 6. Wire CLI dispatch.
    - Import the new role package in `internal/cli/role/role.go`.
    - Add a `case roles.Role<Name>:` branch in `Run`.
-   - Return the role package's exit code when the role has one.
+   - Return the role package's exit code, for example `return network.Run(args[1:])`.
+   - Do not add role-specific wrapper helpers in `internal/cli/role/role.go`; the dispatcher should only select the package.
 
 7. Update planner code only when requested.
    - Planner-generated roles are usually in `internal/planner/page.go`.

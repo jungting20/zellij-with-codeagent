@@ -2,9 +2,10 @@ package console
 
 import (
 	"context"
+	"flag"
 	"fmt"
-	"log"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -15,16 +16,37 @@ import (
 	"zellij-with-codeagent/cmd/agent-role/ui"
 )
 
-// Run starts the console tracker using chromedp to capture real browser console logs
-func Run(targetURL string) {
+// Run parses console tracker arguments and starts browser console monitoring.
+func Run(args []string) int {
+	fs := flag.NewFlagSet("console-tracker", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	urlPtr := fs.String("url", "", "Target URL to track console logs")
+
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	if urlPtr == nil || *urlPtr == "" {
+		fmt.Fprintln(os.Stderr, "Error: --url parameter is required for console-tracker")
+		fs.Usage()
+		return 1
+	}
+
+	return run(*urlPtr)
+}
+
+// run starts the console tracker using chromedp to capture real browser console logs.
+func run(targetURL string) int {
 	if targetURL == "" {
-		log.Fatal("Error: target URL is empty")
+		fmt.Fprintln(os.Stderr, "Error: target URL is empty")
+		return 1
 	}
 
 	// Parse URL to display host info
 	parsed, err := url.Parse(targetURL)
 	if err != nil {
-		log.Fatalf("Invalid URL: %v", err)
+		fmt.Fprintf(os.Stderr, "Invalid URL: %v\n", err)
+		return 1
 	}
 	host := parsed.Host
 
@@ -103,7 +125,8 @@ func Run(targetURL string) {
 		chromedp.Navigate(targetURL),
 	)
 	if err != nil {
-		log.Fatalf("Error running chromedp: %v", err)
+		fmt.Fprintf(os.Stderr, "Error running chromedp: %v\n", err)
+		return 1
 	}
 
 	// Keep browser alive and listen to events infinitely
