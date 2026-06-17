@@ -19,6 +19,7 @@ const (
 	RoleLSP            = "lsp"
 	RoleNetworkTracker = "network-tracker"
 	RoleConsoleTracker = "console-tracker"
+	RoleCodingAgent    = "coding-agent"
 )
 
 var specs = []RoleSpec{
@@ -60,6 +61,14 @@ var specs = []RoleSpec{
 		Description: "Visualizes console log tracking for a specific browser URL.",
 		Arguments: []ArgumentSpec{
 			{Name: "--url", Required: true, Description: "Target URL to track console logs for."},
+		},
+	},
+	{
+		Name:        RoleCodingAgent,
+		Usage:       "coding-agent <path>",
+		Description: "Runs Codex coding agent in the repository containing the target path.",
+		Arguments: []ArgumentSpec{
+			{Name: "path", Required: true, Description: "File or directory path inside the repository where Codex should run."},
 		},
 	},
 }

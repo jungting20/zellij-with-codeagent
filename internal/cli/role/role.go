@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"zellij-with-codeagent/cmd/agent-role/coder"
+	"zellij-with-codeagent/cmd/agent-role/codingagent"
 	"zellij-with-codeagent/cmd/agent-role/console"
 	"zellij-with-codeagent/cmd/agent-role/editor"
 	"zellij-with-codeagent/cmd/agent-role/lsp"
@@ -47,6 +48,8 @@ func Run(args []string) int {
 		runNetworkTracker(args[1:])
 	case roles.RoleConsoleTracker:
 		runConsoleTracker(args[1:])
+	case roles.RoleCodingAgent:
+		return codingagent.Run(args[1:])
 	case "roles":
 		runRoles(args[1:])
 	default:
