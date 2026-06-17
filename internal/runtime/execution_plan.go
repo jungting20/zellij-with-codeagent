@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"zellij-with-codeagent/internal/registry"
 )
@@ -50,6 +51,12 @@ type ApplyExecutionPlanResponse struct {
 	Tabs      []ExecutionPlanTabResult
 }
 
+type executionPlanPaneResult struct {
+	index int
+	pane  Pane
+	err   error
+}
+
 func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlanRequest) (ApplyExecutionPlanResponse, error) {
 	if err := validateExecutionPlan(req); err != nil {
 		return ApplyExecutionPlanResponse{}, err
@@ -68,37 +75,38 @@ func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlan
 		var tabID *ZellijTabID
 		createdTabPanes := make([]Pane, 0, len(tabSpec.Panes))
 
-		for j, spec := range tabSpec.Panes {
-			createReq := CreatePaneRequest{
-				ID:      spec.ID,
-				TaskID:  taskID,
-				AgentID: spec.AgentID,
-				Role:    spec.Role,
-				Name:    string(spec.ID),
-				TabName: tabName,
-				CWD:     spec.CWD,
-				Command: executionPlanCommand(spec),
-			}
-			if j == 0 {
-				createReq.NewTab = true
-			} else {
-				if tabID == nil {
-					_ = s.rollbackExecutionPlan(ctx, createdAll)
-					return ApplyExecutionPlanResponse{}, fmt.Errorf("%w: first pane missing zellij tab id in tab %q", ErrInvalidExecutionPlan, tabName)
-				}
-				createReq.ZellijTabID = tabID
-			}
+		firstSpec := tabSpec.Panes[0]
+		response, err := s.CreatePane(ctx, CreatePaneRequest{
+			ID:      firstSpec.ID,
+			TaskID:  taskID,
+			AgentID: firstSpec.AgentID,
+			Role:    firstSpec.Role,
+			Name:    string(firstSpec.ID),
+			NewTab:  true,
+			TabName: tabName,
+			CWD:     firstSpec.CWD,
+			Command: executionPlanCommand(firstSpec),
+		})
+		if err != nil {
+			_ = s.rollbackExecutionPlan(ctx, createdAll)
+			return ApplyExecutionPlanResponse{}, err
+		}
+		tabID = response.Pane.ZellijTabID
+		createdTabPanes = append(createdTabPanes, response.Pane)
+		createdAll = append(createdAll, response.Pane)
 
-			response, err := s.CreatePane(ctx, createReq)
-			if err != nil {
+		if len(tabSpec.Panes) > 1 {
+			if tabID == nil {
 				_ = s.rollbackExecutionPlan(ctx, createdAll)
+				return ApplyExecutionPlanResponse{}, fmt.Errorf("%w: first pane missing zellij tab id in tab %q", ErrInvalidExecutionPlan, tabName)
+			}
+			remaining, err := s.createRemainingExecutionPlanTabPanes(ctx, taskID, tabName, *tabID, tabSpec.Panes[1:])
+			if err != nil {
+				_ = s.rollbackExecutionPlan(ctx, append(createdAll, remaining...))
 				return ApplyExecutionPlanResponse{}, err
 			}
-			if j == 0 {
-				tabID = response.Pane.ZellijTabID
-			}
-			createdTabPanes = append(createdTabPanes, response.Pane)
-			createdAll = append(createdAll, response.Pane)
+			createdTabPanes = append(createdTabPanes, remaining...)
+			createdAll = append(createdAll, remaining...)
 		}
 
 		tabResults = append(tabResults, ExecutionPlanTabResult{
@@ -113,6 +121,63 @@ func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlan
 		Layout:    req.Layout,
 		Tabs:      tabResults,
 	}, nil
+}
+
+func (s *Service) createRemainingExecutionPlanTabPanes(ctx context.Context, taskID TaskID, tabName string, tabID ZellijTabID, specs []ExecutionPlanPaneSpec) ([]Pane, error) {
+	if len(specs) == 0 {
+		return nil, nil
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make(chan executionPlanPaneResult, len(specs))
+	var wg sync.WaitGroup
+	for i, spec := range specs {
+		i, spec := i, spec
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			response, err := s.CreatePane(ctx, CreatePaneRequest{
+				ID:          spec.ID,
+				TaskID:      taskID,
+				AgentID:     spec.AgentID,
+				Role:        spec.Role,
+				Name:        string(spec.ID),
+				TabName:     tabName,
+				ZellijTabID: &tabID,
+				CWD:         spec.CWD,
+				Command:     executionPlanCommand(spec),
+			})
+			if err != nil {
+				cancel()
+				results <- executionPlanPaneResult{index: i, err: err}
+				return
+			}
+			results <- executionPlanPaneResult{index: i, pane: response.Pane}
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	panes := make([]Pane, len(specs))
+	created := make([]Pane, 0, len(specs))
+	var firstErr error
+	for result := range results {
+		if result.err != nil {
+			if firstErr == nil {
+				firstErr = result.err
+			}
+			continue
+		}
+		panes[result.index] = result.pane
+		created = append(created, result.pane)
+	}
+	if firstErr != nil {
+		return created, firstErr
+	}
+	return panes, nil
 }
 
 func validateExecutionPlan(req ApplyExecutionPlanRequest) error {

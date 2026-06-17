@@ -9,8 +9,10 @@ import (
 	"zellij-with-codeagent/internal/transport"
 )
 
-type agentClient = ctlcli.AgentClient
-type clientFactory = ctlcli.ClientFactory
+type (
+	agentClient   = ctlcli.AgentClient
+	clientFactory = ctlcli.ClientFactory
+)
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, func(socketPath string, timeout time.Duration) agentClient {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -536,6 +537,8 @@ func zellijTabID(id zellij.TabID) *zellij.TabID {
 }
 
 type fakeBackend struct {
+	mu sync.Mutex
+
 	createID    zellij.PaneID
 	createIDs   []zellij.PaneID
 	createTabID zellij.TabID
@@ -559,6 +562,8 @@ type fakeBackend struct {
 	sendRequests      []zellij.SendInputRequest
 	dumpRequests      []zellij.DumpScreenRequest
 	listCalls         []struct{}
+
+	beforeCreatePane func(context.Context, zellij.CreatePaneRequest, int) error
 }
 
 func (b *fakeBackend) Session() string {
@@ -566,6 +571,8 @@ func (b *fakeBackend) Session() string {
 }
 
 func (b *fakeBackend) CreateTab(_ context.Context, req zellij.CreateTabRequest) (zellij.TabID, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.createTabRequests = append(b.createTabRequests, zellij.CreateTabRequest{
 		Name:    req.Name,
 		CWD:     req.CWD,
@@ -586,23 +593,40 @@ func (b *fakeBackend) CloseTab(_ context.Context, req zellij.CloseTabRequest) er
 		clone := *req.TabID
 		tabID = &clone
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.closeTabRequests = append(b.closeTabRequests, zellij.CloseTabRequest{TabID: tabID})
 	return b.closeTabErr
 }
 
-func (b *fakeBackend) CreatePane(_ context.Context, req zellij.CreatePaneRequest) (zellij.PaneID, error) {
+func (b *fakeBackend) CreatePane(ctx context.Context, req zellij.CreatePaneRequest) (zellij.PaneID, error) {
 	var tabID *zellij.TabID
 	if req.TabID != nil {
 		clone := *req.TabID
 		tabID = &clone
 	}
-	b.createRequests = append(b.createRequests, zellij.CreatePaneRequest{
+	cloned := zellij.CreatePaneRequest{
 		Name:     req.Name,
 		CWD:      req.CWD,
 		TabID:    tabID,
 		Floating: req.Floating,
 		Command:  cloneStrings(req.Command),
-	})
+	}
+
+	b.mu.Lock()
+	b.createRequests = append(b.createRequests, cloned)
+	call := len(b.createRequests)
+	hook := b.beforeCreatePane
+	b.mu.Unlock()
+
+	if hook != nil {
+		if err := hook(ctx, cloned, call); err != nil {
+			return "", err
+		}
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.createErr != nil {
 		return "", b.createErr
 	}
@@ -618,6 +642,8 @@ func (b *fakeBackend) CreatePane(_ context.Context, req zellij.CreatePaneRequest
 }
 
 func (b *fakeBackend) ClosePane(_ context.Context, req zellij.ClosePaneRequest) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.closeRequests = append(b.closeRequests, req)
 	if err := b.closeErrByPane[req.PaneID]; err != nil {
 		return err
@@ -626,11 +652,15 @@ func (b *fakeBackend) ClosePane(_ context.Context, req zellij.ClosePaneRequest) 
 }
 
 func (b *fakeBackend) SendInput(_ context.Context, req zellij.SendInputRequest) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.sendRequests = append(b.sendRequests, req)
 	return b.sendErr
 }
 
 func (b *fakeBackend) ListPanes(context.Context) ([]zellij.Pane, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.listCalls = append(b.listCalls, struct{}{})
 	if b.listErr != nil {
 		return nil, b.listErr
@@ -642,6 +672,8 @@ func (b *fakeBackend) ListPanes(context.Context) ([]zellij.Pane, error) {
 }
 
 func (b *fakeBackend) DumpScreen(_ context.Context, req zellij.DumpScreenRequest) (string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.dumpRequests = append(b.dumpRequests, req)
 	if b.dumpErr != nil {
 		return "", b.dumpErr

@@ -7,8 +7,7 @@ This flow verifies the unified `zellij-agent` CLI from build to daemon startup, 
 - Go 1.22 or newer
 - Zellij available as `zellij`
 - Commands run from the repository root
-- A Zellij session for real pane creation
-- `nvim` available for the editor role
+- A Zellij session for real pane creation `nvim` available for the editor role
 
 ## 1. Build The Unified CLI
 
@@ -62,7 +61,63 @@ Expected health output:
 agentd ok (dev)
 ```
 
-## 5. Preview The TUI Plan Without Creating Panes
+## 5. Submit A JSON Plan With ctl
+
+Create a normal JSON request envelope:
+
+```bash
+cat >/tmp/zellij-agent-quickstart.json <<'JSON'
+{
+  "type": "execution_plan",
+  "request_id": "req_quickstart_json",
+  "payload": {
+    "session": "quickstart-json",
+    "layout": "triple-horizontal",
+    "tabs": [
+      {
+        "name": "quickstart-json",
+        "panes": [
+          {
+            "id": "quickstart-shell",
+            "role": "shell",
+            "command": [
+              "sh",
+              "-lc",
+              "printf 'quickstart json pane ready\\n'; exec sh"
+            ]
+          },
+          {
+            "id": "quickstart-worker",
+            "role": "worker",
+            "command": [
+              "sh",
+              "-lc",
+              "printf 'quickstart worker ready\\n'; exec sh"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+JSON
+```
+
+Submit it through the local daemon with `ctl plan`:
+
+```bash
+./bin/zellij-agent ctl plan --file /tmp/zellij-agent-quickstart.json
+```
+
+Expected output:
+
+```text
+request=req_quickstart_json session=quickstart-json layout=triple-horizontal
+```
+
+`ctl plan` also accepts a raw execution plan payload without the outer `type`, `request_id`, and `payload` envelope. Use `--request-id` when submitting a raw payload and you want a stable request ID.
+
+## 6. Preview The TUI Plan Without Creating Panes
 
 ```bash
 ./bin/zellij-agent planner tui \
@@ -78,7 +133,7 @@ zellij-agent role network-tracker
 zellij-agent role console-tracker
 ```
 
-## 6. Run TUI And Create Panes
+## 7. Run TUI And Create Panes
 
 Non-interactive smoke command:
 
@@ -111,14 +166,20 @@ page-network
 page-console
 ```
 
-## 7. Inspect Created Panes
+## 8. Inspect Created Panes
 
 ```bash
 ./bin/zellij-agent ctl status
 ./bin/zellij-agent ctl events --limit 20
 ```
 
-Snapshot a pane:
+Snapshot a JSON-created pane:
+
+```bash
+./bin/zellij-agent ctl snapshot quickstart-shell --full
+```
+
+Or snapshot a TUI-created pane:
 
 ```bash
 ./bin/zellij-agent ctl snapshot page-console --full
@@ -130,11 +191,12 @@ Send input to a pane if needed:
 ./bin/zellij-agent ctl input page-editor --text $':q\n'
 ```
 
-## 8. Cleanup
+## 9. Cleanup
 
 The example URL path `/` maps to the task/session `page-root`.
 
 ```bash
+./bin/zellij-agent ctl cleanup --task quickstart-json
 ./bin/zellij-agent ctl cleanup --task page-root
 ./bin/zellij-agent ctl status
 ```
@@ -154,9 +216,38 @@ In another pane:
 
 ```bash
 ./bin/zellij-agent ctl health
+cat >/tmp/zellij-agent-quickstart.json <<'JSON'
+{
+  "type": "execution_plan",
+  "request_id": "req_quickstart_json",
+  "payload": {
+    "session": "quickstart-json",
+    "layout": "triple-horizontal",
+    "tabs": [
+      {
+        "name": "quickstart-json",
+        "panes": [
+          {
+            "id": "quickstart-shell",
+            "role": "shell",
+            "command": ["sh", "-lc", "printf 'quickstart json pane ready\\n'; exec sh"]
+          },
+          {
+            "id": "quickstart-worker",
+            "role": "worker",
+            "command": ["sh", "-lc", "printf 'quickstart worker ready\\n'; exec sh"]
+          }
+        ]
+      }
+    ]
+  }
+}
+JSON
+./bin/zellij-agent ctl plan --file /tmp/zellij-agent-quickstart.json
 ./bin/zellij-agent planner tui --goal "https://example.com 페이지 소스 열고 네트워크/콘솔 확인해줘" --dry-run
 ./bin/zellij-agent planner tui --goal "https://example.com 페이지 소스 열고 네트워크/콘솔 확인해줘" --auto-submit
 ./bin/zellij-agent ctl status
 ./bin/zellij-agent ctl events --limit 20
+./bin/zellij-agent ctl cleanup --task quickstart-json
 ./bin/zellij-agent ctl cleanup --task page-root
 ```

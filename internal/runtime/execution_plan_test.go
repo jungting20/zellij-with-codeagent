@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sort"
 	"testing"
+	"time"
 
 	"zellij-with-codeagent/internal/zellij"
 )
@@ -72,6 +74,64 @@ func TestApplyExecutionPlanCreatesPanesInOneTab(t *testing.T) {
 	}
 	if !reflect.DeepEqual(backend.createRequests[0], wantSecond) {
 		t.Fatalf("second CreatePane = %#v, want %#v", backend.createRequests[0], wantSecond)
+	}
+}
+
+func TestApplyExecutionPlanCreatesRemainingTabPanesConcurrently(t *testing.T) {
+	tabID := ZellijTabID(21)
+	release := make(chan struct{})
+	started := make(chan string, 2)
+	backend := &fakeBackend{
+		createTabID: zellij.TabID(tabID),
+		listPanes: []zellij.Pane{
+			{ID: "terminal_21a", TabID: int(tabID), TabName: "feature-auth"},
+			{ID: "terminal_21b", TabID: int(tabID), TabName: "feature-auth"},
+			{ID: "terminal_21c", TabID: int(tabID), TabName: "feature-auth"},
+		},
+		createIDs: []zellij.PaneID{"terminal_21b", "terminal_21c"},
+		beforeCreatePane: func(ctx context.Context, req zellij.CreatePaneRequest, call int) error {
+			started <- req.Name
+			if call == 2 {
+				close(release)
+			}
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	}
+	service := newTestService(backend)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	response, err := service.ApplyExecutionPlan(ctx, ApplyExecutionPlanRequest{
+		RequestID: "req_123",
+		Session:   "feature-auth",
+		Layout:    "triple-horizontal",
+		Tabs: []ExecutionPlanTabSpec{
+			{
+				Name: "feature-auth",
+				Panes: []ExecutionPlanPaneSpec{
+					{ID: "planner", Role: "planner"},
+					{ID: "frontend", Role: "react-dev"},
+					{ID: "console", Role: "console-tracker"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyExecutionPlan() error = %v, want remaining panes created concurrently", err)
+	}
+	if len(response.Tabs) != 1 || len(response.Tabs[0].Panes) != 3 {
+		t.Fatalf("ApplyExecutionPlan() panes = %#v, want three panes", response.Tabs)
+	}
+
+	gotStarted := []string{<-started, <-started}
+	sort.Strings(gotStarted)
+	if !reflect.DeepEqual(gotStarted, []string{"console", "frontend"}) {
+		t.Fatalf("concurrent CreatePane starts = %#v, want frontend and console", gotStarted)
 	}
 }
 
