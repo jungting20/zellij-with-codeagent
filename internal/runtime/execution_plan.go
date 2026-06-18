@@ -13,12 +13,6 @@ var (
 	ErrInvalidExecutionPlan = errors.New("runtime: invalid execution plan")
 )
 
-// SupportedExecutionPlanLayouts lists layout values accepted in v1.
-// Physical Zellij layout application is deferred; layout is validated metadata.
-var SupportedExecutionPlanLayouts = map[string]struct{}{
-	"triple-horizontal": {},
-}
-
 type ExecutionPlanPaneSpec struct {
 	ID      PaneID
 	Role    string
@@ -183,11 +177,6 @@ func (s *Service) createRemainingExecutionPlanTabPanes(ctx context.Context, task
 func validateExecutionPlan(req ApplyExecutionPlanRequest) error {
 	if req.Session == "" {
 		return fmt.Errorf("%w: session is required", ErrInvalidExecutionPlan)
-	}
-	if req.Layout != "" {
-		if _, ok := SupportedExecutionPlanLayouts[req.Layout]; !ok {
-			return fmt.Errorf("%w: unsupported layout %q", ErrInvalidExecutionPlan, req.Layout)
-		}
 	}
 	if len(req.Tabs) == 0 {
 		return fmt.Errorf("%w: at least one tab is required", ErrInvalidExecutionPlan)

@@ -50,9 +50,6 @@ func validateExecutionPlanPayload(payload transport.ExecutionPlanPayload) error 
 	if payload.Session == "" {
 		return fmt.Errorf("%w: payload.session is required", ErrInvalidExecutionPlanEnvelope)
 	}
-	if payload.Layout != "" && payload.Layout != "triple-horizontal" {
-		return fmt.Errorf("%w: unsupported payload.layout %q", ErrInvalidExecutionPlanEnvelope, payload.Layout)
-	}
 	if len(payload.Tabs) == 0 {
 		return fmt.Errorf("%w: payload.tabs must contain at least one tab", ErrInvalidExecutionPlanEnvelope)
 	}

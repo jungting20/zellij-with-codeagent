@@ -8,6 +8,7 @@ This is a Go module for a Zellij-backed agent runtime. Command entrypoints live 
 
 - `go test ./...`: runs the normal unit test suite.
 - `go build -o bin/zellij-agent ./cmd/zellij-agent`: builds the preferred local CLI/daemon binary.
+- After changes that require rebuilding the unified binary, run `go build -o bin/zellij-agent ./cmd/zellij-agent` and then immediately run `cp bin/zellij-agent ~/.config/custom-cli` so the updated binary is registered on the custom-cli PATH.
 - `go build -o bin/agentd ./cmd/agentd` and `go build -o bin/agentctl ./cmd/agentctl`: builds legacy compatibility entrypoints.
 - `./bin/zellij-agent daemon serve`: starts the local JSON HTTP transport on the default Unix socket, `/tmp/agentd.sock`.
 - `./scripts/smoke-agentctl.sh`: runs the daemon/client smoke flow; requires built binaries, Zellij, and Neovim.

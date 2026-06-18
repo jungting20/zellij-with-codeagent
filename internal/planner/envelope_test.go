@@ -58,3 +58,23 @@ func TestParseExecutionPlanEnvelopeRejectsDuplicatePaneIDs(t *testing.T) {
 		t.Fatalf("ParseExecutionPlanEnvelope() error = %v, want ErrInvalidExecutionPlanEnvelope", err)
 	}
 }
+
+func TestParseExecutionPlanEnvelopeAllowsArbitraryLayoutMetadata(t *testing.T) {
+	plan, err := ParseExecutionPlanEnvelope([]byte(`{
+		"type": "execution_plan",
+		"request_id": "req_page",
+		"payload": {
+			"session": "page-example",
+			"layout": "custom-grid",
+			"tabs": [
+				{"name": "page-example", "panes": [{"id": "page-editor"}]}
+			]
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("ParseExecutionPlanEnvelope() error = %v", err)
+	}
+	if plan.Payload.Layout != "custom-grid" {
+		t.Fatalf("payload layout = %q, want custom-grid", plan.Payload.Layout)
+	}
+}

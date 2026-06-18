@@ -135,16 +135,35 @@ func TestApplyExecutionPlanCreatesRemainingTabPanesConcurrently(t *testing.T) {
 	}
 }
 
-func TestApplyExecutionPlanRejectsInvalidLayout(t *testing.T) {
-	service := newTestService(&fakeBackend{})
+func TestApplyExecutionPlanAllowsArbitraryLayoutMetadata(t *testing.T) {
+	tabID := ZellijTabID(15)
+	backend := &fakeBackend{
+		createTabID: zellij.TabID(tabID),
+		listPanes: []zellij.Pane{
+			{ID: "terminal_15a", TabID: int(tabID), TabName: "feature-auth"},
+		},
+		createIDs: []zellij.PaneID{"terminal_15a"},
+	}
+	service := newTestService(backend)
 
-	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
-		Session: "feature-auth",
-		Layout:  "unknown-layout",
-		Tabs:    []ExecutionPlanTabSpec{{Name: "default", Panes: []ExecutionPlanPaneSpec{{ID: "planner"}}}},
+	response, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
+		RequestID: "req_custom_layout",
+		Session:   "feature-auth",
+		Layout:    "custom-grid",
+		Tabs: []ExecutionPlanTabSpec{
+			{
+				Name: "feature-auth",
+				Panes: []ExecutionPlanPaneSpec{
+					{ID: "planner", Role: "planner"},
+				},
+			},
+		},
 	})
-	if !errors.Is(err, ErrInvalidExecutionPlan) {
-		t.Fatalf("ApplyExecutionPlan() error = %v, want %v", err, ErrInvalidExecutionPlan)
+	if err != nil {
+		t.Fatalf("ApplyExecutionPlan() with arbitrary layout error = %v", err)
+	}
+	if response.Layout != "custom-grid" {
+		t.Fatalf("ApplyExecutionPlan() response layout = %q, want custom-grid", response.Layout)
 	}
 }
 
