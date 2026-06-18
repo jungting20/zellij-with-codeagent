@@ -59,11 +59,18 @@ For roles with arguments, keep argument parsing inside the role package, not in 
    - Planner-generated roles are usually in `internal/planner/page.go`.
    - Do not add a role to planner output just because it exists in the catalog.
 
-8. Verify.
+8. Update the external role summary document.
+   - Update `/Users/in05908_mac/.config/pi/docs/agent-roles.md` whenever a role is added, removed, renamed, or its usage/arguments/requirements change.
+   - If the file does not exist, create it.
+   - Base the summary on `internal/roles/roles.go`, the role implementation, and `./bin/agent-role roles` or `go run ./cmd/agent-role roles`.
+   - Include the role name, command usage, purpose, required arguments/options, notable optional flags, and runtime requirements.
+
+9. Verify.
    - Run focused tests for changed packages.
    - Run `go test ./...`.
    - Run `go build -o bin/agent-role ./cmd/agent-role`.
    - Run `./bin/agent-role roles` and confirm the new role is listed.
+   - Confirm `/Users/in05908_mac/.config/pi/docs/agent-roles.md` includes the role and matches the CLI/catalog usage.
 
 ## Naming
 

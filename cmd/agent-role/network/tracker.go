@@ -1,9 +1,11 @@
 package network
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"sync"
@@ -64,11 +66,18 @@ func run(targetURL string) int {
 	requests := make(map[network.RequestID]*requestInfo)
 	var logs []string
 	maxLogs := 15
+	var authWaitOnce sync.Once
 
 	// Set up target listener
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
 		switch ev := ev.(type) {
 		case *network.EventRequestWillBeSent:
+			if status, ok := redirectStatusFromRequestWillBeSent(ev); ok && shouldWaitForAuthRedirect(status) {
+				authWaitOnce.Do(func() {
+					waitForAuthLogin(targetURL, status, os.Stdin)
+				})
+			}
+
 			mu.Lock()
 			if ev == nil || ev.Request == nil {
 				mu.Unlock()
@@ -89,6 +98,12 @@ func run(targetURL string) int {
 			mu.Unlock()
 
 		case *network.EventResponseReceived:
+			if ev != nil && ev.Response != nil && shouldWaitForAuthRedirect(ev.Response.Status) {
+				authWaitOnce.Do(func() {
+					waitForAuthLogin(targetURL, ev.Response.Status, os.Stdin)
+				})
+			}
+
 			mu.Lock()
 			if ev == nil || ev.Response == nil {
 				mu.Unlock()
@@ -158,6 +173,32 @@ func run(targetURL string) int {
 
 	// Keep browser alive and listen to events infinitely
 	select {}
+}
+
+func redirectStatusFromRequestWillBeSent(ev *network.EventRequestWillBeSent) (int64, bool) {
+	if ev == nil || ev.RedirectResponse == nil {
+		return 0, false
+	}
+	return ev.RedirectResponse.Status, true
+}
+
+func shouldWaitForAuthRedirect(status int64) bool {
+	return status == 302
+}
+
+func waitForAuthLogin(targetURL string, status int64, in io.Reader) {
+	ui.ClearScreen()
+	fmt.Printf("%s==================================================%s\n", ui.Blue, ui.Reset)
+	fmt.Printf("%s%s[NETWORK TRACKER]%s Authentication redirect detected\n", ui.Bold, ui.Yellow, ui.Reset)
+	fmt.Printf("%s==================================================%s\n", ui.Blue, ui.Reset)
+	fmt.Printf("%sTarget URL:%s %s\n", ui.Bold, ui.Reset, targetURL)
+	fmt.Printf("%sStatus:%s     HTTP %d redirect\n\n", ui.Bold, ui.Reset, status)
+	fmt.Println("Authentication is required. Complete login, then press Enter here to resume network tracking.")
+
+	reader := bufio.NewReader(in)
+	if _, err := reader.ReadString('\n'); err != nil {
+		fmt.Fprintf(os.Stderr, "Error waiting for Enter: %v\n", err)
+	}
 }
 
 // formatNetworkLog formats a single network log with colors based on status code
