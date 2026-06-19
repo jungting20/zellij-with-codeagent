@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,6 +52,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 		return runStatus(args[1:], stdout, stderr, newClient)
 	case "plan":
 		return runPlan(args[1:], stdin, stdout, stderr, newClient)
+	case "debate":
+		return runDebate(args[1:], stdout, stderr, newClient)
 	case "input":
 		return runInput(args[1:], stdin, stdout, stderr, newClient)
 	case "snapshot":
@@ -278,6 +281,212 @@ func runPlan(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient
 	}
 	printExecutionPlanResponse(stdout, response)
 	return 0
+}
+
+func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory) int {
+	fs, opts := newFlagSet("debate", stderr)
+	opts.timeout = 10 * time.Minute
+	topic := fs.String("topic", "", "debate topic")
+	agentsCSV := fs.String("agents", "a,b,c", "comma-separated agent ids")
+	cwd := fs.String("cwd", ".", "working directory for coding-agent panes")
+	agentRoleBin := fs.String("agent-role-bin", "", "zellij-agent binary used by generated panes")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if strings.TrimSpace(*topic) == "" {
+		fmt.Fprintln(stderr, "debate requires --topic <text>")
+		return 2
+	}
+	agents := parseDebateAgents(*agentsCSV)
+	if len(agents) == 0 {
+		fmt.Fprintln(stderr, "debate requires at least one agent")
+		return 2
+	}
+
+	requestID := fmt.Sprintf("debate_%d", time.Now().UnixNano())
+	payload := debateExecutionPlan(requestID, agents, *cwd, debateRoleCommand(*agentRoleBin))
+
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	defer cancel()
+
+	client := newClient(opts.socketPath, opts.timeout)
+	response, err := client.SubmitExecutionPlan(ctx, requestID, payload)
+	if err != nil {
+		fmt.Fprintf(stderr, "agentctl debate plan failed: %v\n", err)
+		return 1
+	}
+	markers := debateMarkers(requestID, agents, 1)
+	for _, agent := range agents {
+		paneID := "debate-" + agent
+		if _, err := client.SendMessage(ctx, transport.SendMessageRequest{
+			From: "debate-coordinator",
+			To:   paneID,
+			Type: "debate_round",
+			Body: debateRoundPrompt(*topic, 1, agent, markers[paneID]),
+		}); err != nil {
+			fmt.Fprintf(stderr, "agentctl debate prompt failed: %v\n", err)
+			return 1
+		}
+	}
+	if err := waitForDebateMarkers(ctx, client, markers); err != nil {
+		fmt.Fprintf(stderr, "agentctl debate wait failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "debate request=%s session=%s agents=%s\n", response.RequestID, response.Session, strings.Join(agents, ","))
+	for _, agent := range agents {
+		paneID := "debate-" + agent
+		snapshot, err := client.SnapshotOutput(ctx, paneID, transport.SnapshotOutputRequest{Full: true})
+		if err != nil {
+			fmt.Fprintf(stderr, "agentctl debate snapshot failed: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "\n[%s]\n%s\n", paneID, snapshot.Output)
+	}
+	return 0
+}
+
+func parseDebateAgents(raw string) []string {
+	parts := strings.Split(raw, ",")
+	agents := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		agent := strings.TrimSpace(part)
+		if agent == "" {
+			continue
+		}
+		if _, exists := seen[agent]; exists {
+			continue
+		}
+		seen[agent] = struct{}{}
+		agents = append(agents, agent)
+	}
+	return agents
+}
+
+func debateExecutionPlan(requestID string, agents []string, cwd string, roleCommand []string) transport.ExecutionPlanPayload {
+	panes := []transport.ExecutionPlanPane{
+		{
+			ID:      "debate-coordinator",
+			Role:    "debate-coordinator",
+			AgentID: "coordinator",
+			Command: []string{"sh", "-lc", "printf 'debate_coordinator_ready\\n'; exec sh"},
+			CWD:     cwd,
+		},
+	}
+	for _, agent := range agents {
+		command := append(cloneStringSlice(roleCommand), "coding-agent", cwd)
+		panes = append(panes, transport.ExecutionPlanPane{
+			ID:      "debate-" + agent,
+			Role:    "coding-agent",
+			AgentID: agent,
+			Command: command,
+			CWD:     cwd,
+		})
+	}
+	return transport.ExecutionPlanPayload{
+		Session: requestID,
+		Layout:  "debate",
+		Tabs: []transport.ExecutionPlanTab{
+			{
+				Name:  requestID,
+				Panes: panes,
+			},
+		},
+	}
+}
+
+func debateRoleCommand(bin string) []string {
+	if strings.TrimSpace(bin) != "" {
+		return []string{bin, "role"}
+	}
+	exe, err := os.Executable()
+	if err == nil && exe != "" {
+		return []string{exe, "role"}
+	}
+	return []string{"zellij-agent", "role"}
+}
+
+func debateMarkers(requestID string, agents []string, round int) map[string]string {
+	markers := make(map[string]string, len(agents))
+	for _, agent := range agents {
+		paneID := "debate-" + agent
+		markers[paneID] = fmt.Sprintf("<<<AGENT_DEBATE_DONE debate=%s round=%d agent=%s token=%s-%d-%s>>>", requestID, round, agent, requestID, round, agent)
+	}
+	return markers
+}
+
+func debateRoundPrompt(topic string, round int, agent string, marker string) string {
+	return fmt.Sprintf(`Round: %d
+Agent: %s
+Topic: %s
+
+Think independently and give your best answer for this round.
+When your answer is complete, print the completion marker on its own final line.
+
+Completion marker:
+%s
+`, round, agent, topic, marker)
+}
+
+func waitForDebateMarkers(ctx context.Context, client AgentClient, markers map[string]string) error {
+	stream, err := client.StreamEvents(ctx)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+
+	seen := make(map[string]struct{}, len(markers))
+	events := stream.Events
+	errs := stream.Errors
+	for len(seen) < len(markers) {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				if len(seen) == len(markers) {
+					return nil
+				}
+				return fmt.Errorf("event stream closed before markers arrived; missing=%s", strings.Join(missingDebateMarkers(markers, seen), ","))
+			}
+			if event.Type != "raw_output" {
+				continue
+			}
+			marker, ok := markers[event.PaneID]
+			if ok && strings.Contains(event.Message, marker) {
+				seen[event.PaneID] = struct{}{}
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil && !errors.Is(err, context.Canceled) {
+				return err
+			}
+		case <-ctx.Done():
+			return fmt.Errorf("%w; missing=%s", ctx.Err(), strings.Join(missingDebateMarkers(markers, seen), ","))
+		}
+	}
+	return nil
+}
+
+func missingDebateMarkers(markers map[string]string, seen map[string]struct{}) []string {
+	missing := make([]string, 0, len(markers))
+	for paneID := range markers {
+		if _, ok := seen[paneID]; !ok {
+			missing = append(missing, paneID)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
+func cloneStringSlice(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	cloned := make([]string, len(values))
+	copy(cloned, values)
+	return cloned
 }
 
 func runEvents(args []string, stdout, stderr io.Writer, newClient ClientFactory) int {

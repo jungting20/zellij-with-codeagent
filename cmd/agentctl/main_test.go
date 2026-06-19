@@ -97,6 +97,153 @@ func TestRunPlanSubmitsExecutionPlanFile(t *testing.T) {
 	}
 }
 
+func TestRunDebateSubmitsPlan(t *testing.T) {
+	client := &fakeAgentClient{streamEventsFromMessages: true}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"debate",
+		"--topic", "Should we use markers?",
+		"--agents", "a,b,c",
+		"--cwd", "/repo",
+		"--agent-role-bin", "/bin/zellij-agent",
+		"--timeout", "5s",
+	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if client.planRequestID == "" {
+		t.Fatal("plan request id = empty, want debate request id")
+	}
+	if client.planPayload.Session == "" || client.planPayload.Layout != "debate" {
+		t.Fatalf("plan payload = %#v, want debate session/layout", client.planPayload)
+	}
+	if len(client.planPayload.Tabs) != 1 {
+		t.Fatalf("plan tabs = %d, want 1", len(client.planPayload.Tabs))
+	}
+	panes := client.planPayload.Tabs[0].Panes
+	wantIDs := []string{"debate-coordinator", "debate-a", "debate-b", "debate-c"}
+	if len(panes) != len(wantIDs) {
+		t.Fatalf("plan panes = %#v, want %d panes", panes, len(wantIDs))
+	}
+	for i, wantID := range wantIDs {
+		if panes[i].ID != wantID {
+			t.Fatalf("pane[%d].ID = %q, want %q", i, panes[i].ID, wantID)
+		}
+	}
+	if panes[1].Role != "coding-agent" || len(panes[1].Command) == 0 {
+		t.Fatalf("agent pane = %#v, want coding-agent command", panes[1])
+	}
+	if !strings.Contains(stdout.String(), "debate request=") {
+		t.Fatalf("stdout = %q, want debate summary", stdout.String())
+	}
+}
+
+func TestRunDebateSendsRoundPromptWithMarkers(t *testing.T) {
+	client := &fakeAgentClient{streamEventsFromMessages: true}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"debate",
+		"--topic", "marker test",
+		"--agents", "a,b",
+		"--cwd", "/repo",
+		"--agent-role-bin", "/bin/zellij-agent",
+	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if len(client.messageRequests) != 2 {
+		t.Fatalf("message requests = %#v, want 2", client.messageRequests)
+	}
+	for _, req := range client.messageRequests {
+		if req.From != "debate-coordinator" {
+			t.Fatalf("message from = %q, want debate-coordinator", req.From)
+		}
+		if req.Type != "debate_round" {
+			t.Fatalf("message type = %q, want debate_round", req.Type)
+		}
+		if !strings.Contains(req.Body, "Round: 1") ||
+			!strings.Contains(req.Body, "Topic: marker test") ||
+			!strings.Contains(req.Body, "Completion marker:") ||
+			!strings.Contains(req.Body, "<<<AGENT_DEBATE_DONE") {
+			t.Fatalf("message body = %q, want round prompt with marker", req.Body)
+		}
+	}
+	if client.messageRequests[0].To != "debate-a" || client.messageRequests[1].To != "debate-b" {
+		t.Fatalf("message targets = %#v, want debate-a and debate-b", client.messageRequests)
+	}
+}
+
+func TestRunDebateWaitsForMarkersAndSnapshots(t *testing.T) {
+	client := &fakeAgentClient{
+		streamEventsFromMessages: true,
+		snapshotOutputsByPane: map[string]string{
+			"debate-a": "answer from a",
+			"debate-b": "answer from b",
+		},
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"debate",
+		"--topic", "snapshot test",
+		"--agents", "a,b",
+		"--cwd", "/repo",
+		"--agent-role-bin", "/bin/zellij-agent",
+	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if !client.streamEventsCalled {
+		t.Fatal("StreamEvents called = false, want true")
+	}
+	if len(client.snapshotRequests) != 2 {
+		t.Fatalf("snapshot requests = %#v, want 2", client.snapshotRequests)
+	}
+	if client.snapshotRequests[0].paneID != "debate-a" || client.snapshotRequests[1].paneID != "debate-b" {
+		t.Fatalf("snapshot requests = %#v, want debate-a and debate-b", client.snapshotRequests)
+	}
+	if !client.snapshotRequests[0].req.Full || !client.snapshotRequests[1].req.Full {
+		t.Fatalf("snapshot requests = %#v, want full snapshots", client.snapshotRequests)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "answer from a") || !strings.Contains(output, "answer from b") {
+		t.Fatalf("stdout = %q, want snapshot outputs", output)
+	}
+}
+
+func TestRunDebateTimesOutWhenMarkerMissing(t *testing.T) {
+	client := &fakeAgentClient{
+		streamEventsFromMessages: true,
+		streamEventLimit:         1,
+		streamKeepOpen:           true,
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"debate",
+		"--topic", "timeout test",
+		"--agents", "a,b",
+		"--cwd", "/repo",
+		"--agent-role-bin", "/bin/zellij-agent",
+		"--timeout", "20ms",
+	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 1 {
+		t.Fatalf("run() exit code = %d, want 1; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "context deadline exceeded") || !strings.Contains(stderr.String(), "debate-b") {
+		t.Fatalf("stderr = %q, want timeout with missing debate-b", stderr.String())
+	}
+	if len(client.snapshotRequests) != 0 {
+		t.Fatalf("snapshot requests = %#v, want none after timeout", client.snapshotRequests)
+	}
+}
+
 func TestRunPlanAcceptsRequestEnvelopeFromStdin(t *testing.T) {
 	input := `{
 		"type": "execution_plan",
@@ -345,28 +492,39 @@ type fakeAgentClient struct {
 	socketPath string
 	timeout    time.Duration
 
-	healthResponse   transport.HealthResponse
-	statusResponse   transport.InspectRuntimeResponse
-	snapshotResponse transport.SnapshotOutputResponse
-	eventsResponse   transport.RecentEventsResponse
-	cleanupResponse  transport.CleanupResponse
-	messageResponse  transport.SendMessageResponse
-	eventStream      *transport.EventStream
+	healthResponse        transport.HealthResponse
+	statusResponse        transport.InspectRuntimeResponse
+	snapshotResponse      transport.SnapshotOutputResponse
+	snapshotOutputsByPane map[string]string
+	eventsResponse        transport.RecentEventsResponse
+	cleanupResponse       transport.CleanupResponse
+	messageResponse       transport.SendMessageResponse
+	eventStream           *transport.EventStream
 
 	planRequestID string
 	planPayload   transport.ExecutionPlanPayload
 
-	inputPaneID     string
-	inputRequest    transport.SendInputRequest
-	snapshotPaneID  string
-	snapshotRequest transport.SnapshotOutputRequest
-	messageRequest  transport.SendMessageRequest
+	inputPaneID      string
+	inputRequest     transport.SendInputRequest
+	snapshotPaneID   string
+	snapshotRequest  transport.SnapshotOutputRequest
+	snapshotRequests []fakeSnapshotRequest
+	messageRequest   transport.SendMessageRequest
+	messageRequests  []transport.SendMessageRequest
 
-	eventsLimit        int
-	eventTypes         []string
-	streamEventsCalled bool
+	eventsLimit              int
+	eventTypes               []string
+	streamEventsCalled       bool
+	streamEventsFromMessages bool
+	streamEventLimit         int
+	streamKeepOpen           bool
 
 	cleanupRequest transport.CleanupRequest
+}
+
+type fakeSnapshotRequest struct {
+	paneID string
+	req    transport.SnapshotOutputRequest
 }
 
 func (c *fakeAgentClient) Health(context.Context) (transport.HealthResponse, error) {
@@ -386,11 +544,16 @@ func (c *fakeAgentClient) SendInput(_ context.Context, paneID string, req transp
 func (c *fakeAgentClient) SnapshotOutput(_ context.Context, paneID string, req transport.SnapshotOutputRequest) (transport.SnapshotOutputResponse, error) {
 	c.snapshotPaneID = paneID
 	c.snapshotRequest = req
+	c.snapshotRequests = append(c.snapshotRequests, fakeSnapshotRequest{paneID: paneID, req: req})
+	if output, ok := c.snapshotOutputsByPane[paneID]; ok {
+		return transport.SnapshotOutputResponse{Pane: transport.Pane{ID: paneID}, Output: output}, nil
+	}
 	return c.snapshotResponse, nil
 }
 
 func (c *fakeAgentClient) SendMessage(_ context.Context, req transport.SendMessageRequest) (transport.SendMessageResponse, error) {
 	c.messageRequest = req
+	c.messageRequests = append(c.messageRequests, req)
 	if c.messageResponse.From.ID != "" || c.messageResponse.To.ID != "" {
 		return c.messageResponse, nil
 	}
@@ -431,6 +594,25 @@ func (c *fakeAgentClient) StreamEvents(context.Context) (*transport.EventStream,
 	if c.eventStream != nil {
 		return c.eventStream, nil
 	}
+	if c.streamEventsFromMessages {
+		events := make(chan transport.Event, len(c.messageRequests))
+		for i, req := range c.messageRequests {
+			if c.streamEventLimit > 0 && i >= c.streamEventLimit {
+				break
+			}
+			events <- transport.Event{Type: "raw_output", PaneID: req.To, Message: extractCompletionMarker(req.Body)}
+		}
+		errs := make(chan error)
+		if !c.streamKeepOpen {
+			close(events)
+			close(errs)
+		}
+		return &transport.EventStream{
+			Events: events,
+			Errors: errs,
+			Close:  func() error { return nil },
+		}, nil
+	}
 	events := make(chan transport.Event)
 	close(events)
 	errs := make(chan error)
@@ -439,6 +621,15 @@ func (c *fakeAgentClient) StreamEvents(context.Context) (*transport.EventStream,
 		Errors: errs,
 		Close:  func() error { return nil },
 	}, nil
+}
+
+func extractCompletionMarker(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "<<<AGENT_DEBATE_DONE") {
+			return line
+		}
+	}
+	return ""
 }
 
 func (c *fakeAgentClient) Cleanup(_ context.Context, req transport.CleanupRequest) (transport.CleanupResponse, error) {
