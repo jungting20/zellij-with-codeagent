@@ -289,6 +289,7 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 	opts.timeout = 10 * time.Minute
 	topic := fs.String("topic", "", "debate topic")
 	agentsCSV := fs.String("agents", "a,b,c", "comma-separated agent ids")
+	rounds := fs.Int("rounds", 1, "number of debate rounds to run, from 1 to 3")
 	cwd := fs.String("cwd", ".", "working directory for coding-agent panes")
 	agentRoleBin := fs.String("agent-role-bin", "", "zellij-agent binary used by generated panes")
 	if err := fs.Parse(args); err != nil {
@@ -301,6 +302,10 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 	agents := parseDebateAgents(*agentsCSV)
 	if len(agents) == 0 {
 		fmt.Fprintln(stderr, "debate requires at least one agent")
+		return 2
+	}
+	if *rounds < 1 || *rounds > 3 {
+		fmt.Fprintln(stderr, "debate requires --rounds between 1 and 3")
 		return 2
 	}
 
@@ -316,31 +321,35 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 		fmt.Fprintf(stderr, "agentctl debate plan failed: %v\n", err)
 		return 1
 	}
-	markers := debateMarkers(requestID, agents, 1)
-	for _, agent := range agents {
-		paneID := "debate-" + agent
-		if err := client.SendInput(ctx, paneID, transport.SendInputRequest{Text: debateRoundPrompt(*topic, 1, agent, markers[paneID])}); err != nil {
-			fmt.Fprintf(stderr, "agentctl debate prompt failed: %v\n", err)
+	roundOutputs := make([]debateRoundOutput, 0, *rounds)
+	for round := 1; round <= *rounds; round++ {
+		markers := debateMarkers(requestID, agents, round)
+		for _, agent := range agents {
+			paneID := "debate-" + agent
+			if err := client.SendInput(ctx, paneID, transport.SendInputRequest{Text: debateRoundPrompt(*topic, round, agent, roundOutputs, markers[paneID])}); err != nil {
+				fmt.Fprintf(stderr, "agentctl debate prompt failed: %v\n", err)
+				return 1
+			}
+		}
+		if err := waitForDebateMarkers(ctx, client, markers); err != nil {
+			fmt.Fprintf(stderr, "agentctl debate wait failed: %v\n", err)
 			return 1
 		}
-	}
-	if err := waitForDebateMarkers(ctx, client, markers); err != nil {
-		fmt.Fprintf(stderr, "agentctl debate wait failed: %v\n", err)
-		return 1
-	}
-	agentOutputs := make(map[string]string, len(agents))
-	for _, agent := range agents {
-		paneID := "debate-" + agent
-		snapshot, err := client.SnapshotOutput(ctx, paneID, transport.SnapshotOutputRequest{Full: true})
-		if err != nil {
-			fmt.Fprintf(stderr, "agentctl debate snapshot failed: %v\n", err)
-			return 1
+		agentOutputs := make(map[string]string, len(agents))
+		for _, agent := range agents {
+			paneID := "debate-" + agent
+			snapshot, err := client.SnapshotOutput(ctx, paneID, transport.SnapshotOutputRequest{Full: true})
+			if err != nil {
+				fmt.Fprintf(stderr, "agentctl debate snapshot failed: %v\n", err)
+				return 1
+			}
+			agentOutputs[paneID] = snapshot.Output
 		}
-		agentOutputs[paneID] = snapshot.Output
+		roundOutputs = append(roundOutputs, debateRoundOutput{Round: round, Outputs: agentOutputs})
 	}
 
-	coordinatorMarker := debateCompletionMarker(requestID, 1, "coordinator")
-	if err := client.SendInput(ctx, "debate-coordinator", transport.SendInputRequest{Text: debateSynthesisBlock(*topic, agents, agentOutputs, coordinatorMarker)}); err != nil {
+	coordinatorMarker := debateCompletionMarker(requestID, *rounds, "coordinator")
+	if err := client.SendInput(ctx, "debate-coordinator", transport.SendInputRequest{Text: debateSynthesisBlock(*topic, agents, roundOutputs, coordinatorMarker)}); err != nil {
 		fmt.Fprintf(stderr, "agentctl debate synthesis prompt failed: %v\n", err)
 		return 1
 	}
@@ -355,12 +364,19 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 	}
 
 	fmt.Fprintf(stdout, "debate request=%s session=%s agents=%s\n", response.RequestID, response.Session, strings.Join(agents, ","))
-	for _, agent := range agents {
-		paneID := "debate-" + agent
-		fmt.Fprintf(stdout, "\n[%s]\n%s\n", paneID, agentOutputs[paneID])
+	for _, roundOutput := range roundOutputs {
+		for _, agent := range agents {
+			paneID := "debate-" + agent
+			fmt.Fprintf(stdout, "\n[round %d %s]\n%s\n", roundOutput.Round, paneID, roundOutput.Outputs[paneID])
+		}
 	}
 	fmt.Fprintf(stdout, "\n[debate-coordinator synthesis]\n%s\n", coordinatorSnapshot.Output)
 	return 0
+}
+
+type debateRoundOutput struct {
+	Round   int
+	Outputs map[string]string
 }
 
 func parseDebateAgents(raw string) []string {
@@ -437,18 +453,30 @@ func debateCompletionMarker(requestID string, round int, agent string) string {
 	return fmt.Sprintf("<<<AGENT_DEBATE_DONE debate=%s round=%d agent=%s token=%s-%d-%s>>>", requestID, round, agent, requestID, round, agent)
 }
 
-func debateRoundPrompt(topic string, round int, agent string, marker string) string {
-	return fmt.Sprintf(`Round: %d
+func debateRoundPrompt(topic string, round int, agent string, previousRounds []debateRoundOutput, marker string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `Round: %d
 Agent: %s
 Topic: %s
 
-Think independently and give your best answer for this round.
+`, round, agent, topic)
+	if len(previousRounds) == 0 {
+		fmt.Fprintln(&b, "Think independently and give your best answer for this round.")
+	} else {
+		fmt.Fprintln(&b, "Review the previous round answers below, then refine your position for this round.")
+		fmt.Fprintln(&b, "Address strong opposing points, update weak assumptions, and keep your answer focused.")
+		fmt.Fprintln(&b)
+		fmt.Fprintln(&b, "Previous round answers:")
+		appendDebateRoundOutputs(&b, previousRounds, nil)
+	}
+	fmt.Fprintf(&b, `
 When your answer is complete, print the completion marker on its own final line.
 
 Completion marker parts:
 Print these parts concatenated exactly, with no extra spaces, as your final line:
 %s
-`, round, agent, topic, formatDebateMarkerParts(marker))
+`, formatDebateMarkerParts(marker))
+	return b.String()
 }
 
 func formatDebateMarkerParts(marker string) string {
@@ -472,7 +500,7 @@ func debateMarkerParts(marker string) []string {
 	return parts
 }
 
-func debateSynthesisBlock(topic string, agents []string, outputs map[string]string, marker string) string {
+func debateSynthesisBlock(topic string, agents []string, rounds []debateRoundOutput, marker string) string {
 	var b strings.Builder
 	fmt.Fprintln(&b, "<<<DEBATE_SYNTHESIS_BEGIN>>>")
 	fmt.Fprintf(&b, "Completion-Marker-Base64: %s\n", base64.StdEncoding.EncodeToString([]byte(marker)))
@@ -480,12 +508,34 @@ func debateSynthesisBlock(topic string, agents []string, outputs map[string]stri
 	fmt.Fprintln(&b, "You are the debate coordinator. Read all agent answers below and produce a concise synthesis.")
 	fmt.Fprintln(&b, "Include consensus, disagreements, strongest arguments, weak assumptions, and a final recommendation.")
 	fmt.Fprintln(&b)
-	for _, agent := range agents {
-		paneID := "debate-" + agent
-		fmt.Fprintf(&b, "[%s]\n%s\n\n", paneID, outputs[paneID])
-	}
+	appendDebateRoundOutputs(&b, rounds, agents)
 	fmt.Fprintln(&b, "<<<DEBATE_SYNTHESIS_END>>>")
 	return b.String()
+}
+
+func appendDebateRoundOutputs(b *strings.Builder, rounds []debateRoundOutput, agents []string) {
+	for _, roundOutput := range rounds {
+		roundAgents := agents
+		if len(roundAgents) == 0 {
+			roundAgents = sortedDebatePaneAgents(roundOutput.Outputs)
+		}
+		for _, agent := range roundAgents {
+			paneID := agent
+			if !strings.HasPrefix(paneID, "debate-") {
+				paneID = "debate-" + agent
+			}
+			fmt.Fprintf(b, "[round %d %s]\n%s\n\n", roundOutput.Round, paneID, roundOutput.Outputs[paneID])
+		}
+	}
+}
+
+func sortedDebatePaneAgents(outputs map[string]string) []string {
+	agents := make([]string, 0, len(outputs))
+	for paneID := range outputs {
+		agents = append(agents, strings.TrimPrefix(paneID, "debate-"))
+	}
+	sort.Strings(agents)
+	return agents
 }
 
 func waitForDebateMarkers(ctx context.Context, client AgentClient, markers map[string]string) error {

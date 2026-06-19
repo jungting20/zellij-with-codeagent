@@ -210,9 +210,9 @@ func TestRunDebateSendsSynthesisBlockToCoordinator(t *testing.T) {
 	text := synthesisInputs[0].req.Text
 	if !strings.Contains(text, "<<<DEBATE_SYNTHESIS_BEGIN>>>") ||
 		!strings.Contains(text, "Completion-Marker-Base64:") ||
-		!strings.Contains(text, "[debate-a]") ||
+		!strings.Contains(text, "[round 1 debate-a]") ||
 		!strings.Contains(text, "answer from a") ||
-		!strings.Contains(text, "[debate-b]") ||
+		!strings.Contains(text, "[round 1 debate-b]") ||
 		!strings.Contains(text, "answer from b") ||
 		!strings.Contains(text, "<<<DEBATE_SYNTHESIS_END>>>") {
 		t.Fatalf("synthesis input = %q, want coordinator block", text)
@@ -226,6 +226,98 @@ func TestRunDebateSendsSynthesisBlockToCoordinator(t *testing.T) {
 	output := stdout.String()
 	if !strings.Contains(output, "[debate-coordinator synthesis]") || !strings.Contains(output, "final synthesis") {
 		t.Fatalf("stdout = %q, want coordinator synthesis output", output)
+	}
+}
+
+func TestRunDebateSupportsThreeRounds(t *testing.T) {
+	client := &fakeAgentClient{
+		streamEventsFromInputs: true,
+		snapshotOutputsByPaneSequence: map[string][]string{
+			"debate-a": {
+				"a round 1",
+				"a round 2",
+				"a round 3",
+			},
+			"debate-b": {
+				"b round 1",
+				"b round 2",
+				"b round 3",
+			},
+			"debate-coordinator": {"final synthesis"},
+		},
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"debate",
+		"--topic", "multi round test",
+		"--agents", "a,b",
+		"--rounds", "3",
+		"--cwd", "/repo",
+		"--agent-role-bin", "/bin/zellij-agent",
+	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	inputsA := filterInputRequests(client.inputRequests, "debate-a")
+	inputsB := filterInputRequests(client.inputRequests, "debate-b")
+	if len(inputsA) != 3 || len(inputsB) != 3 {
+		t.Fatalf("inputs a=%d b=%d, want 3 each; all=%#v", len(inputsA), len(inputsB), client.inputRequests)
+	}
+	if !strings.Contains(inputsA[1].req.Text, "Round: 2") ||
+		!strings.Contains(inputsA[1].req.Text, "[round 1 debate-a]") ||
+		!strings.Contains(inputsA[1].req.Text, "a round 1") ||
+		!strings.Contains(inputsA[1].req.Text, "[round 1 debate-b]") ||
+		!strings.Contains(inputsA[1].req.Text, "b round 1") {
+		t.Fatalf("round 2 prompt = %q, want round 1 context", inputsA[1].req.Text)
+	}
+	if !strings.Contains(inputsA[2].req.Text, "Round: 3") ||
+		!strings.Contains(inputsA[2].req.Text, "[round 2 debate-a]") ||
+		!strings.Contains(inputsA[2].req.Text, "a round 2") ||
+		containsExactDebateMarker(inputsA[2].req.Text) {
+		t.Fatalf("round 3 prompt = %q, want round 2 context without exact marker", inputsA[2].req.Text)
+	}
+	synthesisInputs := filterInputRequests(client.inputRequests, "debate-coordinator")
+	if len(synthesisInputs) != 1 {
+		t.Fatalf("coordinator inputs = %#v, want one final synthesis block", synthesisInputs)
+	}
+	synthesis := synthesisInputs[0].req.Text
+	for _, want := range []string{
+		"[round 1 debate-a]", "a round 1",
+		"[round 2 debate-b]", "b round 2",
+		"[round 3 debate-a]", "a round 3",
+	} {
+		if !strings.Contains(synthesis, want) {
+			t.Fatalf("synthesis = %q, missing %q", synthesis, want)
+		}
+	}
+	if len(client.snapshotRequests) != 7 {
+		t.Fatalf("snapshot requests = %#v, want 6 agent snapshots plus coordinator", client.snapshotRequests)
+	}
+	if !strings.Contains(stdout.String(), "[round 3 debate-b]") {
+		t.Fatalf("stdout = %q, want round-labeled outputs", stdout.String())
+	}
+}
+
+func TestRunDebateRejectsRoundsOutsideSupportedRange(t *testing.T) {
+	client := &fakeAgentClient{}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"debate",
+		"--topic", "bad rounds",
+		"--rounds", "4",
+	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 2 {
+		t.Fatalf("run() exit code = %d, want 2; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "debate requires --rounds between 1 and 3") {
+		t.Fatalf("stderr = %q, want rounds validation error", stderr.String())
+	}
+	if client.planRequestID != "" {
+		t.Fatalf("plan request id = %q, want no submitted plan", client.planRequestID)
 	}
 }
 
@@ -580,27 +672,29 @@ type fakeAgentClient struct {
 	socketPath string
 	timeout    time.Duration
 
-	healthResponse        transport.HealthResponse
-	statusResponse        transport.InspectRuntimeResponse
-	snapshotResponse      transport.SnapshotOutputResponse
-	snapshotOutputsByPane map[string]string
-	eventsResponse        transport.RecentEventsResponse
-	cleanupResponse       transport.CleanupResponse
-	messageResponse       transport.SendMessageResponse
-	eventStream           *transport.EventStream
+	healthResponse                transport.HealthResponse
+	statusResponse                transport.InspectRuntimeResponse
+	snapshotResponse              transport.SnapshotOutputResponse
+	snapshotOutputsByPane         map[string]string
+	snapshotOutputsByPaneSequence map[string][]string
+	eventsResponse                transport.RecentEventsResponse
+	cleanupResponse               transport.CleanupResponse
+	messageResponse               transport.SendMessageResponse
+	eventStream                   *transport.EventStream
 
 	planRequestID      string
 	planPayload        transport.ExecutionPlanPayload
 	createPaneRequests []transport.CreatePaneRequest
 
-	inputPaneID      string
-	inputRequest     transport.SendInputRequest
-	inputRequests    []fakeInputRequest
-	snapshotPaneID   string
-	snapshotRequest  transport.SnapshotOutputRequest
-	snapshotRequests []fakeSnapshotRequest
-	messageRequest   transport.SendMessageRequest
-	messageRequests  []transport.SendMessageRequest
+	inputPaneID          string
+	inputRequest         transport.SendInputRequest
+	inputRequests        []fakeInputRequest
+	snapshotPaneID       string
+	snapshotRequest      transport.SnapshotOutputRequest
+	snapshotRequests     []fakeSnapshotRequest
+	snapshotCountsByPane map[string]int
+	messageRequest       transport.SendMessageRequest
+	messageRequests      []transport.SendMessageRequest
 
 	eventsLimit              int
 	eventTypes               []string
@@ -642,6 +736,17 @@ func (c *fakeAgentClient) SnapshotOutput(_ context.Context, paneID string, req t
 	c.snapshotPaneID = paneID
 	c.snapshotRequest = req
 	c.snapshotRequests = append(c.snapshotRequests, fakeSnapshotRequest{paneID: paneID, req: req})
+	if outputs, ok := c.snapshotOutputsByPaneSequence[paneID]; ok {
+		if c.snapshotCountsByPane == nil {
+			c.snapshotCountsByPane = make(map[string]int)
+		}
+		index := c.snapshotCountsByPane[paneID]
+		c.snapshotCountsByPane[paneID]++
+		if index >= len(outputs) {
+			index = len(outputs) - 1
+		}
+		return transport.SnapshotOutputResponse{Pane: transport.Pane{ID: paneID}, Output: outputs[index]}, nil
+	}
 	if output, ok := c.snapshotOutputsByPane[paneID]; ok {
 		return transport.SnapshotOutputResponse{Pane: transport.Pane{ID: paneID}, Output: output}, nil
 	}
