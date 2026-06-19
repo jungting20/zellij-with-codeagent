@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -124,7 +126,7 @@ func TestRunDebateSubmitsPlan(t *testing.T) {
 		t.Fatalf("plan tabs = %d, want 1", len(client.planPayload.Tabs))
 	}
 	panes := client.planPayload.Tabs[0].Panes
-	wantIDs := []string{"debate-a", "debate-b", "debate-c"}
+	wantIDs := []string{"debate-coordinator", "debate-a", "debate-b", "debate-c"}
 	if len(panes) != len(wantIDs) {
 		t.Fatalf("plan panes = %#v, want %d panes", panes, len(wantIDs))
 	}
@@ -133,8 +135,11 @@ func TestRunDebateSubmitsPlan(t *testing.T) {
 			t.Fatalf("pane[%d].ID = %q, want %q", i, panes[i].ID, wantID)
 		}
 	}
-	if panes[0].Role != "coding-agent" || len(panes[0].Command) == 0 {
-		t.Fatalf("agent pane = %#v, want coding-agent command", panes[0])
+	if panes[0].Role != "debate-coordinator" || !containsString(panes[0].Command, "debate-coordinator") {
+		t.Fatalf("coordinator pane = %#v, want debate-coordinator role command", panes[0])
+	}
+	if panes[1].Role != "coding-agent" || len(panes[1].Command) == 0 {
+		t.Fatalf("agent pane = %#v, want coding-agent command", panes[1])
 	}
 	if !strings.Contains(stdout.String(), "debate request=") {
 		t.Fatalf("stdout = %q, want debate summary", stdout.String())
@@ -163,9 +168,12 @@ func TestRunDebateSendsRoundPromptWithMarkers(t *testing.T) {
 	for _, req := range roundInputs {
 		if !strings.Contains(req.req.Text, "Round: 1") ||
 			!strings.Contains(req.req.Text, "Topic: marker test") ||
-			!strings.Contains(req.req.Text, "Completion marker:") ||
+			!strings.Contains(req.req.Text, "Completion marker parts:") ||
 			!strings.Contains(req.req.Text, "<<<AGENT_DEBATE_DONE") {
-			t.Fatalf("input text = %q, want round prompt with marker", req.req.Text)
+			t.Fatalf("input text = %q, want round prompt with marker construction instructions", req.req.Text)
+		}
+		if containsExactDebateMarker(req.req.Text) {
+			t.Fatalf("input text = %q, must not contain exact marker before agent completion", req.req.Text)
 		}
 	}
 	if roundInputs[0].paneID != "debate-a" || roundInputs[1].paneID != "debate-b" {
@@ -173,7 +181,7 @@ func TestRunDebateSendsRoundPromptWithMarkers(t *testing.T) {
 	}
 }
 
-func TestRunDebateCreatesCoordinatorAfterCollectingAnswers(t *testing.T) {
+func TestRunDebateSendsSynthesisBlockToCoordinator(t *testing.T) {
 	client := &fakeAgentClient{
 		streamEventsFromInputs: true,
 		snapshotOutputsByPane: map[string]string{
@@ -195,33 +203,25 @@ func TestRunDebateCreatesCoordinatorAfterCollectingAnswers(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	panes := client.planPayload.Tabs[0].Panes
-	for _, pane := range panes {
-		if pane.ID == "debate-coordinator" {
-			t.Fatalf("initial panes = %#v, coordinator must not start before agent markers", panes)
-		}
+	synthesisInputs := filterInputRequests(client.inputRequests, "debate-coordinator")
+	if len(synthesisInputs) != 1 {
+		t.Fatalf("coordinator inputs = %#v, want one synthesis block", synthesisInputs)
 	}
-	if len(client.createPaneRequests) != 1 {
-		t.Fatalf("create pane requests = %#v, want lazy coordinator creation", client.createPaneRequests)
+	text := synthesisInputs[0].req.Text
+	if !strings.Contains(text, "<<<DEBATE_SYNTHESIS_BEGIN>>>") ||
+		!strings.Contains(text, "Completion-Marker-Base64:") ||
+		!strings.Contains(text, "[debate-a]") ||
+		!strings.Contains(text, "answer from a") ||
+		!strings.Contains(text, "[debate-b]") ||
+		!strings.Contains(text, "answer from b") ||
+		!strings.Contains(text, "<<<DEBATE_SYNTHESIS_END>>>") {
+		t.Fatalf("synthesis input = %q, want coordinator block", text)
 	}
-	created := client.createPaneRequests[0]
-	if created.ID != "debate-coordinator" || created.Role != "coding-agent" || created.ZellijTabID == nil || len(created.Command) == 0 {
-		t.Fatalf("created coordinator = %#v, want coding-agent in existing tab", created)
+	if containsExactDebateMarker(text) {
+		t.Fatalf("synthesis input = %q, must not contain exact marker before coordinator completion", text)
 	}
-	if len(client.inputRequests) < 3 {
-		t.Fatalf("input requests = %#v, want agent prompts and synthesis prompt", client.inputRequests)
-	}
-	req := client.inputRequests[2]
-	if req.paneID != "debate-coordinator" {
-		t.Fatalf("synthesis input pane = %q, want debate-coordinator", req.paneID)
-	}
-	if !strings.Contains(req.req.Text, "Topic: synthesis test") ||
-		!strings.Contains(req.req.Text, "[debate-a]") ||
-		!strings.Contains(req.req.Text, "answer from a") ||
-		!strings.Contains(req.req.Text, "[debate-b]") ||
-		!strings.Contains(req.req.Text, "answer from b") ||
-		!strings.Contains(req.req.Text, "<<<AGENT_DEBATE_DONE") {
-		t.Fatalf("synthesis input = %q, want collected answers and marker", req.req.Text)
+	if len(client.createPaneRequests) != 0 {
+		t.Fatalf("create pane requests = %#v, want coordinator created by initial plan", client.createPaneRequests)
 	}
 	output := stdout.String()
 	if !strings.Contains(output, "[debate-coordinator synthesis]") || !strings.Contains(output, "final synthesis") {
@@ -555,6 +555,19 @@ func filterInputRequests(requests []fakeInputRequest, paneID string) []fakeInput
 	return filtered
 }
 
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsExactDebateMarker(text string) bool {
+	return regexp.MustCompile(`<<<AGENT_DEBATE_DONE debate=[^>]+>>>`).FindString(text) != ""
+}
+
 func fakeFactory(client *fakeAgentClient) clientFactory {
 	return func(socketPath string, timeout time.Duration) agentClient {
 		client.socketPath = socketPath
@@ -762,8 +775,49 @@ func extractCompletionMarker(body string) string {
 		if strings.HasPrefix(line, "<<<AGENT_DEBATE_DONE") {
 			return line
 		}
+		if strings.HasPrefix(line, "Completion-Marker:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "Completion-Marker:"))
+		}
+		if strings.HasPrefix(line, "Completion-Marker-Base64:") {
+			encoded := strings.TrimSpace(strings.TrimPrefix(line, "Completion-Marker-Base64:"))
+			decoded, err := base64.StdEncoding.DecodeString(encoded)
+			if err == nil {
+				return string(decoded)
+			}
+		}
+	}
+	if marker := extractCompletionMarkerFromParts(body); marker != "" {
+		return marker
 	}
 	return ""
+}
+
+func extractCompletionMarkerFromParts(body string) string {
+	lines := strings.Split(body, "\n")
+	collecting := false
+	parts := make([]string, 0, 6)
+	partLine := regexp.MustCompile(`^\s*\d+\.\s?(.*)$`)
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "Completion marker parts:" {
+			collecting = true
+			continue
+		}
+		if !collecting {
+			continue
+		}
+		match := partLine.FindStringSubmatch(line)
+		if len(match) == 2 {
+			parts = append(parts, match[1])
+			continue
+		}
+		if len(parts) > 0 && strings.TrimSpace(line) == "" {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "")
 }
 
 func (c *fakeAgentClient) Cleanup(_ context.Context, req transport.CleanupRequest) (transport.CleanupResponse, error) {

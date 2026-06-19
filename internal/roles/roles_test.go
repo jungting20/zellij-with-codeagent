@@ -42,3 +42,19 @@ func TestAllReturnsCopy(t *testing.T) {
 		t.Fatal("All returned mutable argument backing storage")
 	}
 }
+
+func TestLookupDebateCoordinator(t *testing.T) {
+	spec, ok := Lookup(RoleDebateCoordinator)
+	if !ok {
+		t.Fatal("Lookup(RoleDebateCoordinator) ok = false, want true")
+	}
+	if spec.Name != "debate-coordinator" {
+		t.Fatalf("name = %q, want debate-coordinator", spec.Name)
+	}
+	if spec.Usage != "debate-coordinator <path>" {
+		t.Fatalf("usage = %q, want debate-coordinator <path>", spec.Usage)
+	}
+	if len(spec.Arguments) != 1 || spec.Arguments[0].Name != "path" || !spec.Arguments[0].Required {
+		t.Fatalf("arguments = %#v, want required path", spec.Arguments)
+	}
+}

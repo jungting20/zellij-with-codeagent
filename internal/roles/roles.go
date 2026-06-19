@@ -14,12 +14,13 @@ type RoleSpec struct {
 }
 
 const (
-	RoleCoder          = "coder"
-	RoleEditor         = "editor"
-	RoleLSP            = "lsp"
-	RoleNetworkTracker = "network-tracker"
-	RoleConsoleTracker = "console-tracker"
-	RoleCodingAgent    = "coding-agent"
+	RoleCoder             = "coder"
+	RoleEditor            = "editor"
+	RoleLSP               = "lsp"
+	RoleNetworkTracker    = "network-tracker"
+	RoleConsoleTracker    = "console-tracker"
+	RoleCodingAgent       = "coding-agent"
+	RoleDebateCoordinator = "debate-coordinator"
 )
 
 var specs = []RoleSpec{
@@ -67,6 +68,14 @@ var specs = []RoleSpec{
 		Name:        RoleCodingAgent,
 		Usage:       "coding-agent <path>",
 		Description: "Runs Codex coding agent in the repository containing the target path.",
+		Arguments: []ArgumentSpec{
+			{Name: "path", Required: true, Description: "File or directory path inside the repository where Codex should run."},
+		},
+	},
+	{
+		Name:        RoleDebateCoordinator,
+		Usage:       "debate-coordinator <path>",
+		Description: "Waits for debate synthesis input, then runs Codex to produce the coordinator summary.",
 		Arguments: []ArgumentSpec{
 			{Name: "path", Required: true, Description: "File or directory path inside the repository where Codex should run."},
 		},

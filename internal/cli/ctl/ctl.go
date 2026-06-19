@@ -2,6 +2,7 @@ package ctlcli
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -18,7 +19,6 @@ import (
 
 type AgentClient interface {
 	Health(context.Context) (transport.HealthResponse, error)
-	CreatePane(context.Context, transport.CreatePaneRequest) (transport.CreatePaneResponse, error)
 	InspectRuntime(context.Context) (transport.InspectRuntimeResponse, error)
 	SendInput(context.Context, string, transport.SendInputRequest) error
 	SnapshotOutput(context.Context, string, transport.SnapshotOutputRequest) (transport.SnapshotOutputResponse, error)
@@ -339,27 +339,8 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 		agentOutputs[paneID] = snapshot.Output
 	}
 
-	tabID, err := debateResponseTabID(response)
-	if err != nil {
-		fmt.Fprintf(stderr, "agentctl debate coordinator failed: %v\n", err)
-		return 1
-	}
-	if _, err := client.CreatePane(ctx, transport.CreatePaneRequest{
-		ID:          "debate-coordinator",
-		TaskID:      requestID,
-		AgentID:     "coordinator",
-		Role:        "coding-agent",
-		Name:        "debate-coordinator",
-		TabName:     response.Tabs[0].Name,
-		ZellijTabID: tabID,
-		CWD:         *cwd,
-		Command:     append(cloneStringSlice(debateRoleCommand(*agentRoleBin)), "coding-agent", *cwd),
-	}); err != nil {
-		fmt.Fprintf(stderr, "agentctl debate coordinator failed: %v\n", err)
-		return 1
-	}
 	coordinatorMarker := debateCompletionMarker(requestID, 1, "coordinator")
-	if err := client.SendInput(ctx, "debate-coordinator", transport.SendInputRequest{Text: debateSynthesisPrompt(*topic, agents, agentOutputs, coordinatorMarker)}); err != nil {
+	if err := client.SendInput(ctx, "debate-coordinator", transport.SendInputRequest{Text: debateSynthesisBlock(*topic, agents, agentOutputs, coordinatorMarker)}); err != nil {
 		fmt.Fprintf(stderr, "agentctl debate synthesis prompt failed: %v\n", err)
 		return 1
 	}
@@ -401,7 +382,15 @@ func parseDebateAgents(raw string) []string {
 }
 
 func debateExecutionPlan(requestID string, agents []string, cwd string, roleCommand []string) transport.ExecutionPlanPayload {
-	panes := make([]transport.ExecutionPlanPane, 0, len(agents))
+	panes := []transport.ExecutionPlanPane{
+		{
+			ID:      "debate-coordinator",
+			Role:    "debate-coordinator",
+			AgentID: "coordinator",
+			Command: append(cloneStringSlice(roleCommand), "debate-coordinator", cwd),
+			CWD:     cwd,
+		},
+	}
 	for _, agent := range agents {
 		command := append(cloneStringSlice(roleCommand), "coding-agent", cwd)
 		panes = append(panes, transport.ExecutionPlanPane{
@@ -422,19 +411,6 @@ func debateExecutionPlan(requestID string, agents []string, cwd string, roleComm
 			},
 		},
 	}
-}
-
-func debateResponseTabID(response transport.ExecutionPlanResponse) (*int, error) {
-	if len(response.Tabs) == 0 || len(response.Tabs[0].Panes) == 0 {
-		return nil, errors.New("execution plan response did not include debate panes")
-	}
-	for _, pane := range response.Tabs[0].Panes {
-		if pane.ZellijTabID != nil {
-			tabID := *pane.ZellijTabID
-			return &tabID, nil
-		}
-	}
-	return nil, errors.New("execution plan response did not include a zellij tab id")
 }
 
 func debateRoleCommand(bin string) []string {
@@ -469,24 +445,46 @@ Topic: %s
 Think independently and give your best answer for this round.
 When your answer is complete, print the completion marker on its own final line.
 
-Completion marker:
+Completion marker parts:
+Print these parts concatenated exactly, with no extra spaces, as your final line:
 %s
-`, round, agent, topic, marker)
+`, round, agent, topic, formatDebateMarkerParts(marker))
 }
 
-func debateSynthesisPrompt(topic string, agents []string, outputs map[string]string, marker string) string {
+func formatDebateMarkerParts(marker string) string {
+	parts := debateMarkerParts(marker)
 	var b strings.Builder
+	for i, part := range parts {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, part)
+	}
+	return b.String()
+}
+
+func debateMarkerParts(marker string) []string {
+	body := strings.TrimPrefix(marker, "<<<AGENT_DEBATE_DONE")
+	body = strings.TrimSuffix(body, ">>>")
+	fields := strings.Fields(body)
+	parts := []string{"<<<AGENT_DEBATE_DONE"}
+	for _, field := range fields {
+		parts = append(parts, " "+field)
+	}
+	parts = append(parts, ">>>")
+	return parts
+}
+
+func debateSynthesisBlock(topic string, agents []string, outputs map[string]string, marker string) string {
+	var b strings.Builder
+	fmt.Fprintln(&b, "<<<DEBATE_SYNTHESIS_BEGIN>>>")
+	fmt.Fprintf(&b, "Completion-Marker-Base64: %s\n", base64.StdEncoding.EncodeToString([]byte(marker)))
 	fmt.Fprintf(&b, "Topic: %s\n\n", topic)
 	fmt.Fprintln(&b, "You are the debate coordinator. Read all agent answers below and produce a concise synthesis.")
 	fmt.Fprintln(&b, "Include consensus, disagreements, strongest arguments, weak assumptions, and a final recommendation.")
-	fmt.Fprintln(&b, "When the synthesis is complete, print the completion marker on its own final line.")
 	fmt.Fprintln(&b)
 	for _, agent := range agents {
 		paneID := "debate-" + agent
 		fmt.Fprintf(&b, "[%s]\n%s\n\n", paneID, outputs[paneID])
 	}
-	fmt.Fprintln(&b, "Completion marker:")
-	fmt.Fprintln(&b, marker)
+	fmt.Fprintln(&b, "<<<DEBATE_SYNTHESIS_END>>>")
 	return b.String()
 }
 
