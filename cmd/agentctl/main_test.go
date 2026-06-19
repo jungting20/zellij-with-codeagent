@@ -155,10 +155,11 @@ func TestRunDebateSendsRoundPromptWithMarkers(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	if len(client.messageRequests) != 2 {
-		t.Fatalf("message requests = %#v, want 2", client.messageRequests)
+	roundMessages := filterMessageRequests(client.messageRequests, "debate_round")
+	if len(roundMessages) != 2 {
+		t.Fatalf("round message requests = %#v, want 2", roundMessages)
 	}
-	for _, req := range client.messageRequests {
+	for _, req := range roundMessages {
 		if req.From != "debate-coordinator" {
 			t.Fatalf("message from = %q, want debate-coordinator", req.From)
 		}
@@ -172,8 +173,56 @@ func TestRunDebateSendsRoundPromptWithMarkers(t *testing.T) {
 			t.Fatalf("message body = %q, want round prompt with marker", req.Body)
 		}
 	}
-	if client.messageRequests[0].To != "debate-a" || client.messageRequests[1].To != "debate-b" {
-		t.Fatalf("message targets = %#v, want debate-a and debate-b", client.messageRequests)
+	if roundMessages[0].To != "debate-a" || roundMessages[1].To != "debate-b" {
+		t.Fatalf("message targets = %#v, want debate-a and debate-b", roundMessages)
+	}
+}
+
+func TestRunDebateCoordinatorSynthesizesCollectedAnswers(t *testing.T) {
+	client := &fakeAgentClient{
+		streamEventsFromMessages: true,
+		snapshotOutputsByPane: map[string]string{
+			"debate-a":           "answer from a",
+			"debate-b":           "answer from b",
+			"debate-coordinator": "final synthesis",
+		},
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"debate",
+		"--topic", "synthesis test",
+		"--agents", "a,b",
+		"--cwd", "/repo",
+		"--agent-role-bin", "/bin/zellij-agent",
+	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	panes := client.planPayload.Tabs[0].Panes
+	if panes[0].ID != "debate-coordinator" || panes[0].Role != "coding-agent" || len(panes[0].Command) == 0 {
+		t.Fatalf("coordinator pane = %#v, want coding-agent command", panes[0])
+	}
+	synthesisMessages := filterMessageRequests(client.messageRequests, "debate_synthesis")
+	if len(synthesisMessages) != 1 {
+		t.Fatalf("synthesis messages = %#v, want 1", synthesisMessages)
+	}
+	req := synthesisMessages[0]
+	if req.From != "debate-coordinator" || req.To != "debate-coordinator" {
+		t.Fatalf("synthesis message route = %#v, want coordinator to coordinator", req)
+	}
+	if !strings.Contains(req.Body, "Topic: synthesis test") ||
+		!strings.Contains(req.Body, "[debate-a]") ||
+		!strings.Contains(req.Body, "answer from a") ||
+		!strings.Contains(req.Body, "[debate-b]") ||
+		!strings.Contains(req.Body, "answer from b") ||
+		!strings.Contains(req.Body, "<<<AGENT_DEBATE_DONE") {
+		t.Fatalf("synthesis body = %q, want collected answers and marker", req.Body)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "[debate-coordinator synthesis]") || !strings.Contains(output, "final synthesis") {
+		t.Fatalf("stdout = %q, want coordinator synthesis output", output)
 	}
 }
 
@@ -201,13 +250,16 @@ func TestRunDebateWaitsForMarkersAndSnapshots(t *testing.T) {
 	if !client.streamEventsCalled {
 		t.Fatal("StreamEvents called = false, want true")
 	}
-	if len(client.snapshotRequests) != 2 {
-		t.Fatalf("snapshot requests = %#v, want 2", client.snapshotRequests)
+	if len(client.snapshotRequests) != 3 {
+		t.Fatalf("snapshot requests = %#v, want 3", client.snapshotRequests)
 	}
 	if client.snapshotRequests[0].paneID != "debate-a" || client.snapshotRequests[1].paneID != "debate-b" {
 		t.Fatalf("snapshot requests = %#v, want debate-a and debate-b", client.snapshotRequests)
 	}
-	if !client.snapshotRequests[0].req.Full || !client.snapshotRequests[1].req.Full {
+	if client.snapshotRequests[2].paneID != "debate-coordinator" {
+		t.Fatalf("snapshot requests = %#v, want coordinator synthesis snapshot", client.snapshotRequests)
+	}
+	if !client.snapshotRequests[0].req.Full || !client.snapshotRequests[1].req.Full || !client.snapshotRequests[2].req.Full {
 		t.Fatalf("snapshot requests = %#v, want full snapshots", client.snapshotRequests)
 	}
 	output := stdout.String()
@@ -478,6 +530,16 @@ func writeTempFile(t *testing.T, contents string) string {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	return path
+}
+
+func filterMessageRequests(requests []transport.SendMessageRequest, messageType string) []transport.SendMessageRequest {
+	filtered := make([]transport.SendMessageRequest, 0, len(requests))
+	for _, req := range requests {
+		if req.Type == messageType {
+			filtered = append(filtered, req)
+		}
+	}
+	return filtered
 }
 
 func fakeFactory(client *fakeAgentClient) clientFactory {

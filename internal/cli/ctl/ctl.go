@@ -332,7 +332,7 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 		fmt.Fprintf(stderr, "agentctl debate wait failed: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "debate request=%s session=%s agents=%s\n", response.RequestID, response.Session, strings.Join(agents, ","))
+	agentOutputs := make(map[string]string, len(agents))
 	for _, agent := range agents {
 		paneID := "debate-" + agent
 		snapshot, err := client.SnapshotOutput(ctx, paneID, transport.SnapshotOutputRequest{Full: true})
@@ -340,8 +340,35 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 			fmt.Fprintf(stderr, "agentctl debate snapshot failed: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "\n[%s]\n%s\n", paneID, snapshot.Output)
+		agentOutputs[paneID] = snapshot.Output
 	}
+
+	coordinatorMarker := debateCompletionMarker(requestID, 1, "coordinator")
+	if _, err := client.SendMessage(ctx, transport.SendMessageRequest{
+		From: "debate-coordinator",
+		To:   "debate-coordinator",
+		Type: "debate_synthesis",
+		Body: debateSynthesisPrompt(*topic, agents, agentOutputs, coordinatorMarker),
+	}); err != nil {
+		fmt.Fprintf(stderr, "agentctl debate synthesis prompt failed: %v\n", err)
+		return 1
+	}
+	if err := waitForDebateMarkers(ctx, client, map[string]string{"debate-coordinator": coordinatorMarker}); err != nil {
+		fmt.Fprintf(stderr, "agentctl debate synthesis wait failed: %v\n", err)
+		return 1
+	}
+	coordinatorSnapshot, err := client.SnapshotOutput(ctx, "debate-coordinator", transport.SnapshotOutputRequest{Full: true})
+	if err != nil {
+		fmt.Fprintf(stderr, "agentctl debate coordinator snapshot failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "debate request=%s session=%s agents=%s\n", response.RequestID, response.Session, strings.Join(agents, ","))
+	for _, agent := range agents {
+		paneID := "debate-" + agent
+		fmt.Fprintf(stdout, "\n[%s]\n%s\n", paneID, agentOutputs[paneID])
+	}
+	fmt.Fprintf(stdout, "\n[debate-coordinator synthesis]\n%s\n", coordinatorSnapshot.Output)
 	return 0
 }
 
@@ -367,9 +394,9 @@ func debateExecutionPlan(requestID string, agents []string, cwd string, roleComm
 	panes := []transport.ExecutionPlanPane{
 		{
 			ID:      "debate-coordinator",
-			Role:    "debate-coordinator",
+			Role:    "coding-agent",
 			AgentID: "coordinator",
-			Command: []string{"sh", "-lc", "printf 'debate_coordinator_ready\\n'; exec sh"},
+			Command: append(cloneStringSlice(roleCommand), "coding-agent", cwd),
 			CWD:     cwd,
 		},
 	}
@@ -410,9 +437,13 @@ func debateMarkers(requestID string, agents []string, round int) map[string]stri
 	markers := make(map[string]string, len(agents))
 	for _, agent := range agents {
 		paneID := "debate-" + agent
-		markers[paneID] = fmt.Sprintf("<<<AGENT_DEBATE_DONE debate=%s round=%d agent=%s token=%s-%d-%s>>>", requestID, round, agent, requestID, round, agent)
+		markers[paneID] = debateCompletionMarker(requestID, round, agent)
 	}
 	return markers
+}
+
+func debateCompletionMarker(requestID string, round int, agent string) string {
+	return fmt.Sprintf("<<<AGENT_DEBATE_DONE debate=%s round=%d agent=%s token=%s-%d-%s>>>", requestID, round, agent, requestID, round, agent)
 }
 
 func debateRoundPrompt(topic string, round int, agent string, marker string) string {
@@ -426,6 +457,22 @@ When your answer is complete, print the completion marker on its own final line.
 Completion marker:
 %s
 `, round, agent, topic, marker)
+}
+
+func debateSynthesisPrompt(topic string, agents []string, outputs map[string]string, marker string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Topic: %s\n\n", topic)
+	fmt.Fprintln(&b, "You are the debate coordinator. Read all agent answers below and produce a concise synthesis.")
+	fmt.Fprintln(&b, "Include consensus, disagreements, strongest arguments, weak assumptions, and a final recommendation.")
+	fmt.Fprintln(&b, "When the synthesis is complete, print the completion marker on its own final line.")
+	fmt.Fprintln(&b)
+	for _, agent := range agents {
+		paneID := "debate-" + agent
+		fmt.Fprintf(&b, "[%s]\n%s\n\n", paneID, outputs[paneID])
+	}
+	fmt.Fprintln(&b, "Completion marker:")
+	fmt.Fprintln(&b, marker)
+	return b.String()
 }
 
 func waitForDebateMarkers(ctx context.Context, client AgentClient, markers map[string]string) error {
