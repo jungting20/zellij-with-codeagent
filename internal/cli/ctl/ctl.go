@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"zellij-with-codeagent/internal/cli"
 	"zellij-with-codeagent/internal/transport"
 )
@@ -290,6 +292,7 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 	topic := fs.String("topic", "", "debate topic")
 	agentsCSV := fs.String("agents", "a,b,c", "comma-separated agent ids")
 	rounds := fs.Int("rounds", 1, "number of debate rounds to run, from 1 to 3")
+	configPath := fs.String("config", "", "YAML file defining debate agent commands")
 	cwd := fs.String("cwd", ".", "working directory for coding-agent panes")
 	agentRoleBin := fs.String("agent-role-bin", "", "zellij-agent binary used by generated panes")
 	if err := fs.Parse(args); err != nil {
@@ -308,9 +311,21 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 		fmt.Fprintln(stderr, "debate requires --rounds between 1 and 3")
 		return 2
 	}
+	agentSpecs := defaultDebateAgentSpecs(agents, *cwd, debateRoleCommand(*agentRoleBin))
+	coordinatorSpec := defaultDebateCoordinatorSpec(*cwd, debateRoleCommand(*agentRoleBin))
+	if strings.TrimSpace(*configPath) != "" {
+		loadedAgents, loadedCoordinator, err := loadDebateConfig(*configPath, *cwd, coordinatorSpec)
+		if err != nil {
+			fmt.Fprintf(stderr, "debate config failed: %v\n", err)
+			return 2
+		}
+		agentSpecs = loadedAgents
+		coordinatorSpec = loadedCoordinator
+		agents = debateAgentIDs(agentSpecs)
+	}
 
 	requestID := fmt.Sprintf("debate_%d", time.Now().UnixNano())
-	payload := debateExecutionPlan(requestID, agents, *cwd, debateRoleCommand(*agentRoleBin))
+	payload := debateExecutionPlan(requestID, agentSpecs, coordinatorSpec)
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
@@ -326,7 +341,8 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 		markers := debateMarkers(requestID, agents, round)
 		for _, agent := range agents {
 			paneID := "debate-" + agent
-			if err := client.SendInput(ctx, paneID, transport.SendInputRequest{Text: debateRoundPrompt(*topic, round, agent, roundOutputs, markers[paneID])}); err != nil {
+			agentSpec := debateAgentSpecByID(agentSpecs, agent)
+			if err := sendDebateAgentInput(ctx, client, paneID, debateRoundPrompt(*topic, round, agent, roundOutputs, markers[paneID]), agentSpec); err != nil {
 				fmt.Fprintf(stderr, "agentctl debate prompt failed: %v\n", err)
 				return 1
 			}
@@ -379,6 +395,43 @@ type debateRoundOutput struct {
 	Outputs map[string]string
 }
 
+type debateAgentSpec struct {
+	ID                 string
+	Role               string
+	Command            []string
+	CWD                string
+	SubmitNewlines     int
+	ExtraSubmitEnters  int
+	ExtraSubmitDelayMS int
+}
+
+type debateCoordinatorSpec struct {
+	Role    string
+	Command []string
+	CWD     string
+}
+
+type debateConfigFile struct {
+	Agents      []debateAgentConfig `yaml:"agents"`
+	Coordinator debatePaneConfig    `yaml:"coordinator"`
+}
+
+type debateAgentConfig struct {
+	ID                 string   `yaml:"id"`
+	Role               string   `yaml:"role"`
+	Command            []string `yaml:"command"`
+	CWD                string   `yaml:"cwd"`
+	SubmitNewlines     int      `yaml:"submit_newlines"`
+	ExtraSubmitEnters  int      `yaml:"extra_submit_enters"`
+	ExtraSubmitDelayMS int      `yaml:"extra_submit_delay_ms"`
+}
+
+type debatePaneConfig struct {
+	Role    string   `yaml:"role"`
+	Command []string `yaml:"command"`
+	CWD     string   `yaml:"cwd"`
+}
+
 func parseDebateAgents(raw string) []string {
 	parts := strings.Split(raw, ",")
 	agents := make([]string, 0, len(parts))
@@ -397,24 +450,161 @@ func parseDebateAgents(raw string) []string {
 	return agents
 }
 
-func debateExecutionPlan(requestID string, agents []string, cwd string, roleCommand []string) transport.ExecutionPlanPayload {
+func defaultDebateAgentSpecs(agents []string, cwd string, roleCommand []string) []debateAgentSpec {
+	specs := make([]debateAgentSpec, 0, len(agents))
+	for _, agent := range agents {
+		specs = append(specs, debateAgentSpec{
+			ID:             agent,
+			Role:           "coding-agent",
+			Command:        append(cloneStringSlice(roleCommand), "coding-agent", cwd),
+			CWD:            cwd,
+			SubmitNewlines: 1,
+		})
+	}
+	return specs
+}
+
+func defaultDebateCoordinatorSpec(cwd string, roleCommand []string) debateCoordinatorSpec {
+	return debateCoordinatorSpec{
+		Role:    "debate-coordinator",
+		Command: append(cloneStringSlice(roleCommand), "debate-coordinator", cwd),
+		CWD:     cwd,
+	}
+}
+
+func loadDebateConfig(path string, defaultCWD string, defaultCoordinator debateCoordinatorSpec) ([]debateAgentSpec, debateCoordinatorSpec, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, debateCoordinatorSpec{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	var cfg debateConfigFile
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, debateCoordinatorSpec{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if len(cfg.Agents) == 0 {
+		return nil, debateCoordinatorSpec{}, fmt.Errorf("agents are required")
+	}
+	seen := make(map[string]struct{}, len(cfg.Agents))
+	agents := make([]debateAgentSpec, 0, len(cfg.Agents))
+	for _, agent := range cfg.Agents {
+		id := strings.TrimSpace(agent.ID)
+		if id == "" {
+			return nil, debateCoordinatorSpec{}, fmt.Errorf("agent id is required")
+		}
+		if _, ok := seen[id]; ok {
+			return nil, debateCoordinatorSpec{}, fmt.Errorf("duplicate agent id %q", id)
+		}
+		seen[id] = struct{}{}
+		if len(agent.Command) == 0 {
+			return nil, debateCoordinatorSpec{}, fmt.Errorf("agent %s command is required", id)
+		}
+		role := strings.TrimSpace(agent.Role)
+		if role == "" {
+			role = "coding-agent"
+		}
+		cwd := strings.TrimSpace(agent.CWD)
+		if cwd == "" {
+			cwd = defaultCWD
+		}
+		submitNewlines := agent.SubmitNewlines
+		if submitNewlines == 0 {
+			submitNewlines = 1
+		}
+		if submitNewlines < 1 {
+			return nil, debateCoordinatorSpec{}, fmt.Errorf("agent %s submit_newlines must be at least 1", id)
+		}
+		if agent.ExtraSubmitEnters < 0 {
+			return nil, debateCoordinatorSpec{}, fmt.Errorf("agent %s extra_submit_enters must not be negative", id)
+		}
+		if agent.ExtraSubmitDelayMS < 0 {
+			return nil, debateCoordinatorSpec{}, fmt.Errorf("agent %s extra_submit_delay_ms must not be negative", id)
+		}
+		agents = append(agents, debateAgentSpec{
+			ID:                 id,
+			Role:               role,
+			Command:            cloneStringSlice(agent.Command),
+			CWD:                cwd,
+			SubmitNewlines:     submitNewlines,
+			ExtraSubmitEnters:  agent.ExtraSubmitEnters,
+			ExtraSubmitDelayMS: agent.ExtraSubmitDelayMS,
+		})
+	}
+
+	coordinator := defaultCoordinator
+	if len(cfg.Coordinator.Command) > 0 {
+		coordinator.Command = cloneStringSlice(cfg.Coordinator.Command)
+	}
+	if strings.TrimSpace(cfg.Coordinator.Role) != "" {
+		coordinator.Role = strings.TrimSpace(cfg.Coordinator.Role)
+	}
+	if strings.TrimSpace(cfg.Coordinator.CWD) != "" {
+		coordinator.CWD = strings.TrimSpace(cfg.Coordinator.CWD)
+	}
+	return agents, coordinator, nil
+}
+
+func debateAgentIDs(agents []debateAgentSpec) []string {
+	ids := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		ids = append(ids, agent.ID)
+	}
+	return ids
+}
+
+func debateAgentSpecByID(agents []debateAgentSpec, id string) debateAgentSpec {
+	for _, agent := range agents {
+		if agent.ID == id {
+			return agent
+		}
+	}
+	return debateAgentSpec{ID: id, SubmitNewlines: 1}
+}
+
+func sendDebateAgentInput(ctx context.Context, client AgentClient, paneID string, prompt string, agent debateAgentSpec) error {
+	if err := client.SendInput(ctx, paneID, transport.SendInputRequest{Text: withTrailingNewlines(prompt, agent.SubmitNewlines)}); err != nil {
+		return err
+	}
+	for i := 0; i < agent.ExtraSubmitEnters; i++ {
+		if agent.ExtraSubmitDelayMS > 0 {
+			timer := time.NewTimer(time.Duration(agent.ExtraSubmitDelayMS) * time.Millisecond)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			}
+		}
+		if err := client.SendInput(ctx, paneID, transport.SendInputRequest{Text: "\n"}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func withTrailingNewlines(text string, count int) string {
+	if count < 1 {
+		count = 1
+	}
+	return strings.TrimRight(text, "\n") + strings.Repeat("\n", count)
+}
+
+func debateExecutionPlan(requestID string, agents []debateAgentSpec, coordinator debateCoordinatorSpec) transport.ExecutionPlanPayload {
 	panes := []transport.ExecutionPlanPane{
 		{
 			ID:      "debate-coordinator",
-			Role:    "debate-coordinator",
+			Role:    coordinator.Role,
 			AgentID: "coordinator",
-			Command: append(cloneStringSlice(roleCommand), "debate-coordinator", cwd),
-			CWD:     cwd,
+			Command: cloneStringSlice(coordinator.Command),
+			CWD:     coordinator.CWD,
 		},
 	}
 	for _, agent := range agents {
-		command := append(cloneStringSlice(roleCommand), "coding-agent", cwd)
 		panes = append(panes, transport.ExecutionPlanPane{
-			ID:      "debate-" + agent,
-			Role:    "coding-agent",
-			AgentID: agent,
-			Command: command,
-			CWD:     cwd,
+			ID:      "debate-" + agent.ID,
+			Role:    agent.Role,
+			AgentID: agent.ID,
+			Command: cloneStringSlice(agent.Command),
+			CWD:     agent.CWD,
 		})
 	}
 	return transport.ExecutionPlanPayload{

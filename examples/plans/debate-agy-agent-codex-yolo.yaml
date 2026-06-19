@@ -1,0 +1,10 @@
+agents:
+  - id: a
+    command: ["agy", "--dangerously-skip-permissions"]
+  - id: b
+    command: ["agent", "--yolo", "--model", "claude-opus-4-8-thinking-high"]
+    submit_newlines: 2
+    extra_submit_enters: 1
+    extra_submit_delay_ms: 300
+  - id: c
+    command: ["codex", "--dangerously-bypass-approvals-and-sandbox"]

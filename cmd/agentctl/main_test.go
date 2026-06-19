@@ -146,6 +146,71 @@ func TestRunDebateSubmitsPlan(t *testing.T) {
 	}
 }
 
+func TestRunDebateLoadsAgentCommandsFromConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "debate.yaml")
+	config := `agents:
+  - id: a
+    command: ["agy", "--dangerously-skip-permissions"]
+  - id: b
+    command: ["agent", "--yolo", "--model", "claude-opus-4-8-thinking-high"]
+    submit_newlines: 2
+    extra_submit_enters: 1
+    extra_submit_delay_ms: 1
+  - id: c
+    command: ["codex", "--dangerously-bypass-approvals-and-sandbox"]
+coordinator:
+  command: ["./bin/zellij-agent", "role", "debate-coordinator", "/repo"]
+`
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	client := &fakeAgentClient{streamEventsFromInputs: true}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"debate",
+		"--topic", "configured agents",
+		"--rounds", "1",
+		"--config", configPath,
+		"--cwd", "/repo",
+		"--timeout", "5s",
+	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	panes := client.planPayload.Tabs[0].Panes
+	if len(panes) != 4 {
+		t.Fatalf("panes = %#v, want coordinator plus three agents", panes)
+	}
+	if panes[0].ID != "debate-coordinator" || strings.Join(panes[0].Command, " ") != "./bin/zellij-agent role debate-coordinator /repo" {
+		t.Fatalf("coordinator pane = %#v, want configured coordinator command", panes[0])
+	}
+	wantCommands := map[string]string{
+		"debate-a": "agy --dangerously-skip-permissions",
+		"debate-b": "agent --yolo --model claude-opus-4-8-thinking-high",
+		"debate-c": "codex --dangerously-bypass-approvals-and-sandbox",
+	}
+	for _, pane := range panes[1:] {
+		if got, want := strings.Join(pane.Command, " "), wantCommands[pane.ID]; got != want {
+			t.Fatalf("%s command = %q, want %q", pane.ID, got, want)
+		}
+		if pane.CWD != "/repo" {
+			t.Fatalf("%s CWD = %q, want /repo", pane.ID, pane.CWD)
+		}
+	}
+	inputsB := filterInputRequests(client.inputRequests, "debate-b")
+	if len(inputsB) != 2 {
+		t.Fatalf("debate-b inputs = %#v, want prompt plus extra submit enter", inputsB)
+	}
+	if !strings.HasSuffix(inputsB[0].req.Text, "\n\n") {
+		t.Fatalf("debate-b input = %q, want double newline submit suffix", inputsB[0].req.Text)
+	}
+	if inputsB[1].req.Text != "\n" {
+		t.Fatalf("debate-b extra input = %q, want Enter", inputsB[1].req.Text)
+	}
+}
+
 func TestRunDebateSendsRoundPromptWithMarkers(t *testing.T) {
 	client := &fakeAgentClient{streamEventsFromInputs: true}
 	var stdout, stderr bytes.Buffer
