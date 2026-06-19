@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,7 +99,7 @@ func TestRunPlanSubmitsExecutionPlanFile(t *testing.T) {
 }
 
 func TestRunDebateSubmitsPlan(t *testing.T) {
-	client := &fakeAgentClient{streamEventsFromMessages: true}
+	client := &fakeAgentClient{streamEventsFromInputs: true}
 	var stdout, stderr bytes.Buffer
 
 	code := run([]string{
@@ -123,7 +124,7 @@ func TestRunDebateSubmitsPlan(t *testing.T) {
 		t.Fatalf("plan tabs = %d, want 1", len(client.planPayload.Tabs))
 	}
 	panes := client.planPayload.Tabs[0].Panes
-	wantIDs := []string{"debate-coordinator", "debate-a", "debate-b", "debate-c"}
+	wantIDs := []string{"debate-a", "debate-b", "debate-c"}
 	if len(panes) != len(wantIDs) {
 		t.Fatalf("plan panes = %#v, want %d panes", panes, len(wantIDs))
 	}
@@ -132,8 +133,8 @@ func TestRunDebateSubmitsPlan(t *testing.T) {
 			t.Fatalf("pane[%d].ID = %q, want %q", i, panes[i].ID, wantID)
 		}
 	}
-	if panes[1].Role != "coding-agent" || len(panes[1].Command) == 0 {
-		t.Fatalf("agent pane = %#v, want coding-agent command", panes[1])
+	if panes[0].Role != "coding-agent" || len(panes[0].Command) == 0 {
+		t.Fatalf("agent pane = %#v, want coding-agent command", panes[0])
 	}
 	if !strings.Contains(stdout.String(), "debate request=") {
 		t.Fatalf("stdout = %q, want debate summary", stdout.String())
@@ -141,7 +142,7 @@ func TestRunDebateSubmitsPlan(t *testing.T) {
 }
 
 func TestRunDebateSendsRoundPromptWithMarkers(t *testing.T) {
-	client := &fakeAgentClient{streamEventsFromMessages: true}
+	client := &fakeAgentClient{streamEventsFromInputs: true}
 	var stdout, stderr bytes.Buffer
 
 	code := run([]string{
@@ -155,32 +156,26 @@ func TestRunDebateSendsRoundPromptWithMarkers(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	roundMessages := filterMessageRequests(client.messageRequests, "debate_round")
-	if len(roundMessages) != 2 {
-		t.Fatalf("round message requests = %#v, want 2", roundMessages)
+	if len(client.inputRequests) < 2 {
+		t.Fatalf("input requests = %#v, want at least 2 round prompts", client.inputRequests)
 	}
-	for _, req := range roundMessages {
-		if req.From != "debate-coordinator" {
-			t.Fatalf("message from = %q, want debate-coordinator", req.From)
-		}
-		if req.Type != "debate_round" {
-			t.Fatalf("message type = %q, want debate_round", req.Type)
-		}
-		if !strings.Contains(req.Body, "Round: 1") ||
-			!strings.Contains(req.Body, "Topic: marker test") ||
-			!strings.Contains(req.Body, "Completion marker:") ||
-			!strings.Contains(req.Body, "<<<AGENT_DEBATE_DONE") {
-			t.Fatalf("message body = %q, want round prompt with marker", req.Body)
+	roundInputs := client.inputRequests[:2]
+	for _, req := range roundInputs {
+		if !strings.Contains(req.req.Text, "Round: 1") ||
+			!strings.Contains(req.req.Text, "Topic: marker test") ||
+			!strings.Contains(req.req.Text, "Completion marker:") ||
+			!strings.Contains(req.req.Text, "<<<AGENT_DEBATE_DONE") {
+			t.Fatalf("input text = %q, want round prompt with marker", req.req.Text)
 		}
 	}
-	if roundMessages[0].To != "debate-a" || roundMessages[1].To != "debate-b" {
-		t.Fatalf("message targets = %#v, want debate-a and debate-b", roundMessages)
+	if roundInputs[0].paneID != "debate-a" || roundInputs[1].paneID != "debate-b" {
+		t.Fatalf("input targets = %#v, want debate-a and debate-b", roundInputs)
 	}
 }
 
-func TestRunDebateCoordinatorSynthesizesCollectedAnswers(t *testing.T) {
+func TestRunDebateCreatesCoordinatorAfterCollectingAnswers(t *testing.T) {
 	client := &fakeAgentClient{
-		streamEventsFromMessages: true,
+		streamEventsFromInputs: true,
 		snapshotOutputsByPane: map[string]string{
 			"debate-a":           "answer from a",
 			"debate-b":           "answer from b",
@@ -201,24 +196,32 @@ func TestRunDebateCoordinatorSynthesizesCollectedAnswers(t *testing.T) {
 		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
 	panes := client.planPayload.Tabs[0].Panes
-	if panes[0].ID != "debate-coordinator" || panes[0].Role != "coding-agent" || len(panes[0].Command) == 0 {
-		t.Fatalf("coordinator pane = %#v, want coding-agent command", panes[0])
+	for _, pane := range panes {
+		if pane.ID == "debate-coordinator" {
+			t.Fatalf("initial panes = %#v, coordinator must not start before agent markers", panes)
+		}
 	}
-	synthesisMessages := filterMessageRequests(client.messageRequests, "debate_synthesis")
-	if len(synthesisMessages) != 1 {
-		t.Fatalf("synthesis messages = %#v, want 1", synthesisMessages)
+	if len(client.createPaneRequests) != 1 {
+		t.Fatalf("create pane requests = %#v, want lazy coordinator creation", client.createPaneRequests)
 	}
-	req := synthesisMessages[0]
-	if req.From != "debate-coordinator" || req.To != "debate-coordinator" {
-		t.Fatalf("synthesis message route = %#v, want coordinator to coordinator", req)
+	created := client.createPaneRequests[0]
+	if created.ID != "debate-coordinator" || created.Role != "coding-agent" || created.ZellijTabID == nil || len(created.Command) == 0 {
+		t.Fatalf("created coordinator = %#v, want coding-agent in existing tab", created)
 	}
-	if !strings.Contains(req.Body, "Topic: synthesis test") ||
-		!strings.Contains(req.Body, "[debate-a]") ||
-		!strings.Contains(req.Body, "answer from a") ||
-		!strings.Contains(req.Body, "[debate-b]") ||
-		!strings.Contains(req.Body, "answer from b") ||
-		!strings.Contains(req.Body, "<<<AGENT_DEBATE_DONE") {
-		t.Fatalf("synthesis body = %q, want collected answers and marker", req.Body)
+	if len(client.inputRequests) < 3 {
+		t.Fatalf("input requests = %#v, want agent prompts and synthesis prompt", client.inputRequests)
+	}
+	req := client.inputRequests[2]
+	if req.paneID != "debate-coordinator" {
+		t.Fatalf("synthesis input pane = %q, want debate-coordinator", req.paneID)
+	}
+	if !strings.Contains(req.req.Text, "Topic: synthesis test") ||
+		!strings.Contains(req.req.Text, "[debate-a]") ||
+		!strings.Contains(req.req.Text, "answer from a") ||
+		!strings.Contains(req.req.Text, "[debate-b]") ||
+		!strings.Contains(req.req.Text, "answer from b") ||
+		!strings.Contains(req.req.Text, "<<<AGENT_DEBATE_DONE") {
+		t.Fatalf("synthesis input = %q, want collected answers and marker", req.req.Text)
 	}
 	output := stdout.String()
 	if !strings.Contains(output, "[debate-coordinator synthesis]") || !strings.Contains(output, "final synthesis") {
@@ -228,7 +231,7 @@ func TestRunDebateCoordinatorSynthesizesCollectedAnswers(t *testing.T) {
 
 func TestRunDebateWaitsForMarkersAndSnapshots(t *testing.T) {
 	client := &fakeAgentClient{
-		streamEventsFromMessages: true,
+		streamEventsFromInputs: true,
 		snapshotOutputsByPane: map[string]string{
 			"debate-a": "answer from a",
 			"debate-b": "answer from b",
@@ -270,9 +273,9 @@ func TestRunDebateWaitsForMarkersAndSnapshots(t *testing.T) {
 
 func TestRunDebateTimesOutWhenMarkerMissing(t *testing.T) {
 	client := &fakeAgentClient{
-		streamEventsFromMessages: true,
-		streamEventLimit:         1,
-		streamKeepOpen:           true,
+		streamEventsFromInputs: true,
+		streamEventLimit:       1,
+		streamKeepOpen:         true,
 	}
 	var stdout, stderr bytes.Buffer
 
@@ -542,6 +545,16 @@ func filterMessageRequests(requests []transport.SendMessageRequest, messageType 
 	return filtered
 }
 
+func filterInputRequests(requests []fakeInputRequest, paneID string) []fakeInputRequest {
+	filtered := make([]fakeInputRequest, 0, len(requests))
+	for _, req := range requests {
+		if req.paneID == paneID {
+			filtered = append(filtered, req)
+		}
+	}
+	return filtered
+}
+
 func fakeFactory(client *fakeAgentClient) clientFactory {
 	return func(socketPath string, timeout time.Duration) agentClient {
 		client.socketPath = socketPath
@@ -563,11 +576,13 @@ type fakeAgentClient struct {
 	messageResponse       transport.SendMessageResponse
 	eventStream           *transport.EventStream
 
-	planRequestID string
-	planPayload   transport.ExecutionPlanPayload
+	planRequestID      string
+	planPayload        transport.ExecutionPlanPayload
+	createPaneRequests []transport.CreatePaneRequest
 
 	inputPaneID      string
 	inputRequest     transport.SendInputRequest
+	inputRequests    []fakeInputRequest
 	snapshotPaneID   string
 	snapshotRequest  transport.SnapshotOutputRequest
 	snapshotRequests []fakeSnapshotRequest
@@ -578,10 +593,16 @@ type fakeAgentClient struct {
 	eventTypes               []string
 	streamEventsCalled       bool
 	streamEventsFromMessages bool
+	streamEventsFromInputs   bool
 	streamEventLimit         int
 	streamKeepOpen           bool
 
 	cleanupRequest transport.CleanupRequest
+}
+
+type fakeInputRequest struct {
+	paneID string
+	req    transport.SendInputRequest
 }
 
 type fakeSnapshotRequest struct {
@@ -600,6 +621,7 @@ func (c *fakeAgentClient) InspectRuntime(context.Context) (transport.InspectRunt
 func (c *fakeAgentClient) SendInput(_ context.Context, paneID string, req transport.SendInputRequest) error {
 	c.inputPaneID = paneID
 	c.inputRequest = req
+	c.inputRequests = append(c.inputRequests, fakeInputRequest{paneID: paneID, req: req})
 	return nil
 }
 
@@ -627,6 +649,20 @@ func (c *fakeAgentClient) SendMessage(_ context.Context, req transport.SendMessa
 	}, nil
 }
 
+func (c *fakeAgentClient) CreatePane(_ context.Context, req transport.CreatePaneRequest) (transport.CreatePaneResponse, error) {
+	c.createPaneRequests = append(c.createPaneRequests, req)
+	return transport.CreatePaneResponse{
+		Pane: transport.Pane{
+			ID:           req.ID,
+			Role:         req.Role,
+			AgentID:      req.AgentID,
+			ZellijTabID:  req.ZellijTabID,
+			Status:       "running",
+			ZellijPaneID: "terminal_coordinator",
+		},
+	}, nil
+}
+
 func (c *fakeAgentClient) SubmitExecutionPlan(_ context.Context, requestID string, payload transport.ExecutionPlanPayload) (transport.ExecutionPlanResponse, error) {
 	c.planRequestID = requestID
 	c.planPayload = payload
@@ -636,13 +672,30 @@ func (c *fakeAgentClient) SubmitExecutionPlan(_ context.Context, requestID strin
 		Layout:    payload.Layout,
 		Tabs: []transport.ExecutionPlanTabResponse{
 			{
-				Name: "main",
-				Panes: []transport.Pane{
-					{ID: "planner", Role: "planner", Status: "running", ZellijPaneID: "terminal_1"},
-				},
+				Name:  "main",
+				Panes: fakePlanResponsePanes(payload),
 			},
 		},
 	}, nil
+}
+
+func fakePlanResponsePanes(payload transport.ExecutionPlanPayload) []transport.Pane {
+	if len(payload.Tabs) == 0 {
+		return nil
+	}
+	panes := make([]transport.Pane, 0, len(payload.Tabs[0].Panes))
+	tabID := 7
+	for i, pane := range payload.Tabs[0].Panes {
+		panes = append(panes, transport.Pane{
+			ID:           pane.ID,
+			Role:         pane.Role,
+			AgentID:      pane.AgentID,
+			Status:       "running",
+			ZellijPaneID: fmt.Sprintf("terminal_%d", i+1),
+			ZellijTabID:  &tabID,
+		})
+	}
+	return panes
 }
 
 func (c *fakeAgentClient) RecentEvents(_ context.Context, limit int, eventTypes ...string) (transport.RecentEventsResponse, error) {
@@ -663,6 +716,25 @@ func (c *fakeAgentClient) StreamEvents(context.Context) (*transport.EventStream,
 				break
 			}
 			events <- transport.Event{Type: "raw_output", PaneID: req.To, Message: extractCompletionMarker(req.Body)}
+		}
+		errs := make(chan error)
+		if !c.streamKeepOpen {
+			close(events)
+			close(errs)
+		}
+		return &transport.EventStream{
+			Events: events,
+			Errors: errs,
+			Close:  func() error { return nil },
+		}, nil
+	}
+	if c.streamEventsFromInputs {
+		events := make(chan transport.Event, len(c.inputRequests))
+		for i, req := range c.inputRequests {
+			if c.streamEventLimit > 0 && i >= c.streamEventLimit {
+				break
+			}
+			events <- transport.Event{Type: "raw_output", PaneID: req.paneID, Message: extractCompletionMarker(req.req.Text)}
 		}
 		errs := make(chan error)
 		if !c.streamKeepOpen {

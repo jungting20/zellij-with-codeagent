@@ -18,6 +18,7 @@ import (
 
 type AgentClient interface {
 	Health(context.Context) (transport.HealthResponse, error)
+	CreatePane(context.Context, transport.CreatePaneRequest) (transport.CreatePaneResponse, error)
 	InspectRuntime(context.Context) (transport.InspectRuntimeResponse, error)
 	SendInput(context.Context, string, transport.SendInputRequest) error
 	SnapshotOutput(context.Context, string, transport.SnapshotOutputRequest) (transport.SnapshotOutputResponse, error)
@@ -318,12 +319,7 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 	markers := debateMarkers(requestID, agents, 1)
 	for _, agent := range agents {
 		paneID := "debate-" + agent
-		if _, err := client.SendMessage(ctx, transport.SendMessageRequest{
-			From: "debate-coordinator",
-			To:   paneID,
-			Type: "debate_round",
-			Body: debateRoundPrompt(*topic, 1, agent, markers[paneID]),
-		}); err != nil {
+		if err := client.SendInput(ctx, paneID, transport.SendInputRequest{Text: debateRoundPrompt(*topic, 1, agent, markers[paneID])}); err != nil {
 			fmt.Fprintf(stderr, "agentctl debate prompt failed: %v\n", err)
 			return 1
 		}
@@ -343,13 +339,27 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 		agentOutputs[paneID] = snapshot.Output
 	}
 
-	coordinatorMarker := debateCompletionMarker(requestID, 1, "coordinator")
-	if _, err := client.SendMessage(ctx, transport.SendMessageRequest{
-		From: "debate-coordinator",
-		To:   "debate-coordinator",
-		Type: "debate_synthesis",
-		Body: debateSynthesisPrompt(*topic, agents, agentOutputs, coordinatorMarker),
+	tabID, err := debateResponseTabID(response)
+	if err != nil {
+		fmt.Fprintf(stderr, "agentctl debate coordinator failed: %v\n", err)
+		return 1
+	}
+	if _, err := client.CreatePane(ctx, transport.CreatePaneRequest{
+		ID:          "debate-coordinator",
+		TaskID:      requestID,
+		AgentID:     "coordinator",
+		Role:        "coding-agent",
+		Name:        "debate-coordinator",
+		TabName:     response.Tabs[0].Name,
+		ZellijTabID: tabID,
+		CWD:         *cwd,
+		Command:     append(cloneStringSlice(debateRoleCommand(*agentRoleBin)), "coding-agent", *cwd),
 	}); err != nil {
+		fmt.Fprintf(stderr, "agentctl debate coordinator failed: %v\n", err)
+		return 1
+	}
+	coordinatorMarker := debateCompletionMarker(requestID, 1, "coordinator")
+	if err := client.SendInput(ctx, "debate-coordinator", transport.SendInputRequest{Text: debateSynthesisPrompt(*topic, agents, agentOutputs, coordinatorMarker)}); err != nil {
 		fmt.Fprintf(stderr, "agentctl debate synthesis prompt failed: %v\n", err)
 		return 1
 	}
@@ -391,15 +401,7 @@ func parseDebateAgents(raw string) []string {
 }
 
 func debateExecutionPlan(requestID string, agents []string, cwd string, roleCommand []string) transport.ExecutionPlanPayload {
-	panes := []transport.ExecutionPlanPane{
-		{
-			ID:      "debate-coordinator",
-			Role:    "coding-agent",
-			AgentID: "coordinator",
-			Command: append(cloneStringSlice(roleCommand), "coding-agent", cwd),
-			CWD:     cwd,
-		},
-	}
+	panes := make([]transport.ExecutionPlanPane, 0, len(agents))
 	for _, agent := range agents {
 		command := append(cloneStringSlice(roleCommand), "coding-agent", cwd)
 		panes = append(panes, transport.ExecutionPlanPane{
@@ -420,6 +422,19 @@ func debateExecutionPlan(requestID string, agents []string, cwd string, roleComm
 			},
 		},
 	}
+}
+
+func debateResponseTabID(response transport.ExecutionPlanResponse) (*int, error) {
+	if len(response.Tabs) == 0 || len(response.Tabs[0].Panes) == 0 {
+		return nil, errors.New("execution plan response did not include debate panes")
+	}
+	for _, pane := range response.Tabs[0].Panes {
+		if pane.ZellijTabID != nil {
+			tabID := *pane.ZellijTabID
+			return &tabID, nil
+		}
+	}
+	return nil, errors.New("execution plan response did not include a zellij tab id")
 }
 
 func debateRoleCommand(bin string) []string {
