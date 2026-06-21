@@ -292,6 +292,7 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 	topic := fs.String("topic", "", "debate topic")
 	agentsCSV := fs.String("agents", "a,b,c", "comma-separated agent ids")
 	rounds := fs.Int("rounds", 1, "number of debate rounds to run, from 1 to 3")
+	agentTimeout := fs.Duration("agent-timeout", 2*time.Minute, "per-agent debate response timeout")
 	configPath := fs.String("config", "", "YAML file defining debate agent commands")
 	cwd := fs.String("cwd", ".", "working directory for coding-agent panes")
 	agentRoleBin := fs.String("agent-role-bin", "", "zellij-agent binary used by generated panes")
@@ -309,6 +310,10 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 	}
 	if *rounds < 1 || *rounds > 3 {
 		fmt.Fprintln(stderr, "debate requires --rounds between 1 and 3")
+		return 2
+	}
+	if *agentTimeout <= 0 {
+		fmt.Fprintln(stderr, "debate requires --agent-timeout greater than 0")
 		return 2
 	}
 	agentSpecs := defaultDebateAgentSpecs(agents, *cwd, debateRoleCommand(*agentRoleBin))
@@ -347,7 +352,8 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 				return 1
 			}
 		}
-		if err := waitForDebateMarkers(ctx, client, markers); err != nil {
+		statuses, err := waitForDebateMarkers(ctx, client, markers, *agentTimeout)
+		if err != nil {
 			fmt.Fprintf(stderr, "agentctl debate wait failed: %v\n", err)
 			return 1
 		}
@@ -361,7 +367,7 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 			}
 			agentOutputs[paneID] = snapshot.Output
 		}
-		roundOutputs = append(roundOutputs, debateRoundOutput{Round: round, Outputs: agentOutputs})
+		roundOutputs = append(roundOutputs, debateRoundOutput{Round: round, Outputs: agentOutputs, Statuses: statuses})
 	}
 
 	coordinatorMarker := debateCompletionMarker(requestID, *rounds, "coordinator")
@@ -369,8 +375,13 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 		fmt.Fprintf(stderr, "agentctl debate synthesis prompt failed: %v\n", err)
 		return 1
 	}
-	if err := waitForDebateMarkers(ctx, client, map[string]string{"debate-coordinator": coordinatorMarker}); err != nil {
+	coordinatorStatuses, err := waitForDebateMarkers(ctx, client, map[string]string{"debate-coordinator": coordinatorMarker}, *agentTimeout)
+	if err != nil {
 		fmt.Fprintf(stderr, "agentctl debate synthesis wait failed: %v\n", err)
+		return 1
+	}
+	if status := coordinatorStatuses["debate-coordinator"]; status.Status != debatePaneStatusDone {
+		fmt.Fprintf(stderr, "agentctl debate synthesis wait failed: debate-coordinator %s after %s\n", status.Status, status.Timeout)
 		return 1
 	}
 	coordinatorSnapshot, err := client.SnapshotOutput(ctx, "debate-coordinator", transport.SnapshotOutputRequest{Full: true})
@@ -380,6 +391,7 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 	}
 
 	fmt.Fprintf(stdout, "debate request=%s session=%s agents=%s\n", response.RequestID, response.Session, strings.Join(agents, ","))
+	printDebateStatus(stdout, roundOutputs, agents)
 	for _, roundOutput := range roundOutputs {
 		for _, agent := range agents {
 			paneID := "debate-" + agent
@@ -391,8 +403,21 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 }
 
 type debateRoundOutput struct {
-	Round   int
-	Outputs map[string]string
+	Round    int
+	Outputs  map[string]string
+	Statuses map[string]debatePaneWaitStatus
+}
+
+const (
+	debatePaneStatusDone     = "done"
+	debatePaneStatusTimedOut = "timed_out"
+)
+
+type debatePaneWaitStatus struct {
+	PaneID  string
+	Status  string
+	Elapsed time.Duration
+	Timeout time.Duration
 }
 
 type debateAgentSpec struct {
@@ -714,7 +739,37 @@ func appendDebateRoundOutputs(b *strings.Builder, rounds []debateRoundOutput, ag
 			if !strings.HasPrefix(paneID, "debate-") {
 				paneID = "debate-" + agent
 			}
-			fmt.Fprintf(b, "[round %d %s]\n%s\n\n", roundOutput.Round, paneID, roundOutput.Outputs[paneID])
+			fmt.Fprintf(b, "[round %d %s]%s\n%s\n\n", roundOutput.Round, paneID, debateStatusSuffix(roundOutput.Statuses[paneID]), roundOutput.Outputs[paneID])
+		}
+	}
+}
+
+func debateStatusSuffix(status debatePaneWaitStatus) string {
+	if status.Status == "" {
+		return ""
+	}
+	return fmt.Sprintf(" status=%s elapsed=%s timeout=%s", status.Status, status.Elapsed.Round(time.Millisecond), status.Timeout)
+}
+
+func printDebateStatus(w io.Writer, rounds []debateRoundOutput, agents []string) {
+	if len(rounds) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "\n[debate status]")
+	for _, roundOutput := range rounds {
+		for _, agent := range agents {
+			paneID := "debate-" + agent
+			status := roundOutput.Statuses[paneID]
+			if status.Status == "" {
+				status = debatePaneWaitStatus{PaneID: paneID, Status: debatePaneStatusTimedOut}
+			}
+			fmt.Fprintf(w, "round=%d pane=%s status=%s elapsed=%s timeout=%s\n",
+				roundOutput.Round,
+				paneID,
+				status.Status,
+				status.Elapsed.Round(time.Millisecond),
+				status.Timeout,
+			)
 		}
 	}
 }
@@ -728,31 +783,52 @@ func sortedDebatePaneAgents(outputs map[string]string) []string {
 	return agents
 }
 
-func waitForDebateMarkers(ctx context.Context, client AgentClient, markers map[string]string) error {
+func waitForDebateMarkers(ctx context.Context, client AgentClient, markers map[string]string, agentTimeout time.Duration) (map[string]debatePaneWaitStatus, error) {
 	stream, err := client.StreamEvents(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer stream.Close()
 
-	seen := make(map[string]struct{}, len(markers))
+	started := time.Now()
+	deadlines := make(map[string]time.Time, len(markers))
+	statuses := make(map[string]debatePaneWaitStatus, len(markers))
+	for paneID := range markers {
+		deadlines[paneID] = started.Add(agentTimeout)
+	}
 	events := stream.Events
 	errs := stream.Errors
-	for len(seen) < len(markers) {
+	for len(statuses) < len(markers) {
+		nextDeadline, ok := nextDebateDeadline(markers, statuses, deadlines)
+		if !ok {
+			break
+		}
+		wait := time.Until(nextDeadline)
+		if wait <= 0 {
+			markDebateTimeouts(markers, statuses, deadlines, started, agentTimeout, time.Now())
+			continue
+		}
 		select {
 		case event, ok := <-events:
 			if !ok {
-				if len(seen) == len(markers) {
-					return nil
+				if len(statuses) == len(markers) {
+					return statuses, nil
 				}
-				return fmt.Errorf("event stream closed before markers arrived; missing=%s", strings.Join(missingDebateMarkers(markers, seen), ","))
+				return nil, fmt.Errorf("event stream closed before markers arrived; missing=%s", strings.Join(missingDebateMarkers(markers, statuses), ","))
 			}
 			if event.Type != "raw_output" {
 				continue
 			}
 			marker, ok := markers[event.PaneID]
 			if ok && strings.Contains(event.Message, marker) {
-				seen[event.PaneID] = struct{}{}
+				if _, alreadyRecorded := statuses[event.PaneID]; !alreadyRecorded {
+					statuses[event.PaneID] = debatePaneWaitStatus{
+						PaneID:  event.PaneID,
+						Status:  debatePaneStatusDone,
+						Elapsed: time.Since(started),
+						Timeout: agentTimeout,
+					}
+				}
 			}
 		case err, ok := <-errs:
 			if !ok {
@@ -760,19 +836,56 @@ func waitForDebateMarkers(ctx context.Context, client AgentClient, markers map[s
 				continue
 			}
 			if err != nil && !errors.Is(err, context.Canceled) {
-				return err
+				return nil, err
 			}
+		case <-time.After(wait):
+			markDebateTimeouts(markers, statuses, deadlines, started, agentTimeout, time.Now())
 		case <-ctx.Done():
-			return fmt.Errorf("%w; missing=%s", ctx.Err(), strings.Join(missingDebateMarkers(markers, seen), ","))
+			return nil, fmt.Errorf("%w; missing=%s", ctx.Err(), strings.Join(missingDebateMarkers(markers, statuses), ","))
 		}
 	}
-	return nil
+	return statuses, nil
 }
 
-func missingDebateMarkers(markers map[string]string, seen map[string]struct{}) []string {
+func nextDebateDeadline(markers map[string]string, statuses map[string]debatePaneWaitStatus, deadlines map[string]time.Time) (time.Time, bool) {
+	var next time.Time
+	for paneID := range markers {
+		if _, ok := statuses[paneID]; ok {
+			continue
+		}
+		deadline := deadlines[paneID]
+		if next.IsZero() || deadline.Before(next) {
+			next = deadline
+		}
+	}
+	if next.IsZero() {
+		return time.Time{}, false
+	}
+	return next, true
+}
+
+func markDebateTimeouts(markers map[string]string, statuses map[string]debatePaneWaitStatus, deadlines map[string]time.Time, started time.Time, agentTimeout time.Duration, now time.Time) {
+	for paneID := range markers {
+		if _, ok := statuses[paneID]; ok {
+			continue
+		}
+		deadline := deadlines[paneID]
+		if deadline.After(now) {
+			continue
+		}
+		statuses[paneID] = debatePaneWaitStatus{
+			PaneID:  paneID,
+			Status:  debatePaneStatusTimedOut,
+			Elapsed: now.Sub(started),
+			Timeout: agentTimeout,
+		}
+	}
+}
+
+func missingDebateMarkers(markers map[string]string, statuses map[string]debatePaneWaitStatus) []string {
 	missing := make([]string, 0, len(markers))
 	for paneID := range markers {
-		if _, ok := seen[paneID]; !ok {
+		if _, ok := statuses[paneID]; !ok {
 			missing = append(missing, paneID)
 		}
 	}
@@ -1058,6 +1171,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  health    Check the agentd socket")
 	fmt.Fprintln(w, "  status    Inspect managed runtime state")
 	fmt.Fprintln(w, "  plan      Submit an execution plan JSON file")
+	fmt.Fprintln(w, "  debate    Run a multi-agent debate and synthesize the results")
 	fmt.Fprintln(w, "  input     Send text to a managed pane")
 	fmt.Fprintln(w, "  snapshot  Dump managed pane output")
 	fmt.Fprintln(w, "  message   Send a tab-scoped message between managed panes")

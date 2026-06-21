@@ -431,8 +431,15 @@ func TestRunDebateWaitsForMarkersAndSnapshots(t *testing.T) {
 func TestRunDebateTimesOutWhenMarkerMissing(t *testing.T) {
 	client := &fakeAgentClient{
 		streamEventsFromInputs: true,
-		streamEventLimit:       1,
+		streamOmitPanes: map[string]bool{
+			"debate-b": true,
+		},
 		streamKeepOpen:         true,
+		snapshotOutputsByPane: map[string]string{
+			"debate-a":           "answer from a",
+			"debate-b":           "auth failed: not logged in",
+			"debate-coordinator": "partial synthesis",
+		},
 	}
 	var stdout, stderr bytes.Buffer
 
@@ -442,6 +449,64 @@ func TestRunDebateTimesOutWhenMarkerMissing(t *testing.T) {
 		"--agents", "a,b",
 		"--cwd", "/repo",
 		"--agent-role-bin", "/bin/zellij-agent",
+		"--agent-timeout", "20ms",
+		"--timeout", "5s",
+	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	if len(client.snapshotRequests) != 3 {
+		t.Fatalf("snapshot requests = %#v, want two agents plus coordinator after partial timeout", client.snapshotRequests)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"round=1 pane=debate-a status=done",
+		"round=1 pane=debate-b status=timed_out",
+		"[round 1 debate-b]",
+		"auth failed: not logged in",
+		"[debate-coordinator synthesis]",
+		"partial synthesis",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("stdout = %q, missing %q", output, want)
+		}
+	}
+	synthesisInputs := filterInputRequests(client.inputRequests, "debate-coordinator")
+	if len(synthesisInputs) != 1 {
+		t.Fatalf("coordinator inputs = %#v, want one synthesis block", synthesisInputs)
+	}
+	synthesis := synthesisInputs[0].req.Text
+	for _, want := range []string{
+		"[round 1 debate-b] status=timed_out",
+		"auth failed: not logged in",
+	} {
+		if !strings.Contains(synthesis, want) {
+			t.Fatalf("synthesis = %q, missing %q", synthesis, want)
+		}
+	}
+}
+
+func TestRunDebateFailsWhenOverallTimeoutExpiresBeforeAgentTimeout(t *testing.T) {
+	client := &fakeAgentClient{
+		streamEventsFromInputs: true,
+		streamOmitPanes: map[string]bool{
+			"debate-b": true,
+		},
+		streamKeepOpen: true,
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"debate",
+		"--topic", "overall timeout test",
+		"--agents", "a,b",
+		"--cwd", "/repo",
+		"--agent-role-bin", "/bin/zellij-agent",
+		"--agent-timeout", "5s",
 		"--timeout", "20ms",
 	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
 
@@ -449,10 +514,10 @@ func TestRunDebateTimesOutWhenMarkerMissing(t *testing.T) {
 		t.Fatalf("run() exit code = %d, want 1; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "context deadline exceeded") || !strings.Contains(stderr.String(), "debate-b") {
-		t.Fatalf("stderr = %q, want timeout with missing debate-b", stderr.String())
+		t.Fatalf("stderr = %q, want overall timeout with missing debate-b", stderr.String())
 	}
 	if len(client.snapshotRequests) != 0 {
-		t.Fatalf("snapshot requests = %#v, want none after timeout", client.snapshotRequests)
+		t.Fatalf("snapshot requests = %#v, want none after overall timeout", client.snapshotRequests)
 	}
 }
 
@@ -768,6 +833,7 @@ type fakeAgentClient struct {
 	streamEventsFromInputs   bool
 	streamEventLimit         int
 	streamKeepOpen           bool
+	streamOmitPanes          map[string]bool
 
 	cleanupRequest transport.CleanupRequest
 }
@@ -916,6 +982,9 @@ func (c *fakeAgentClient) StreamEvents(context.Context) (*transport.EventStream,
 		for i, req := range c.inputRequests {
 			if c.streamEventLimit > 0 && i >= c.streamEventLimit {
 				break
+			}
+			if c.streamOmitPanes[req.paneID] {
+				continue
 			}
 			events <- transport.Event{Type: "raw_output", PaneID: req.paneID, Message: extractCompletionMarker(req.req.Text)}
 		}
