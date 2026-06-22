@@ -341,6 +341,10 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 		fmt.Fprintf(stderr, "agentctl debate plan failed: %v\n", err)
 		return 1
 	}
+	if err := waitForDebateAgentStartup(ctx, agentSpecs); err != nil {
+		fmt.Fprintf(stderr, "agentctl debate startup wait failed: %v\n", err)
+		return 1
+	}
 	roundOutputs := make([]debateRoundOutput, 0, *rounds)
 	for round := 1; round <= *rounds; round++ {
 		markers := debateMarkers(requestID, agents, round)
@@ -425,6 +429,7 @@ type debateAgentSpec struct {
 	Role               string
 	Command            []string
 	CWD                string
+	StartupDelayMS     int
 	SubmitNewlines     int
 	ExtraSubmitEnters  int
 	ExtraSubmitDelayMS int
@@ -449,6 +454,7 @@ type debateAgentConfig struct {
 	SubmitNewlines     int      `yaml:"submit_newlines"`
 	ExtraSubmitEnters  int      `yaml:"extra_submit_enters"`
 	ExtraSubmitDelayMS int      `yaml:"extra_submit_delay_ms"`
+	StartupDelayMS     int      `yaml:"startup_delay_ms"`
 }
 
 type debatePaneConfig struct {
@@ -478,15 +484,58 @@ func parseDebateAgents(raw string) []string {
 func defaultDebateAgentSpecs(agents []string, cwd string, roleCommand []string) []debateAgentSpec {
 	specs := make([]debateAgentSpec, 0, len(agents))
 	for _, agent := range agents {
-		specs = append(specs, debateAgentSpec{
-			ID:             agent,
-			Role:           "coding-agent",
-			Command:        append(cloneStringSlice(roleCommand), "coding-agent", cwd),
-			CWD:            cwd,
-			SubmitNewlines: 1,
-		})
+		if spec, ok := defaultDebateAgentCommandSpec(agent, cwd); ok {
+			specs = append(specs, spec)
+			continue
+		}
+		specs = append(specs, fallbackDebateAgentSpec(agent, cwd, roleCommand))
 	}
 	return specs
+}
+
+func defaultDebateAgentCommandSpec(agent string, cwd string) (debateAgentSpec, bool) {
+	specs := map[string]debateAgentSpec{
+		"a": {
+			ID:             "a",
+			Role:           "coding-agent",
+			Command:        []string{"agy", "--dangerously-skip-permissions"},
+			CWD:            cwd,
+			StartupDelayMS: 10000,
+			SubmitNewlines: 1,
+		},
+		"b": {
+			ID:                 "b",
+			Role:               "coding-agent",
+			Command:            []string{"agent", "--yolo", "--model", "claude-opus-4-8-thinking-high"},
+			CWD:                cwd,
+			SubmitNewlines:     2,
+			ExtraSubmitEnters:  1,
+			ExtraSubmitDelayMS: 300,
+		},
+		"c": {
+			ID:             "c",
+			Role:           "coding-agent",
+			Command:        []string{"codex", "--dangerously-bypass-approvals-and-sandbox"},
+			CWD:            cwd,
+			SubmitNewlines: 1,
+		},
+	}
+	spec, ok := specs[agent]
+	if !ok {
+		return debateAgentSpec{}, false
+	}
+	spec.Command = cloneStringSlice(spec.Command)
+	return spec, true
+}
+
+func fallbackDebateAgentSpec(agent string, cwd string, roleCommand []string) debateAgentSpec {
+	return debateAgentSpec{
+		ID:             agent,
+		Role:           "coding-agent",
+		Command:        append(cloneStringSlice(roleCommand), "coding-agent", cwd),
+		CWD:            cwd,
+		SubmitNewlines: 1,
+	}
 }
 
 func defaultDebateCoordinatorSpec(cwd string, roleCommand []string) debateCoordinatorSpec {
@@ -544,11 +593,15 @@ func loadDebateConfig(path string, defaultCWD string, defaultCoordinator debateC
 		if agent.ExtraSubmitDelayMS < 0 {
 			return nil, debateCoordinatorSpec{}, fmt.Errorf("agent %s extra_submit_delay_ms must not be negative", id)
 		}
+		if agent.StartupDelayMS < 0 {
+			return nil, debateCoordinatorSpec{}, fmt.Errorf("agent %s startup_delay_ms must not be negative", id)
+		}
 		agents = append(agents, debateAgentSpec{
 			ID:                 id,
 			Role:               role,
 			Command:            cloneStringSlice(agent.Command),
 			CWD:                cwd,
+			StartupDelayMS:     agent.StartupDelayMS,
 			SubmitNewlines:     submitNewlines,
 			ExtraSubmitEnters:  agent.ExtraSubmitEnters,
 			ExtraSubmitDelayMS: agent.ExtraSubmitDelayMS,
@@ -585,18 +638,25 @@ func debateAgentSpecByID(agents []debateAgentSpec, id string) debateAgentSpec {
 	return debateAgentSpec{ID: id, SubmitNewlines: 1}
 }
 
+func waitForDebateAgentStartup(ctx context.Context, agents []debateAgentSpec) error {
+	var maxDelay time.Duration
+	for _, agent := range agents {
+		delay := time.Duration(agent.StartupDelayMS) * time.Millisecond
+		if delay > maxDelay {
+			maxDelay = delay
+		}
+	}
+	return debateDelay(ctx, maxDelay)
+}
+
 func sendDebateAgentInput(ctx context.Context, client AgentClient, paneID string, prompt string, agent debateAgentSpec) error {
 	if err := client.SendInput(ctx, paneID, transport.SendInputRequest{Text: withTrailingNewlines(prompt, agent.SubmitNewlines)}); err != nil {
 		return err
 	}
 	for i := 0; i < agent.ExtraSubmitEnters; i++ {
 		if agent.ExtraSubmitDelayMS > 0 {
-			timer := time.NewTimer(time.Duration(agent.ExtraSubmitDelayMS) * time.Millisecond)
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
+			if err := debateDelay(ctx, time.Duration(agent.ExtraSubmitDelayMS)*time.Millisecond); err != nil {
+				return err
 			}
 		}
 		if err := client.SendInput(ctx, paneID, transport.SendInputRequest{Text: "\n"}); err != nil {
@@ -611,6 +671,30 @@ func withTrailingNewlines(text string, count int) string {
 		count = 1
 	}
 	return strings.TrimRight(text, "\n") + strings.Repeat("\n", count)
+}
+
+var debateDelay = defaultDebateDelay
+
+func defaultDebateDelay(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func SetDebateDelayForTesting(fn func(context.Context, time.Duration) error) func() {
+	previous := debateDelay
+	debateDelay = fn
+	return func() {
+		debateDelay = previous
+	}
 }
 
 func debateExecutionPlan(requestID string, agents []debateAgentSpec, coordinator debateCoordinatorSpec) transport.ExecutionPlanPayload {

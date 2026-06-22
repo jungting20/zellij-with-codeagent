@@ -12,8 +12,18 @@ import (
 	"testing"
 	"time"
 
+	ctlcli "zellij-with-codeagent/internal/cli/ctl"
 	"zellij-with-codeagent/internal/transport"
 )
+
+func TestMain(m *testing.M) {
+	restore := ctlcli.SetDebateDelayForTesting(func(context.Context, time.Duration) error {
+		return nil
+	})
+	code := m.Run()
+	restore()
+	os.Exit(code)
+}
 
 func TestRunHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer
@@ -138,11 +148,47 @@ func TestRunDebateSubmitsPlan(t *testing.T) {
 	if panes[0].Role != "debate-coordinator" || !containsString(panes[0].Command, "debate-coordinator") {
 		t.Fatalf("coordinator pane = %#v, want debate-coordinator role command", panes[0])
 	}
-	if panes[1].Role != "coding-agent" || len(panes[1].Command) == 0 {
-		t.Fatalf("agent pane = %#v, want coding-agent command", panes[1])
+	wantCommands := map[string]string{
+		"debate-a": "agy --dangerously-skip-permissions",
+		"debate-b": "agent --yolo --model claude-opus-4-8-thinking-high",
+		"debate-c": "codex --dangerously-bypass-approvals-and-sandbox",
+	}
+	for _, pane := range panes[1:] {
+		if pane.Role != "coding-agent" {
+			t.Fatalf("%s role = %q, want coding-agent", pane.ID, pane.Role)
+		}
+		if got, want := strings.Join(pane.Command, " "), wantCommands[pane.ID]; got != want {
+			t.Fatalf("%s command = %q, want %q", pane.ID, got, want)
+		}
 	}
 	if !strings.Contains(stdout.String(), "debate request=") {
 		t.Fatalf("stdout = %q, want debate summary", stdout.String())
+	}
+}
+
+func TestRunDebateWaitsForDefaultAgyStartup(t *testing.T) {
+	client := &fakeAgentClient{streamEventsFromInputs: true}
+	var delays []time.Duration
+	restore := ctlcli.SetDebateDelayForTesting(func(_ context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return nil
+	})
+	defer restore()
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"debate",
+		"--topic", "Should agy wait?",
+		"--agents", "a,b,c",
+		"--cwd", "/repo",
+		"--agent-role-bin", "/bin/zellij-agent",
+	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if !containsDuration(delays, 10*time.Second) {
+		t.Fatalf("delays = %#v, want default agy startup delay 10s", delays)
 	}
 }
 
@@ -151,6 +197,7 @@ func TestRunDebateLoadsAgentCommandsFromConfig(t *testing.T) {
 	config := `agents:
   - id: a
     command: ["agy", "--dangerously-skip-permissions"]
+    startup_delay_ms: 10000
   - id: b
     command: ["agent", "--yolo", "--model", "claude-opus-4-8-thinking-high"]
     submit_newlines: 2
@@ -165,6 +212,12 @@ coordinator:
 		t.Fatalf("WriteFile(config) error = %v", err)
 	}
 	client := &fakeAgentClient{streamEventsFromInputs: true}
+	var delays []time.Duration
+	restore := ctlcli.SetDebateDelayForTesting(func(_ context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return nil
+	})
+	defer restore()
 	var stdout, stderr bytes.Buffer
 
 	code := run([]string{
@@ -208,6 +261,9 @@ coordinator:
 	}
 	if inputsB[1].req.Text != "\n" {
 		t.Fatalf("debate-b extra input = %q, want Enter", inputsB[1].req.Text)
+	}
+	if !containsDuration(delays, 10*time.Second) {
+		t.Fatalf("delays = %#v, want configured agy startup delay 10s", delays)
 	}
 }
 
@@ -326,7 +382,7 @@ func TestRunDebateSupportsThreeRounds(t *testing.T) {
 		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
 	inputsA := filterInputRequests(client.inputRequests, "debate-a")
-	inputsB := filterInputRequests(client.inputRequests, "debate-b")
+	inputsB := filterDebatePromptInputRequests(client.inputRequests, "debate-b")
 	if len(inputsA) != 3 || len(inputsB) != 3 {
 		t.Fatalf("inputs a=%d b=%d, want 3 each; all=%#v", len(inputsA), len(inputsB), client.inputRequests)
 	}
@@ -434,7 +490,7 @@ func TestRunDebateTimesOutWhenMarkerMissing(t *testing.T) {
 		streamOmitPanes: map[string]bool{
 			"debate-b": true,
 		},
-		streamKeepOpen:         true,
+		streamKeepOpen: true,
 		snapshotOutputsByPane: map[string]string{
 			"debate-a":           "answer from a",
 			"debate-b":           "auth failed: not logged in",
@@ -507,7 +563,7 @@ func TestRunDebateFailsWhenOverallTimeoutExpiresBeforeAgentTimeout(t *testing.T)
 		"--cwd", "/repo",
 		"--agent-role-bin", "/bin/zellij-agent",
 		"--agent-timeout", "5s",
-		"--timeout", "20ms",
+		"--timeout", "500ms",
 	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
 
 	if code != 1 {
@@ -777,7 +833,26 @@ func filterInputRequests(requests []fakeInputRequest, paneID string) []fakeInput
 	return filtered
 }
 
+func filterDebatePromptInputRequests(requests []fakeInputRequest, paneID string) []fakeInputRequest {
+	filtered := make([]fakeInputRequest, 0, len(requests))
+	for _, req := range filterInputRequests(requests, paneID) {
+		if strings.HasPrefix(req.req.Text, "Round: ") {
+			filtered = append(filtered, req)
+		}
+	}
+	return filtered
+}
+
 func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsDuration(values []time.Duration, want time.Duration) bool {
 	for _, value := range values {
 		if value == want {
 			return true
