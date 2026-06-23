@@ -149,7 +149,7 @@ func testScript(autoTest bool) string {
 func reviewScript(cwd, goal string) string {
 	prompt := "Review this work plan for goal: " + goal + "\nDo not edit files. Report risks, bugs, and missing tests."
 	return strings.Join([]string{
-		"printf %s " + shellQuote(prompt) + " | codex exec --cd " + shellQuote(cwd) + " -",
+		"printf %s " + shellQuote(prompt) + " | codex exec --sandbox read-only --cd " + shellQuote(cwd) + " -",
 		"exec sh",
 	}, "\n")
 }
@@ -161,6 +161,8 @@ func notesScript(session, cwd, goal string) string {
 		"printf 'Goal: %s\\n' " + shellQuote(goal),
 		"printf '\\nUseful commands:\\n'",
 		"printf 'zellij-agent ctl status\\n'",
+		"printf 'zellij-agent ctl events --limit 20\\n'",
+		"printf 'zellij-agent ctl snapshot coder --full\\n'",
 		"printf 'zellij-agent ctl cleanup --task %s\\n' " + shellQuote(session),
 		"exec sh",
 	}, "\n")

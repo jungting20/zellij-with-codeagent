@@ -100,6 +100,8 @@ Useful options:
 ./bin/zellij-agent work --dry-run "implement the mixed work command"
 ./bin/zellij-agent work --session work-command "implement the mixed work command"
 ./bin/zellij-agent work --cwd /path/to/repo "implement the mixed work command"
+./bin/zellij-agent work --socket /tmp/agentd.sock "implement the mixed work command"
+./bin/zellij-agent work --timeout 30s "implement the mixed work command"
 ./bin/zellij-agent work --auto-test "implement the mixed work command"
 ```
 

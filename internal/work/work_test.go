@@ -47,13 +47,16 @@ func TestBuildPlanCreatesMixedWorkPanes(t *testing.T) {
 	if panes[2].ID != "review" || panes[2].Role != "review-assistant" || panes[2].Command[0] != "sh" || panes[2].Command[1] != "-lc" {
 		t.Fatalf("review pane = %#v, want shell review assistant", panes[2])
 	}
-	if !strings.Contains(panes[2].Command[2], "codex exec --cd '/tmp/app' -") || !strings.Contains(panes[2].Command[2], "Do not edit files") {
-		t.Fatalf("review script = %q, want non-editing codex exec review", panes[2].Command[2])
+	if !strings.Contains(panes[2].Command[2], "codex exec --sandbox read-only --cd '/tmp/app' -") || !strings.Contains(panes[2].Command[2], "Do not edit files") {
+		t.Fatalf("review script = %q, want read-only codex exec review", panes[2].Command[2])
 	}
 	if panes[3].ID != "notes" || panes[3].Role != "notes" || panes[3].Command[0] != "sh" || panes[3].Command[1] != "-lc" {
 		t.Fatalf("notes pane = %#v, want shell notes pane", panes[3])
 	}
-	if !strings.Contains(panes[3].Command[2], "zellij-agent ctl status") || !strings.Contains(panes[3].Command[2], "zellij-agent ctl cleanup --task") {
+	if !strings.Contains(panes[3].Command[2], "zellij-agent ctl status") ||
+		!strings.Contains(panes[3].Command[2], "zellij-agent ctl events --limit 20") ||
+		!strings.Contains(panes[3].Command[2], "zellij-agent ctl snapshot coder --full") ||
+		!strings.Contains(panes[3].Command[2], "zellij-agent ctl cleanup --task") {
 		t.Fatalf("notes script = %q, want control command hints", panes[3].Command[2])
 	}
 }

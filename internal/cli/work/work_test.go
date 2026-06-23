@@ -94,6 +94,49 @@ func TestRunSubmitsGeneratedPlan(t *testing.T) {
 	}
 }
 
+func TestRunHelpPrintsUsageToStdout(t *testing.T) {
+	tests := [][]string{
+		{"--help"},
+		{"-h"},
+		{"help"},
+	}
+	for _, args := range tests {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			code := Run(args, strings.NewReader(""), &stdout, &stderr, fakeFactory(&fakeAgentClient{}), Config{})
+
+			if code != 0 {
+				t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+			}
+			if !strings.Contains(stdout.String(), "Usage: zellij-agent work") ||
+				!strings.Contains(stdout.String(), "--socket") ||
+				!strings.Contains(stdout.String(), "--timeout") {
+				t.Fatalf("stdout = %q, want work usage with common options", stdout.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty help stderr", stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunParseErrorReturnsTwo(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"--bogus"}, strings.NewReader(""), &stdout, &stderr, fakeFactory(&fakeAgentClient{}), Config{})
+
+	if code != 2 {
+		t.Fatalf("Run() exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "flag provided but not defined") {
+		t.Fatalf("stderr = %q, want parse error", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty parse-error stdout", stdout.String())
+	}
+}
+
 func TestRunRejectsEmptyGoal(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 

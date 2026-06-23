@@ -30,6 +30,11 @@ type Config struct {
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient ClientFactory, cfg Config) int {
 	_ = stdin
 
+	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
+		printUsage(stdout)
+		return 0
+	}
+
 	fs := flag.NewFlagSet("work", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	socketPath := fs.String("socket", cli.DefaultSocketPath, "agentd Unix socket path")
@@ -101,6 +106,23 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 	}
 	printExecutionPlanResponse(stdout, response)
 	return 0
+}
+
+func printUsage(w io.Writer) {
+	fmt.Fprintln(w, "Usage: zellij-agent work [options] <goal>")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Options:")
+	fmt.Fprintf(w, "  --socket string\n    \tagentd Unix socket path (default %q)\n", cli.DefaultSocketPath)
+	fmt.Fprintln(w, "  --timeout duration")
+	fmt.Fprintln(w, "    \trequest timeout (default 10s)")
+	fmt.Fprintln(w, "  --cwd string")
+	fmt.Fprintln(w, "    \tapplication working directory")
+	fmt.Fprintln(w, "  --session string")
+	fmt.Fprintln(w, "    \texecution session/task id override")
+	fmt.Fprintln(w, "  --dry-run")
+	fmt.Fprintln(w, "    \tprint the /v1/requests envelope without submitting it")
+	fmt.Fprintln(w, "  --auto-test")
+	fmt.Fprintln(w, "    \trun go test ./... in the test pane")
 }
 
 func resolveCWD(value string) (string, error) {
