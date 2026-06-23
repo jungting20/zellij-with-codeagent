@@ -171,7 +171,11 @@ func writeEnvelope(w io.Writer, envelope transport.RequestEnvelope) error {
 }
 
 func printExecutionPlanResponse(w io.Writer, response transport.ExecutionPlanResponse) {
-	fmt.Fprintf(w, "request=%s session=%s layout=%s tabs=%d\n", response.RequestID, response.Session, response.Layout, len(response.Tabs))
+	totalPanes := 0
+	for _, tab := range response.Tabs {
+		totalPanes += len(tab.Panes)
+	}
+	fmt.Fprintf(w, "request=%s session=%s layout=%s tabs=%d panes=%d\n", response.RequestID, response.Session, response.Layout, len(response.Tabs), totalPanes)
 	for _, tab := range response.Tabs {
 		fmt.Fprintf(w, "tab=%s panes=%d\n", tab.Name, len(tab.Panes))
 		for _, pane := range tab.Panes {

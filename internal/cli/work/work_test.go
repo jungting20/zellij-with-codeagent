@@ -84,7 +84,12 @@ func TestRunSubmitsGeneratedPlan(t *testing.T) {
 	if !strings.Contains(client.payload.Tabs[0].Panes[1].Command[2], "go test finished with exit=%s") {
 		t.Fatalf("test command = %q, want auto-test marker", client.payload.Tabs[0].Panes[1].Command[2])
 	}
-	if !strings.Contains(stdout.String(), "request=req_work-command session=work-command") || !strings.Contains(stdout.String(), "- coder role=coding-agent") {
+	firstLine, _, _ := strings.Cut(stdout.String(), "\n")
+	if !strings.Contains(firstLine, "request=req_work-command session=work-command") ||
+		!strings.Contains(firstLine, "layout=triple-horizontal") ||
+		!strings.Contains(firstLine, "tabs=1") ||
+		!strings.Contains(firstLine, "panes=4") ||
+		!strings.Contains(stdout.String(), "- coder role=coding-agent") {
 		t.Fatalf("stdout = %q, want work summary", stdout.String())
 	}
 }
