@@ -54,6 +54,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 		return runPlan(args[1:], stdin, stdout, stderr, newClient)
 	case "debate":
 		return runDebate(args[1:], stdout, stderr, newClient)
+	case "debate-background":
+		return runDebateBackground(args[1:], stdout, stderr)
 	case "input":
 		return runInput(args[1:], stdin, stdout, stderr, newClient)
 	case "snapshot":
@@ -287,7 +289,7 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 	fs, opts := newFlagSet("debate", stderr)
 	opts.timeout = 10 * time.Minute
 	topic := fs.String("topic", "", "debate topic")
-	agentsCSV := fs.String("agents", "a,b,c", "comma-separated agent ids")
+	agentsCSV := fs.String("agents", "agy,agent,codex", "comma-separated agent ids")
 	rounds := fs.Int("rounds", 1, "number of debate rounds to run, from 1 to 3")
 	agentTimeout := fs.Duration("agent-timeout", 2*time.Minute, "per-agent debate response timeout")
 	configPath := fs.String("config", "", "YAML file defining debate agent commands")
@@ -323,6 +325,47 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 
 func SetDebateDelayForTesting(fn func(context.Context, time.Duration) error) func() {
 	return debate.SetDelayForTesting(fn)
+}
+
+func runDebateBackground(args []string, stdout, stderr io.Writer) int {
+	fs, opts := newFlagSet("debate-background", stderr)
+	opts.timeout = 10 * time.Minute
+	topic := fs.String("topic", "", "debate topic")
+	agentsCSV := fs.String("agents", "agy,agent,codex", "comma-separated agent ids")
+	rounds := fs.Int("rounds", 1, "number of debate rounds to run, from 1 to 3")
+	agentTimeout := fs.Duration("agent-timeout", 2*time.Minute, "per-agent debate response timeout")
+	configPath := fs.String("config", "", "YAML file defining debate background agent commands")
+	cwd := fs.String("cwd", ".", "working directory for agent commands")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	defer cancel()
+
+	result, err := debate.RunBackground(ctx, debate.BackgroundOptions{
+		Topic:        *topic,
+		Agents:       debate.ParseAgents(*agentsCSV),
+		Rounds:       *rounds,
+		AgentTimeout: *agentTimeout,
+		ConfigPath:   *configPath,
+		CWD:          *cwd,
+		Progress:     stdout,
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		if debate.IsValidationError(err) {
+			return 2
+		}
+		return 1
+	}
+
+	debate.PrintResult(stdout, result)
+	return 0
+}
+
+func SetDebateBackgroundRunnerForTesting(runner debate.BackgroundCommandRunner) func() {
+	return debate.SetBackgroundRunnerForTesting(runner)
 }
 
 func runEvents(args []string, stdout, stderr io.Writer, newClient ClientFactory) int {
@@ -595,6 +638,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  status    Inspect managed runtime state")
 	fmt.Fprintln(w, "  plan      Submit an execution plan JSON file")
 	fmt.Fprintln(w, "  debate    Run a multi-agent debate and synthesize the results")
+	fmt.Fprintln(w, "  debate-background")
+	fmt.Fprintln(w, "            Run a daemonless multi-agent debate with stdout commands")
 	fmt.Fprintln(w, "  input     Send text to a managed pane")
 	fmt.Fprintln(w, "  snapshot  Dump managed pane output")
 	fmt.Fprintln(w, "  message   Send a tab-scoped message between managed panes")

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	ctlcli "zellij-with-codeagent/internal/cli/ctl"
+	"zellij-with-codeagent/internal/debate"
 	"zellij-with-codeagent/internal/transport"
 )
 
@@ -163,6 +164,46 @@ func TestRunDebateSubmitsPlan(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "debate request=") {
 		t.Fatalf("stdout = %q, want debate summary", stdout.String())
+	}
+}
+
+func TestRunDebateDefaultsToAgentCommandNames(t *testing.T) {
+	client := &fakeAgentClient{streamEventsFromInputs: true}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"debate",
+		"--topic", "Should defaults use agent names?",
+		"--cwd", "/repo",
+		"--agent-role-bin", "/bin/zellij-agent",
+		"--timeout", "5s",
+	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	panes := client.planPayload.Tabs[0].Panes
+	wantIDs := []string{"debate-coordinator", "debate-agy", "debate-agent", "debate-codex"}
+	if len(panes) != len(wantIDs) {
+		t.Fatalf("plan panes = %#v, want %d panes", panes, len(wantIDs))
+	}
+	for i, wantID := range wantIDs {
+		if panes[i].ID != wantID {
+			t.Fatalf("pane[%d].ID = %q, want %q", i, panes[i].ID, wantID)
+		}
+	}
+	wantCommands := map[string]string{
+		"debate-agy":   "agy --dangerously-skip-permissions",
+		"debate-agent": "agent --yolo --model claude-opus-4-8-thinking-high",
+		"debate-codex": "codex --dangerously-bypass-approvals-and-sandbox",
+	}
+	for _, pane := range panes[1:] {
+		if got, want := strings.Join(pane.Command, " "), wantCommands[pane.ID]; got != want {
+			t.Fatalf("%s command = %q, want %q", pane.ID, got, want)
+		}
+	}
+	if !strings.Contains(stdout.String(), "agents=agy,agent,codex") {
+		t.Fatalf("stdout = %q, want named default agents", stdout.String())
 	}
 }
 
@@ -439,6 +480,82 @@ func TestRunDebateRejectsRoundsOutsideSupportedRange(t *testing.T) {
 	}
 	if client.planRequestID != "" {
 		t.Fatalf("plan request id = %q, want no submitted plan", client.planRequestID)
+	}
+}
+
+func TestRunDebateBackgroundUsesStdoutRunnerWithoutDaemonClient(t *testing.T) {
+	runner := &fakeBackgroundRunner{}
+	restore := ctlcli.SetDebateBackgroundRunnerForTesting(runner)
+	defer restore()
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"debate-background",
+		"--topic", "background test",
+		"--agents", "agy,codex",
+		"--cwd", "/repo",
+		"--agent-timeout", "1s",
+		"--timeout", "5s",
+	}, strings.NewReader(""), &stdout, &stderr, func(string, time.Duration) agentClient {
+		t.Fatal("debate-background must not create daemon client")
+		return nil
+	})
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if len(runner.requestsFor("agy")) != 1 || len(runner.requestsFor("codex")) != 1 || len(runner.requestsFor("debate-coordinator")) != 1 {
+		t.Fatalf("runner requests = %#v, want agy, codex, coordinator", runner.requests)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"debate request=",
+		"agents=agy,codex",
+		"[round 1 debate-agy]",
+		"background answer from agy",
+		"[debate-coordinator synthesis]",
+		"background synthesis",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("stdout = %q, missing %q", output, want)
+		}
+	}
+}
+
+func TestRunDebateBackgroundPrintsRoundProgress(t *testing.T) {
+	runner := &fakeBackgroundRunner{}
+	restore := ctlcli.SetDebateBackgroundRunnerForTesting(runner)
+	defer restore()
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"debate-background",
+		"--topic", "progress test",
+		"--agents", "agy,codex",
+		"--rounds", "2",
+		"--cwd", "/repo",
+		"--agent-timeout", "1s",
+		"--timeout", "5s",
+	}, strings.NewReader(""), &stdout, &stderr, func(string, time.Duration) agentClient {
+		t.Fatal("debate-background must not create daemon client")
+		return nil
+	})
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"[debate progress] round=1/2 status=started agents=agy,codex",
+		"[debate progress] round=1/2 status=done",
+		"[debate progress] round=2/2 status=started agents=agy,codex",
+		"[debate progress] round=2/2 status=done",
+		"[debate progress] coordinator status=started",
+		"[debate progress] coordinator status=done",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("stdout = %q, missing %q", output, want)
+		}
 	}
 }
 
@@ -921,6 +1038,28 @@ type fakeInputRequest struct {
 type fakeSnapshotRequest struct {
 	paneID string
 	req    transport.SnapshotOutputRequest
+}
+
+type fakeBackgroundRunner struct {
+	requests []debate.BackgroundCommandRequest
+}
+
+func (r *fakeBackgroundRunner) Run(_ context.Context, req debate.BackgroundCommandRequest) (debate.BackgroundCommandResult, error) {
+	r.requests = append(r.requests, req)
+	if req.AgentID == "debate-coordinator" {
+		return debate.BackgroundCommandResult{Stdout: "background synthesis"}, nil
+	}
+	return debate.BackgroundCommandResult{Stdout: "background answer from " + req.AgentID}, nil
+}
+
+func (r *fakeBackgroundRunner) requestsFor(agentID string) []debate.BackgroundCommandRequest {
+	var requests []debate.BackgroundCommandRequest
+	for _, req := range r.requests {
+		if req.AgentID == agentID {
+			requests = append(requests, req)
+		}
+	}
+	return requests
 }
 
 func (c *fakeAgentClient) Health(context.Context) (transport.HealthResponse, error) {

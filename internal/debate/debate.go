@@ -162,6 +162,12 @@ type roundOutput struct {
 const (
 	paneStatusDone     = "done"
 	paneStatusTimedOut = "timed_out"
+	paneStatusFailed   = "failed"
+)
+
+const (
+	promptDeliveryArg   = "arg"
+	promptDeliveryStdin = "stdin"
 )
 
 type paneWaitStatus struct {
@@ -180,6 +186,8 @@ type agentSpec struct {
 	SubmitNewlines     int
 	ExtraSubmitEnters  int
 	ExtraSubmitDelayMS int
+	PrintCommand       []string
+	PromptDelivery     string
 }
 
 type coordinatorSpec struct {
@@ -202,6 +210,8 @@ type agentConfig struct {
 	ExtraSubmitEnters  int      `yaml:"extra_submit_enters"`
 	ExtraSubmitDelayMS int      `yaml:"extra_submit_delay_ms"`
 	StartupDelayMS     int      `yaml:"startup_delay_ms"`
+	PrintCommand       []string `yaml:"print_command"`
+	PromptDelivery     string   `yaml:"prompt_delivery"`
 }
 
 type paneConfig struct {
@@ -242,6 +252,36 @@ func defaultAgentSpecs(agents []string, cwd string, roleCommand []string) []agen
 
 func defaultAgentCommandSpec(agent string, cwd string) (agentSpec, bool) {
 	specs := map[string]agentSpec{
+		"agy": {
+			ID:             "agy",
+			Role:           "coding-agent",
+			Command:        []string{"agy", "--dangerously-skip-permissions"},
+			CWD:            cwd,
+			StartupDelayMS: 10000,
+			SubmitNewlines: 1,
+			PrintCommand:   []string{"agy", "--dangerously-skip-permissions", "--print"},
+			PromptDelivery: promptDeliveryArg,
+		},
+		"agent": {
+			ID:                 "agent",
+			Role:               "coding-agent",
+			Command:            []string{"agent", "--yolo", "--model", "claude-opus-4-8-thinking-high"},
+			CWD:                cwd,
+			SubmitNewlines:     2,
+			ExtraSubmitEnters:  1,
+			ExtraSubmitDelayMS: 300,
+			PrintCommand:       []string{"agent", "--yolo", "--print", "--model", "claude-opus-4-8-thinking-high", "--trust"},
+			PromptDelivery:     promptDeliveryArg,
+		},
+		"codex": {
+			ID:             "codex",
+			Role:           "coding-agent",
+			Command:        []string{"codex", "--dangerously-bypass-approvals-and-sandbox"},
+			CWD:            cwd,
+			SubmitNewlines: 1,
+			PrintCommand:   []string{"codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--cd", cwd, "-"},
+			PromptDelivery: promptDeliveryStdin,
+		},
 		"a": {
 			ID:             "a",
 			Role:           "coding-agent",
@@ -249,6 +289,8 @@ func defaultAgentCommandSpec(agent string, cwd string) (agentSpec, bool) {
 			CWD:            cwd,
 			StartupDelayMS: 10000,
 			SubmitNewlines: 1,
+			PrintCommand:   []string{"agy", "--dangerously-skip-permissions", "--print"},
+			PromptDelivery: promptDeliveryArg,
 		},
 		"b": {
 			ID:                 "b",
@@ -258,6 +300,8 @@ func defaultAgentCommandSpec(agent string, cwd string) (agentSpec, bool) {
 			SubmitNewlines:     2,
 			ExtraSubmitEnters:  1,
 			ExtraSubmitDelayMS: 300,
+			PrintCommand:       []string{"agent", "--yolo", "--print", "--model", "claude-opus-4-8-thinking-high", "--trust"},
+			PromptDelivery:     promptDeliveryArg,
 		},
 		"c": {
 			ID:             "c",
@@ -265,6 +309,8 @@ func defaultAgentCommandSpec(agent string, cwd string) (agentSpec, bool) {
 			Command:        []string{"codex", "--dangerously-bypass-approvals-and-sandbox"},
 			CWD:            cwd,
 			SubmitNewlines: 1,
+			PrintCommand:   []string{"codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--cd", cwd, "-"},
+			PromptDelivery: promptDeliveryStdin,
 		},
 	}
 	spec, ok := specs[agent]
@@ -343,6 +389,10 @@ func loadConfig(path string, defaultCWD string, defaultCoordinator coordinatorSp
 		if agent.StartupDelayMS < 0 {
 			return nil, coordinatorSpec{}, fmt.Errorf("agent %s startup_delay_ms must not be negative", id)
 		}
+		promptDelivery := strings.TrimSpace(agent.PromptDelivery)
+		if promptDelivery != "" && promptDelivery != promptDeliveryArg && promptDelivery != promptDeliveryStdin {
+			return nil, coordinatorSpec{}, fmt.Errorf("agent %s prompt_delivery must be %q or %q", id, promptDeliveryArg, promptDeliveryStdin)
+		}
 		agents = append(agents, agentSpec{
 			ID:                 id,
 			Role:               role,
@@ -352,6 +402,8 @@ func loadConfig(path string, defaultCWD string, defaultCoordinator coordinatorSp
 			SubmitNewlines:     submitNewlines,
 			ExtraSubmitEnters:  agent.ExtraSubmitEnters,
 			ExtraSubmitDelayMS: agent.ExtraSubmitDelayMS,
+			PrintCommand:       cloneStringSlice(agent.PrintCommand),
+			PromptDelivery:     promptDelivery,
 		})
 	}
 
@@ -519,7 +571,8 @@ Topic: %s
 When your answer is complete, print the completion marker on its own final line.
 
 Completion marker parts:
-Print these parts concatenated exactly, with no extra spaces, as your final line:
+Print these parts concatenated exactly as your final line.
+Preserve every character shown in the parts, including leading spaces before debate/round/agent/token.
 %s
 `, formatMarkerParts(marker))
 	return b.String()
@@ -651,7 +704,7 @@ func waitForMarkers(ctx context.Context, client Client, markers map[string]strin
 				continue
 			}
 			marker, ok := markers[event.PaneID]
-			if ok && strings.Contains(event.Message, marker) {
+			if ok && markerMatches(event.Message, marker) {
 				if _, alreadyRecorded := statuses[event.PaneID]; !alreadyRecorded {
 					statuses[event.PaneID] = paneWaitStatus{
 						PaneID:  event.PaneID,
@@ -676,6 +729,15 @@ func waitForMarkers(ctx context.Context, client Client, markers map[string]strin
 		}
 	}
 	return statuses, nil
+}
+
+func markerMatches(message string, marker string) bool {
+	return strings.Contains(message, marker) || strings.Contains(compactWhitespace(message), compactWhitespace(marker))
+}
+
+func compactWhitespace(value string) string {
+	replacer := strings.NewReplacer(" ", "", "\n", "", "\r", "", "\t", "")
+	return replacer.Replace(value)
 }
 
 func nextDeadline(markers map[string]string, statuses map[string]paneWaitStatus, deadlines map[string]time.Time) (time.Time, bool) {
