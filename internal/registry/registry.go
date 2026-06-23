@@ -411,11 +411,11 @@ func (r *Registry) resolvePanePathLocked(id PaneID) (paneLocation, SessionRecord
 	}
 	tab, ok := session.Tabs[loc.TabID]
 	if !ok {
-		return paneLocation{}, SessionRecord{}, TabRecord{}, PaneRecord{}, err
+		return paneLocation{}, SessionRecord{}, TabRecord{}, PaneRecord{}, ErrNotFound
 	}
 	pane, ok := tab.Panes[id]
 	if !ok {
-		return paneLocation{}, SessionRecord{}, TabRecord{}, PaneRecord{}, err
+		return paneLocation{}, SessionRecord{}, TabRecord{}, PaneRecord{}, ErrNotFound
 	}
 	return loc, session, tab, pane, nil
 }

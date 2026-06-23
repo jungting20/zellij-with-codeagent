@@ -227,6 +227,50 @@ func TestReusingZellijPaneIDDoesNotMutateOldLogicalRecord(t *testing.T) {
 	}
 }
 
+func TestGetPaneReturnsNotFoundWhenLocationIndexIsStale(t *testing.T) {
+	registry := newTestRegistry()
+
+	if _, err := registry.RegisterPane(RegisterPaneRequest{
+		ID:        "pane-1",
+		SessionID: "session-a",
+		TabID:     "tab-1",
+	}); err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+
+	registry.mu.Lock()
+	delete(registry.sessions["session-a"].Tabs, TabID("tab-1"))
+	registry.mu.Unlock()
+
+	_, err := registry.GetPane("pane-1")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetPane() error = %v, want %v", err, ErrNotFound)
+	}
+}
+
+func TestGetPaneReturnsNotFoundWhenPaneRecordIsMissing(t *testing.T) {
+	registry := newTestRegistry()
+
+	if _, err := registry.RegisterPane(RegisterPaneRequest{
+		ID:        "pane-1",
+		SessionID: "session-a",
+		TabID:     "tab-1",
+	}); err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+
+	registry.mu.Lock()
+	tab := registry.sessions["session-a"].Tabs["tab-1"]
+	delete(tab.Panes, PaneID("pane-1"))
+	registry.sessions["session-a"].Tabs["tab-1"] = tab
+	registry.mu.Unlock()
+
+	_, err := registry.GetPane("pane-1")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetPane() error = %v, want %v", err, ErrNotFound)
+	}
+}
+
 func newTestRegistry() *Registry {
 	return NewWithClock(func() time.Time {
 		return time.Date(2026, 5, 12, 0, 0, 0, 0, time.UTC)
