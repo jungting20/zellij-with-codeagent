@@ -10,6 +10,7 @@ import (
 	daemoncli "zellij-with-codeagent/internal/cli/daemon"
 	plannercli "zellij-with-codeagent/internal/cli/planner"
 	rolecli "zellij-with-codeagent/internal/cli/role"
+	workcli "zellij-with-codeagent/internal/cli/work"
 	"zellij-with-codeagent/internal/transport"
 )
 
@@ -35,6 +36,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return plannercli.RunWithInputConfig(args[1:], stdin, stdout, stderr, newPlannerClient, plannercli.Config{
 			DefaultRoleCommand: []string{executablePath(), "role"},
 		})
+	case "work":
+		return workcli.Run(args[1:], stdin, stdout, stderr, newWorkClient, workcli.Config{
+			DefaultRoleCommand: []string{executablePath(), "role"},
+		})
 	case "role":
 		return rolecli.Run(args[1:])
 	default:
@@ -49,6 +54,10 @@ func newClient(socketPath string, timeout time.Duration) ctlcli.AgentClient {
 }
 
 func newPlannerClient(socketPath string, timeout time.Duration) plannercli.AgentClient {
+	return transport.NewClient(transport.ClientOptions{SocketPath: socketPath, Timeout: timeout})
+}
+
+func newWorkClient(socketPath string, timeout time.Duration) workcli.AgentClient {
 	return transport.NewClient(transport.ClientOptions{SocketPath: socketPath, Timeout: timeout})
 }
 
@@ -67,5 +76,6 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  daemon   Run the local runtime daemon")
 	fmt.Fprintln(w, "  ctl      Inspect and control the daemon runtime")
 	fmt.Fprintln(w, "  planner  Generate, validate, and submit planner requests")
+	fmt.Fprintln(w, "  work     Start a personal mixed-mode coding workspace")
 	fmt.Fprintln(w, "  role     Run a pane role process")
 }
