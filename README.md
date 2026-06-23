@@ -79,6 +79,36 @@ Use `zellij-agent ctl` as the thin command-line client for the local socket:
 ./bin/zellij-agent ctl cleanup --task feature-auth
 ```
 
+### Personal Work Launcher
+
+`zellij-agent work` starts a daemon-managed mixed coding workspace for the current repository:
+
+```bash
+./bin/zellij-agent work "implement the mixed work command"
+```
+
+The command creates one Zellij tab with four panes:
+
+- `coder`: interactive Codex session through `zellij-agent role coding-agent <cwd>`.
+- `test`: test shell prepared for `go test ./...`.
+- `review`: non-interactive Codex review assistant seeded with the goal.
+- `notes`: session notes and useful `zellij-agent ctl` commands.
+
+Useful options:
+
+```bash
+./bin/zellij-agent work --dry-run "implement the mixed work command"
+./bin/zellij-agent work --session work-command "implement the mixed work command"
+./bin/zellij-agent work --cwd /path/to/repo "implement the mixed work command"
+./bin/zellij-agent work --auto-test "implement the mixed work command"
+```
+
+The daemon must be running before non-dry-run submission:
+
+```bash
+./bin/zellij-agent daemon serve
+```
+
 `zellij-agent ctl plan` accepts either a raw execution plan payload or a full `/v1/requests` envelope.
 `zellij-agent planner page` is a mock planner path for URL-based page inspection. It uses a built-in mock source by default, generates a canonical `/v1/requests` `execution_plan`, and submits panes for editor, LSP, network, and console inspection. Add `--dry-run` to print the envelope without contacting `agentd`.
 `zellij-agent planner tui` provides the same mock planner path through a single chat-style prompt. Include the URL in the natural-language request, for example `localhost:8000/example/aa 페이지 소스 열고 네트워크/콘솔 확인해줘`; the mock source and cwd default from the current repo, and generated panes call back into `zellij-agent role`.
