@@ -12,3 +12,6 @@ agentd.sock
 
 # Temporary files created by smoke scripts.
 tmp/
+
+# Local feature worktrees.
+.worktrees/
