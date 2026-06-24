@@ -1,0 +1,173 @@
+package debatebackground
+
+import (
+	"bytes"
+	"context"
+	"strings"
+	"testing"
+
+	"zellij-with-codeagent/internal/debate"
+)
+
+func TestRunUsesStdoutRunner(t *testing.T) {
+	runner := &fakeBackgroundRunner{}
+	restore := SetBackgroundRunnerForTesting(runner)
+	defer restore()
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"--topic", "background test",
+		"--agents", "agy,codex",
+		"--cwd", "/repo",
+		"--agent-timeout", "1s",
+		"--timeout", "5s",
+	}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if len(runner.requestsFor("agy")) != 1 || len(runner.requestsFor("codex")) != 1 || len(runner.requestsFor("debate-coordinator")) != 1 {
+		t.Fatalf("runner requests = %#v, want agy, codex, coordinator", runner.requests)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"debate request=",
+		"agents=agy,codex",
+		"[round 1 debate-agy]",
+		"background answer from agy",
+		"[debate-coordinator synthesis]",
+		"background synthesis",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("stdout = %q, missing %q", output, want)
+		}
+	}
+}
+
+func TestRunHelpPrintsUsageToStdout(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"--help"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Usage: zellij-agent debate-background") || !strings.Contains(stdout.String(), "-topic string") {
+		t.Fatalf("stdout = %q, want debate-background usage", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunStartsCodexWithPrintedResult(t *testing.T) {
+	runner := &fakeBackgroundRunner{}
+	restoreRunner := SetBackgroundRunnerForTesting(runner)
+	defer restoreRunner()
+	starter := &fakeCodexStarter{}
+	restoreStarter := SetCodexStarterForTesting(starter)
+	defer restoreStarter()
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"--topic", "codex follow up",
+		"--agents", "agy,codex",
+		"--cwd", "/repo",
+		"--agent-timeout", "1s",
+		"--timeout", "5s",
+		"--start-codex",
+	}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if len(starter.requests) != 1 {
+		t.Fatalf("codex start requests = %#v, want one", starter.requests)
+	}
+	req := starter.requests[0]
+	if len(req.Command) < 4 || req.Command[0] != "codex" || req.Command[1] != "--cd" || req.Command[2] != "/repo" {
+		t.Fatalf("codex command = %#v, want codex --cd /repo <prompt>", req.Command)
+	}
+	if req.Command[len(req.Command)-1] != req.InitialPrompt {
+		t.Fatalf("codex command prompt = %q, want initial prompt", req.Command[len(req.Command)-1])
+	}
+	for _, want := range []string{
+		"debate request=",
+		"agents=agy,codex",
+		"[round 1 debate-agy]",
+		"background answer from agy",
+		"[debate-coordinator synthesis]",
+		"background synthesis",
+	} {
+		if !strings.Contains(req.InitialPrompt, want) {
+			t.Fatalf("initial prompt = %q, missing %q", req.InitialPrompt, want)
+		}
+	}
+	if !strings.Contains(stdout.String(), "[debate-background codex]") {
+		t.Fatalf("stdout = %q, want codex start notice", stdout.String())
+	}
+}
+
+func TestRunPrintsRoundProgress(t *testing.T) {
+	runner := &fakeBackgroundRunner{}
+	restore := SetBackgroundRunnerForTesting(runner)
+	defer restore()
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"--topic", "progress test",
+		"--agents", "agy,codex",
+		"--rounds", "2",
+		"--cwd", "/repo",
+		"--agent-timeout", "1s",
+		"--timeout", "5s",
+	}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"[debate progress] round=1/2 status=started agents=agy,codex",
+		"[debate progress] round=1/2 status=done",
+		"[debate progress] round=2/2 status=started agents=agy,codex",
+		"[debate progress] round=2/2 status=done",
+		"[debate progress] coordinator status=started",
+		"[debate progress] coordinator status=done",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("stdout = %q, missing %q", output, want)
+		}
+	}
+}
+
+type fakeBackgroundRunner struct {
+	requests []debate.BackgroundCommandRequest
+}
+
+type fakeCodexStarter struct {
+	requests []CodexStartRequest
+}
+
+func (r *fakeBackgroundRunner) Run(_ context.Context, req debate.BackgroundCommandRequest) (debate.BackgroundCommandResult, error) {
+	r.requests = append(r.requests, req)
+	if req.AgentID == "debate-coordinator" {
+		return debate.BackgroundCommandResult{Stdout: "background synthesis"}, nil
+	}
+	return debate.BackgroundCommandResult{Stdout: "background answer from " + req.AgentID}, nil
+}
+
+func (r *fakeBackgroundRunner) requestsFor(agentID string) []debate.BackgroundCommandRequest {
+	var requests []debate.BackgroundCommandRequest
+	for _, req := range r.requests {
+		if req.AgentID == agentID {
+			requests = append(requests, req)
+		}
+	}
+	return requests
+}
+
+func (s *fakeCodexStarter) Start(_ context.Context, req CodexStartRequest) error {
+	s.requests = append(s.requests, req)
+	return nil
+}

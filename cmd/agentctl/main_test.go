@@ -13,7 +13,6 @@ import (
 	"time"
 
 	ctlcli "zellij-with-codeagent/internal/cli/ctl"
-	"zellij-with-codeagent/internal/debate"
 	"zellij-with-codeagent/internal/transport"
 )
 
@@ -483,10 +482,7 @@ func TestRunDebateRejectsRoundsOutsideSupportedRange(t *testing.T) {
 	}
 }
 
-func TestRunDebateBackgroundUsesStdoutRunnerWithoutDaemonClient(t *testing.T) {
-	runner := &fakeBackgroundRunner{}
-	restore := ctlcli.SetDebateBackgroundRunnerForTesting(runner)
-	defer restore()
+func TestRunRejectsDebateBackgroundOutsideCtl(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := run([]string{
@@ -497,65 +493,15 @@ func TestRunDebateBackgroundUsesStdoutRunnerWithoutDaemonClient(t *testing.T) {
 		"--agent-timeout", "1s",
 		"--timeout", "5s",
 	}, strings.NewReader(""), &stdout, &stderr, func(string, time.Duration) agentClient {
-		t.Fatal("debate-background must not create daemon client")
+		t.Fatal("unknown ctl command must not create daemon client")
 		return nil
 	})
 
-	if code != 0 {
-		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	if code != 2 {
+		t.Fatalf("run() exit code = %d, want 2; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
-	if len(runner.requestsFor("agy")) != 1 || len(runner.requestsFor("codex")) != 1 || len(runner.requestsFor("debate-coordinator")) != 1 {
-		t.Fatalf("runner requests = %#v, want agy, codex, coordinator", runner.requests)
-	}
-	output := stdout.String()
-	for _, want := range []string{
-		"debate request=",
-		"agents=agy,codex",
-		"[round 1 debate-agy]",
-		"background answer from agy",
-		"[debate-coordinator synthesis]",
-		"background synthesis",
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("stdout = %q, missing %q", output, want)
-		}
-	}
-}
-
-func TestRunDebateBackgroundPrintsRoundProgress(t *testing.T) {
-	runner := &fakeBackgroundRunner{}
-	restore := ctlcli.SetDebateBackgroundRunnerForTesting(runner)
-	defer restore()
-	var stdout, stderr bytes.Buffer
-
-	code := run([]string{
-		"debate-background",
-		"--topic", "progress test",
-		"--agents", "agy,codex",
-		"--rounds", "2",
-		"--cwd", "/repo",
-		"--agent-timeout", "1s",
-		"--timeout", "5s",
-	}, strings.NewReader(""), &stdout, &stderr, func(string, time.Duration) agentClient {
-		t.Fatal("debate-background must not create daemon client")
-		return nil
-	})
-
-	if code != 0 {
-		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
-	}
-	output := stdout.String()
-	for _, want := range []string{
-		"[debate progress] round=1/2 status=started agents=agy,codex",
-		"[debate progress] round=1/2 status=done",
-		"[debate progress] round=2/2 status=started agents=agy,codex",
-		"[debate progress] round=2/2 status=done",
-		"[debate progress] coordinator status=started",
-		"[debate progress] coordinator status=done",
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("stdout = %q, missing %q", output, want)
-		}
+	if !strings.Contains(stderr.String(), "unknown command: debate-background") {
+		t.Fatalf("stderr = %q, want unknown command", stderr.String())
 	}
 }
 
@@ -1038,28 +984,6 @@ type fakeInputRequest struct {
 type fakeSnapshotRequest struct {
 	paneID string
 	req    transport.SnapshotOutputRequest
-}
-
-type fakeBackgroundRunner struct {
-	requests []debate.BackgroundCommandRequest
-}
-
-func (r *fakeBackgroundRunner) Run(_ context.Context, req debate.BackgroundCommandRequest) (debate.BackgroundCommandResult, error) {
-	r.requests = append(r.requests, req)
-	if req.AgentID == "debate-coordinator" {
-		return debate.BackgroundCommandResult{Stdout: "background synthesis"}, nil
-	}
-	return debate.BackgroundCommandResult{Stdout: "background answer from " + req.AgentID}, nil
-}
-
-func (r *fakeBackgroundRunner) requestsFor(agentID string) []debate.BackgroundCommandRequest {
-	var requests []debate.BackgroundCommandRequest
-	for _, req := range r.requests {
-		if req.AgentID == agentID {
-			requests = append(requests, req)
-		}
-	}
-	return requests
 }
 
 func (c *fakeAgentClient) Health(context.Context) (transport.HealthResponse, error) {

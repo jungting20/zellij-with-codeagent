@@ -8,6 +8,7 @@ import (
 
 	ctlcli "zellij-with-codeagent/internal/cli/ctl"
 	daemoncli "zellij-with-codeagent/internal/cli/daemon"
+	debatebg "zellij-with-codeagent/internal/cli/debatebackground"
 	plannercli "zellij-with-codeagent/internal/cli/planner"
 	rolecli "zellij-with-codeagent/internal/cli/role"
 	workcli "zellij-with-codeagent/internal/cli/work"
@@ -40,6 +41,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return workcli.Run(args[1:], stdin, stdout, stderr, newWorkClient, workcli.Config{
 			DefaultRoleCommand: []string{executablePath(), "role"},
 		})
+	case "debate-background":
+		return debatebg.Run(args[1:], stdout, stderr)
 	case "role":
 		return rolecli.Run(args[1:])
 	default:
@@ -77,5 +80,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  ctl      Inspect and control the daemon runtime")
 	fmt.Fprintln(w, "  planner  Generate, validate, and submit planner requests")
 	fmt.Fprintln(w, "  work     Start a personal mixed-mode coding workspace")
+	fmt.Fprintln(w, "  debate-background")
+	fmt.Fprintln(w, "           Run a daemonless multi-agent debate with stdout commands")
 	fmt.Fprintln(w, "  role     Run a pane role process")
 }

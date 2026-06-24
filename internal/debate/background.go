@@ -138,7 +138,7 @@ func RunBackground(ctx context.Context, opts BackgroundOptions) (Result, error) 
 	defer cancel()
 	coordinatorOutput, err := runner.Run(coordinatorCtx, coordinatorReq)
 	if err != nil {
-		return Result{}, fmt.Errorf("agentctl debate-background coordinator failed: %w%s", err, commandFailureDetail(coordinatorOutput))
+		return Result{}, fmt.Errorf("zellij-agent debate-background coordinator failed: %w%s", err, commandFailureDetail(coordinatorOutput))
 	}
 	printBackgroundProgress(opts.Progress, "coordinator status=done")
 

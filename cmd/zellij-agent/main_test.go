@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
 	"testing"
 
+	debatebg "zellij-with-codeagent/internal/cli/debatebackground"
+	"zellij-with-codeagent/internal/debate"
 	"zellij-with-codeagent/internal/transport"
 )
 
@@ -18,11 +21,39 @@ func TestRunHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run() exit code = %d, want 0", code)
 	}
-	if !strings.Contains(stdout.String(), "Usage: zellij-agent") || !strings.Contains(stdout.String(), "planner") || !strings.Contains(stdout.String(), "work") {
-		t.Fatalf("stdout = %q, want unified usage with work command", stdout.String())
+	for _, want := range []string{"Usage: zellij-agent", "planner", "work", "debate-background"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, missing %q", stdout.String(), want)
+		}
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunDispatchesDebateBackground(t *testing.T) {
+	runner := &zellijAgentBackgroundRunner{}
+	restore := debatebg.SetBackgroundRunnerForTesting(runner)
+	defer restore()
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"debate-background",
+		"--topic", "top-level background",
+		"--agents", "agy,codex",
+		"--cwd", "/repo",
+		"--agent-timeout", "1s",
+		"--timeout", "5s",
+	}, strings.NewReader(""), &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if len(runner.requestsFor("agy")) != 1 || len(runner.requestsFor("codex")) != 1 || len(runner.requestsFor("debate-coordinator")) != 1 {
+		t.Fatalf("runner requests = %#v, want agy, codex, coordinator", runner.requests)
+	}
+	if !strings.Contains(stdout.String(), "debate request=") || !strings.Contains(stdout.String(), "background synthesis") {
+		t.Fatalf("stdout = %q, want debate-background output", stdout.String())
 	}
 }
 
@@ -95,4 +126,26 @@ func TestRunRejectsUnknownGroup(t *testing.T) {
 	if !strings.Contains(stderr.String(), "unknown command group: unknown") {
 		t.Fatalf("stderr = %q, want unknown group", stderr.String())
 	}
+}
+
+type zellijAgentBackgroundRunner struct {
+	requests []debate.BackgroundCommandRequest
+}
+
+func (r *zellijAgentBackgroundRunner) Run(_ context.Context, req debate.BackgroundCommandRequest) (debate.BackgroundCommandResult, error) {
+	r.requests = append(r.requests, req)
+	if req.AgentID == "debate-coordinator" {
+		return debate.BackgroundCommandResult{Stdout: "background synthesis"}, nil
+	}
+	return debate.BackgroundCommandResult{Stdout: "background answer from " + req.AgentID}, nil
+}
+
+func (r *zellijAgentBackgroundRunner) requestsFor(agentID string) []debate.BackgroundCommandRequest {
+	var requests []debate.BackgroundCommandRequest
+	for _, req := range r.requests {
+		if req.AgentID == agentID {
+			requests = append(requests, req)
+		}
+	}
+	return requests
 }
