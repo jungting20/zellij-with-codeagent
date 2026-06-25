@@ -27,8 +27,8 @@ func TestBuildPlanCreatesMixedWorkPanes(t *testing.T) {
 	if tab.Name != payload.Session {
 		t.Fatalf("Tab name = %q, want session %q", tab.Name, payload.Session)
 	}
-	if len(tab.Panes) != 4 {
-		t.Fatalf("Panes = %#v, want four panes", tab.Panes)
+	if len(tab.Panes) != 5 {
+		t.Fatalf("Panes = %#v, want five panes", tab.Panes)
 	}
 
 	panes := tab.Panes
@@ -50,14 +50,20 @@ func TestBuildPlanCreatesMixedWorkPanes(t *testing.T) {
 	if !strings.Contains(panes[2].Command[2], "codex exec --sandbox read-only --cd '/tmp/app' -") || !strings.Contains(panes[2].Command[2], "Do not edit files") {
 		t.Fatalf("review script = %q, want read-only codex exec review", panes[2].Command[2])
 	}
-	if panes[3].ID != "notes" || panes[3].Role != "notes" || panes[3].Command[0] != "sh" || panes[3].Command[1] != "-lc" {
-		t.Fatalf("notes pane = %#v, want shell notes pane", panes[3])
+	if panes[3].ID != "lazygit" || panes[3].Role != "lazygit" || panes[3].CWD != "/tmp/app" || panes[3].Command[0] != "sh" || panes[3].Command[1] != "-lc" {
+		t.Fatalf("lazygit pane = %#v, want shell lazygit pane in cwd", panes[3])
 	}
-	if !strings.Contains(panes[3].Command[2], "zellij-agent ctl status") ||
-		!strings.Contains(panes[3].Command[2], "zellij-agent ctl events --limit 20") ||
-		!strings.Contains(panes[3].Command[2], "zellij-agent ctl snapshot coder --full") ||
-		!strings.Contains(panes[3].Command[2], "zellij-agent ctl cleanup --task") {
-		t.Fatalf("notes script = %q, want control command hints", panes[3].Command[2])
+	if !strings.Contains(panes[3].Command[2], "lazygit") || !strings.Contains(panes[3].Command[2], "exec sh") {
+		t.Fatalf("lazygit script = %q, want lazygit then interactive shell", panes[3].Command[2])
+	}
+	if panes[4].ID != "notes" || panes[4].Role != "notes" || panes[4].Command[0] != "sh" || panes[4].Command[1] != "-lc" {
+		t.Fatalf("notes pane = %#v, want shell notes pane", panes[4])
+	}
+	if !strings.Contains(panes[4].Command[2], "zellij-agent ctl status") ||
+		!strings.Contains(panes[4].Command[2], "zellij-agent ctl events --limit 20") ||
+		!strings.Contains(panes[4].Command[2], "zellij-agent ctl snapshot coder --full") ||
+		!strings.Contains(panes[4].Command[2], "zellij-agent ctl cleanup --task") {
+		t.Fatalf("notes script = %q, want control command hints", panes[4].Command[2])
 	}
 }
 

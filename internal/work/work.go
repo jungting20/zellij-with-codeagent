@@ -61,6 +61,12 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 						Command: []string{"sh", "-lc", reviewScript(cwd, goal)},
 					},
 					{
+						ID:      "lazygit",
+						Role:    "lazygit",
+						CWD:     cwd,
+						Command: []string{"sh", "-lc", lazygitScript()},
+					},
+					{
 						ID:      "notes",
 						Role:    "notes",
 						CWD:     cwd,
@@ -150,6 +156,13 @@ func reviewScript(cwd, goal string) string {
 	prompt := "Review this work plan for goal: " + goal + "\nDo not edit files. Report risks, bugs, and missing tests."
 	return strings.Join([]string{
 		"printf %s " + shellQuote(prompt) + " | codex exec --sandbox read-only --cd " + shellQuote(cwd) + " -",
+		"exec sh",
+	}, "\n")
+}
+
+func lazygitScript() string {
+	return strings.Join([]string{
+		"lazygit",
 		"exec sh",
 	}, "\n")
 }

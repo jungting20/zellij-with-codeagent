@@ -53,15 +53,30 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 func newClient(socketPath string, timeout time.Duration) ctlcli.AgentClient {
-	return transport.NewClient(transport.ClientOptions{SocketPath: socketPath, Timeout: timeout})
+	return newAutoStartClient(socketPath, timeout)
 }
 
 func newPlannerClient(socketPath string, timeout time.Duration) plannercli.AgentClient {
-	return transport.NewClient(transport.ClientOptions{SocketPath: socketPath, Timeout: timeout})
+	return newAutoStartClient(socketPath, timeout)
 }
 
 func newWorkClient(socketPath string, timeout time.Duration) workcli.AgentClient {
-	return transport.NewClient(transport.ClientOptions{SocketPath: socketPath, Timeout: timeout})
+	return newAutoStartClient(socketPath, timeout)
+}
+
+func newAutoStartClient(socketPath string, timeout time.Duration) *transport.Client {
+	return transport.NewClient(transport.ClientOptions{
+		SocketPath: socketPath,
+		Timeout:    timeout,
+		AutoStart:  true,
+		DaemonCommand: []string{
+			executablePath(),
+			"daemon",
+			"serve",
+			"--socket",
+			socketPath,
+		},
+	})
 }
 
 func executablePath() string {

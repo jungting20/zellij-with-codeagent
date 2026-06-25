@@ -45,8 +45,8 @@ func TestRunDryRunPrintsExecutionPlanEnvelope(t *testing.T) {
 	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 		t.Fatalf("payload decode error = %v", err)
 	}
-	if payload.Session != "work-command" || len(payload.Tabs) != 1 || len(payload.Tabs[0].Panes) != 4 {
-		t.Fatalf("payload = %#v, want work-command with four panes", payload)
+	if payload.Session != "work-command" || len(payload.Tabs) != 1 || len(payload.Tabs[0].Panes) != 5 {
+		t.Fatalf("payload = %#v, want work-command with five panes", payload)
 	}
 	if got := payload.Tabs[0].Panes[0].Command; len(got) != 4 || got[0] != "/tmp/bin/zellij-agent" || got[1] != "role" || got[2] != "coding-agent" || got[3] != cwd {
 		t.Fatalf("coder command = %#v, want configured role command", got)
@@ -78,7 +78,7 @@ func TestRunSubmitsGeneratedPlan(t *testing.T) {
 	if client.socketPath != "/tmp/custom.sock" || client.timeout != 5*time.Second || client.requestID != "req_work-command" {
 		t.Fatalf("client socket=%q timeout=%s request=%q, want custom socket timeout request", client.socketPath, client.timeout, client.requestID)
 	}
-	if client.payload.Session != "work-command" || len(client.payload.Tabs[0].Panes) != 4 {
+	if client.payload.Session != "work-command" || len(client.payload.Tabs[0].Panes) != 5 {
 		t.Fatalf("payload = %#v, want submitted work-command plan", client.payload)
 	}
 	if !strings.Contains(client.payload.Tabs[0].Panes[1].Command[2], "go test finished with exit=%s") {
@@ -88,7 +88,7 @@ func TestRunSubmitsGeneratedPlan(t *testing.T) {
 	if !strings.Contains(firstLine, "request=req_work-command session=work-command") ||
 		!strings.Contains(firstLine, "layout=triple-horizontal") ||
 		!strings.Contains(firstLine, "tabs=1") ||
-		!strings.Contains(firstLine, "panes=4") ||
+		!strings.Contains(firstLine, "panes=5") ||
 		!strings.Contains(stdout.String(), "- coder role=coding-agent") {
 		t.Fatalf("stdout = %q, want work summary", stdout.String())
 	}
@@ -234,7 +234,8 @@ func (c *fakeAgentClient) SubmitExecutionPlan(_ context.Context, requestID strin
 					{ID: "coder", Role: "coding-agent", Status: "running", ZellijPaneID: "terminal_1"},
 					{ID: "test", Role: "test-runner", Status: "running", ZellijPaneID: "terminal_2"},
 					{ID: "review", Role: "review-assistant", Status: "running", ZellijPaneID: "terminal_3"},
-					{ID: "notes", Role: "notes", Status: "running", ZellijPaneID: "terminal_4"},
+					{ID: "lazygit", Role: "lazygit", Status: "running", ZellijPaneID: "terminal_4"},
+					{ID: "notes", Role: "notes", Status: "running", ZellijPaneID: "terminal_5"},
 				},
 			},
 		},

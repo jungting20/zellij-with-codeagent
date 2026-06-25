@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ type CodexStartRequest struct {
 	Command       []string
 	CWD           string
 	InitialPrompt string
+	PromptFile    string
 }
 
 type CodexStarter interface {
@@ -86,12 +88,19 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	printedResult := resultOutput.String()
 	fmt.Fprint(stdout, printedResult)
 	if *startCodex {
+		promptFile, err := writeCodexPromptFile(printedResult)
+		if err != nil {
+			fmt.Fprintf(stderr, "zellij-agent debate-background codex prompt file failed: %v\n", err)
+			return 1
+		}
 		fmt.Fprintln(stdout, "\n[debate-background codex]")
+		fmt.Fprintf(stdout, "saved debate output to %s\n", promptFile)
 		fmt.Fprintln(stdout, "starting Codex with debate output as initial prompt...")
 		req := CodexStartRequest{
-			Command:       codexCommand(*codexBin, *cwd, printedResult),
+			Command:       codexCommand(*codexBin, *cwd, promptFile),
 			CWD:           *cwd,
 			InitialPrompt: printedResult,
+			PromptFile:    promptFile,
 		}
 		if err := defaultCodexStarter.Start(context.Background(), req); err != nil {
 			fmt.Fprintf(stderr, "zellij-agent debate-background codex start failed: %v\n", err)
@@ -117,7 +126,7 @@ func SetCodexStarterForTesting(starter CodexStarter) func() {
 	}
 }
 
-func codexCommand(codexBin, cwd, initialPrompt string) []string {
+func codexCommand(codexBin, cwd, promptFile string) []string {
 	bin := strings.TrimSpace(codexBin)
 	if bin == "" {
 		bin = "codex"
@@ -126,7 +135,24 @@ func codexCommand(codexBin, cwd, initialPrompt string) []string {
 	if strings.TrimSpace(cwd) != "" {
 		command = append(command, "--cd", cwd)
 	}
-	return append(command, initialPrompt)
+	if strings.TrimSpace(promptFile) == "" {
+		return command
+	}
+	command = append(command, "--add-dir", filepath.Dir(promptFile))
+	prompt := fmt.Sprintf("토론결과를 각 주장별로 요약해줘\n\nThe debate output is saved at %s. Read that file directly, review the coordinator synthesis, and continue from the debate result.", promptFile)
+	return append(command, prompt)
+}
+
+func writeCodexPromptFile(initialPrompt string) (string, error) {
+	dir, err := os.MkdirTemp("", "zellij-agent-debate-")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "result.md")
+	if err := os.WriteFile(path, []byte(initialPrompt), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func startCodex(ctx context.Context, req CodexStartRequest) error {

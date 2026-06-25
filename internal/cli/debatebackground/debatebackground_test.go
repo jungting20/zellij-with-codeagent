@@ -88,8 +88,17 @@ func TestRunStartsCodexWithPrintedResult(t *testing.T) {
 	if len(req.Command) < 4 || req.Command[0] != "codex" || req.Command[1] != "--cd" || req.Command[2] != "/repo" {
 		t.Fatalf("codex command = %#v, want codex --cd /repo <prompt>", req.Command)
 	}
-	if req.Command[len(req.Command)-1] != req.InitialPrompt {
-		t.Fatalf("codex command prompt = %q, want initial prompt", req.Command[len(req.Command)-1])
+	if len(req.Command) < 6 || req.Command[3] != "--add-dir" || req.PromptFile == "" {
+		t.Fatalf("codex command = %#v promptFile=%q, want --add-dir and prompt file", req.Command, req.PromptFile)
+	}
+	if strings.Contains(req.Command[len(req.Command)-1], req.InitialPrompt) {
+		t.Fatalf("codex command prompt includes full debate output")
+	}
+	if !strings.HasPrefix(req.Command[len(req.Command)-1], "토론결과를 각 주장별로 요약해줘") {
+		t.Fatalf("codex command prompt = %q, want summary instruction prefix", req.Command[len(req.Command)-1])
+	}
+	if !strings.Contains(req.Command[len(req.Command)-1], req.PromptFile) {
+		t.Fatalf("codex command prompt = %q, want prompt file path %q", req.Command[len(req.Command)-1], req.PromptFile)
 	}
 	for _, want := range []string{
 		"debate request=",
@@ -105,6 +114,9 @@ func TestRunStartsCodexWithPrintedResult(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "[debate-background codex]") {
 		t.Fatalf("stdout = %q, want codex start notice", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "saved debate output to ") {
+		t.Fatalf("stdout = %q, want prompt file notice", stdout.String())
 	}
 }
 

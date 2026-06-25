@@ -141,6 +141,66 @@ func TestClientRecentEvents(t *testing.T) {
 	}
 }
 
+func TestClientAutoStartsDaemonOnMissingSocket(t *testing.T) {
+	service := newFakeRuntimeService()
+	socketPath := shortSocketPath(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	startCalls := 0
+
+	client := NewClient(ClientOptions{
+		SocketPath:    socketPath,
+		Timeout:       time.Second,
+		AutoStart:     true,
+		StartTimeout:  time.Second,
+		StartLockPath: socketPath + ".lock",
+		StartDaemon: func(_ context.Context, opts DaemonStartOptions) error {
+			startCalls++
+			if opts.SocketPath != socketPath {
+				t.Fatalf("SocketPath = %q, want %q", opts.SocketPath, socketPath)
+			}
+			server, err := NewServer(ServerOptions{
+				Service:        service,
+				SocketPath:     socketPath,
+				RequestTimeout: time.Second,
+				Version:        "test",
+			})
+			if err != nil {
+				return err
+			}
+			go func() {
+				errCh <- server.ListenAndServe(ctx)
+			}()
+			return nil
+		},
+	})
+	defer func() {
+		cancel()
+		if startCalls == 0 {
+			return
+		}
+		select {
+		case err := <-errCh:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Fatalf("ListenAndServe() error = %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out stopping transport server")
+		}
+	}()
+
+	response, err := client.Health(context.Background())
+	if err != nil {
+		t.Fatalf("Health() error = %v", err)
+	}
+	if response.Status != "ok" {
+		t.Fatalf("Health() status = %q, want ok", response.Status)
+	}
+	if startCalls != 1 {
+		t.Fatalf("startCalls = %d, want 1", startCalls)
+	}
+}
+
 func startUnixTransport(t *testing.T, service *fakeRuntimeService) (*Client, func()) {
 	t.Helper()
 	socketPath := shortSocketPath(t)

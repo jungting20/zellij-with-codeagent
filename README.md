@@ -87,11 +87,12 @@ Use `zellij-agent ctl` as the thin command-line client for the local socket:
 ./bin/zellij-agent work "implement the mixed work command"
 ```
 
-The command creates one Zellij tab with four panes:
+The command creates one Zellij tab with five panes:
 
 - `coder`: interactive Codex session through `zellij-agent role coding-agent <cwd>`.
 - `test`: test shell prepared for `go test ./...`.
 - `review`: non-interactive Codex review assistant seeded with the goal.
+- `lazygit`: repository Git UI through `lazygit`.
 - `notes`: session notes and useful `zellij-agent ctl` commands.
 
 Useful options:

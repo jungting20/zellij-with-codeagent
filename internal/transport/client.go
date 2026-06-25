@@ -5,23 +5,43 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"strconv"
+	"syscall"
 	"time"
 )
 
 type ClientOptions struct {
+	SocketPath    string
+	Timeout       time.Duration
+	AutoStart     bool
+	DaemonCommand []string
+	StartTimeout  time.Duration
+	StartLockPath string
+	StartDaemon   func(context.Context, DaemonStartOptions) error
+}
+
+type DaemonStartOptions struct {
 	SocketPath string
-	Timeout    time.Duration
+	Command    []string
 }
 
 type Client struct {
-	baseURL string
-	http    *http.Client
+	baseURL      string
+	socketPath   string
+	http         *http.Client
+	autoStart    bool
+	startTimeout time.Duration
+	startLock    string
+	startCommand []string
+	startDaemon  func(context.Context, DaemonStartOptions) error
 }
 
 type EventStream struct {
@@ -35,6 +55,18 @@ func NewClient(opts ClientOptions) *Client {
 	if timeout == 0 {
 		timeout = DefaultRequestTimeout
 	}
+	startTimeout := opts.StartTimeout
+	if startTimeout == 0 {
+		startTimeout = 5 * time.Second
+	}
+	startLock := opts.StartLockPath
+	if startLock == "" && opts.SocketPath != "" {
+		startLock = opts.SocketPath + ".start.lock"
+	}
+	startDaemon := opts.StartDaemon
+	if startDaemon == nil {
+		startDaemon = startDaemonProcess
+	}
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			var dialer net.Dialer
@@ -42,7 +74,13 @@ func NewClient(opts ClientOptions) *Client {
 		},
 	}
 	return &Client{
-		baseURL: "http://agentd",
+		baseURL:      "http://agentd",
+		socketPath:   opts.SocketPath,
+		autoStart:    opts.AutoStart,
+		startTimeout: startTimeout,
+		startLock:    startLock,
+		startCommand: append([]string(nil), opts.DaemonCommand...),
+		startDaemon:  startDaemon,
 		http: &http.Client{
 			Transport: transport,
 			Timeout:   timeout,
@@ -116,7 +154,16 @@ func (c *Client) StreamEvents(ctx context.Context) (*EventStream, error) {
 	streamHTTP.Timeout = 0
 	response, err := streamHTTP.Do(req)
 	if err != nil {
-		return nil, err
+		if !c.shouldAutoStart(err) {
+			return nil, err
+		}
+		if startErr := c.ensureDaemon(ctx); startErr != nil {
+			return nil, fmt.Errorf("auto-start daemon: %w", startErr)
+		}
+		response, err = streamHTTP.Do(req)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		defer response.Body.Close()
@@ -183,25 +230,27 @@ func (c *Client) SubmitExecutionPlan(ctx context.Context, requestID string, payl
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, target any) error {
-	var reader io.Reader
+	var payload []byte
 	if body != nil {
-		payload, err := json.Marshal(body)
+		var err error
+		payload, err = json.Marshal(body)
 		if err != nil {
 			return err
 		}
-		reader = bytes.NewReader(payload)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
-	if err != nil {
-		return err
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
 	}
 
-	response, err := c.http.Do(req)
+	response, err := c.doHTTP(ctx, method, path, payload, body != nil)
 	if err != nil {
-		return err
+		if !c.shouldAutoStart(err) {
+			return err
+		}
+		if startErr := c.ensureDaemon(ctx); startErr != nil {
+			return fmt.Errorf("auto-start daemon: %w", startErr)
+		}
+		response, err = c.doHTTP(ctx, method, path, payload, body != nil)
+		if err != nil {
+			return err
+		}
 	}
 	defer response.Body.Close()
 
@@ -214,10 +263,151 @@ func (c *Client) do(ctx context.Context, method, path string, body any, target a
 	return json.NewDecoder(response.Body).Decode(target)
 }
 
+func (c *Client) doHTTP(ctx context.Context, method, path string, payload []byte, hasBody bool) (*http.Response, error) {
+	var reader io.Reader
+	if hasBody {
+		reader = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
+	if err != nil {
+		return nil, err
+	}
+	if hasBody {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return c.http.Do(req)
+}
+
 func decodeClientError(response *http.Response) error {
 	var errorResponse ErrorResponse
 	if err := json.NewDecoder(response.Body).Decode(&errorResponse); err != nil {
 		return fmt.Errorf("agentd transport http %d: decode error response: %w", response.StatusCode, err)
 	}
 	return &ClientError{StatusCode: response.StatusCode, APIError: errorResponse.Error}
+}
+
+func (c *Client) shouldAutoStart(err error) bool {
+	return c.autoStart && c.socketPath != "" && isDaemonUnavailableError(err)
+}
+
+func (c *Client) ensureDaemon(ctx context.Context) error {
+	if c.startLock == "" {
+		return c.startDaemonAndWait(ctx)
+	}
+	lockFile, err := os.OpenFile(c.startLock, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("open start lock %s: %w", c.startLock, err)
+	}
+	defer lockFile.Close()
+	if err := flockContext(ctx, lockFile); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+
+	if c.healthReady(ctx) {
+		return nil
+	}
+	return c.startDaemonAndWait(ctx)
+}
+
+func (c *Client) startDaemonAndWait(ctx context.Context) error {
+	startCtx, cancel := context.WithTimeout(ctx, c.startTimeout)
+	defer cancel()
+
+	command := c.startCommand
+	if len(command) == 0 {
+		executable, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("resolve current executable: %w", err)
+		}
+		command = []string{executable, "daemon", "serve", "--socket", c.socketPath}
+	}
+	if err := c.startDaemon(startCtx, DaemonStartOptions{
+		SocketPath: c.socketPath,
+		Command:    append([]string(nil), command...),
+	}); err != nil {
+		return err
+	}
+
+	deadline := time.NewTimer(c.startTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if c.healthReady(startCtx) {
+			return nil
+		}
+		select {
+		case <-startCtx.Done():
+			return fmt.Errorf("daemon did not become ready on %s: %w", c.socketPath, startCtx.Err())
+		case <-deadline.C:
+			return fmt.Errorf("daemon did not become ready on %s within %s", c.socketPath, c.startTimeout)
+		case <-ticker.C:
+		}
+	}
+}
+
+func (c *Client) healthReady(ctx context.Context) bool {
+	healthCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	client := NewClient(ClientOptions{
+		SocketPath: c.socketPath,
+		Timeout:    200 * time.Millisecond,
+	})
+	_, err := client.Health(healthCtx)
+	return err == nil
+}
+
+func flockContext(ctx context.Context, file *os.File) error {
+	for {
+		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+			return fmt.Errorf("acquire start lock %s: %w", file.Name(), err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("acquire start lock %s: %w", file.Name(), ctx.Err())
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func startDaemonProcess(ctx context.Context, opts DaemonStartOptions) error {
+	if len(opts.Command) == 0 {
+		return errors.New("daemon command is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cmd := exec.Command(opts.Command[0], opts.Command[1:]...)
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", os.DevNull, err)
+	}
+	defer devNull.Close()
+	cmd.Stdout = devNull
+	cmd.Stderr = devNull
+	cmd.Stdin = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start %s: %w", opts.Command[0], err)
+	}
+	return cmd.Process.Release()
+}
+
+func isDaemonUnavailableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrNotExist) ||
+		errors.Is(err, syscall.ENOENT) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }

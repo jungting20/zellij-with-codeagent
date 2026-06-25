@@ -77,8 +77,8 @@ func TestRunDispatchesWorkDryRun(t *testing.T) {
 	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 		t.Fatalf("payload decode error = %v", err)
 	}
-	if payload.Session != "work-command" || len(payload.Tabs) != 1 || len(payload.Tabs[0].Panes) != 4 {
-		t.Fatalf("payload = %#v, want work-command with four panes", payload)
+	if payload.Session != "work-command" || len(payload.Tabs) != 1 || len(payload.Tabs[0].Panes) != 5 {
+		t.Fatalf("payload = %#v, want work-command with five panes", payload)
 	}
 	coderCommand := payload.Tabs[0].Panes[0].Command
 	if len(coderCommand) != 4 || coderCommand[1] != "role" || coderCommand[2] != "coding-agent" || coderCommand[3] != cwd {
