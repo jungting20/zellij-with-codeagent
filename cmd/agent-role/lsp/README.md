@@ -37,6 +37,7 @@ requests `textDocument/documentSymbol`, and builds a call/component tree from:
 - JSX component usage such as `<Header />`
 - JSX props at each usage site, such as `onClick={handleClick}`
 - relative imports when `--max-depth` is greater than `1`
+- file paths when the tree crosses into a different source file
 
 If `typescript-language-server` is not installed locally or in `PATH`, the tool
 uses `npx` with pinned packages.
@@ -47,10 +48,10 @@ Example output:
 Call/component tree: /path/to/Page.tsx
 Page
 |- loadProducts
-|- Header
+|- Header [file=/path/to/components/Header.tsx]
 |  |- Logo
-|  `- UserMenu
-`- ProductList
+|  `- UserMenu [file=/path/to/components/UserMenu.tsx]
+`- ProductList [file=/path/to/ProductList.tsx]
    `- ProductCard
       `- formatProductName
 ```

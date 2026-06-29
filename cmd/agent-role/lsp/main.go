@@ -898,12 +898,12 @@ func printTree(analysis *fileAnalysis, analyzer *analyzer, maxDepth int) {
 	}
 
 	for _, root := range analysis.roots {
-		fmt.Println(root.name)
-		printChildren(root, "", analysis, analyzer, maxDepth, 1, map[string]bool{root.name: true}, map[string]bool{analysis.path: true})
+		fmt.Println(nodeLabelForContext(root.name, nil, analysis.path, analysis.path))
+		printChildren(root, "", analysis, analyzer, maxDepth, 1, map[string]bool{root.name: true}, map[string]bool{analysis.path: true}, analysis.path)
 	}
 }
 
-func printChildren(decl *declaration, prefix string, analysis *fileAnalysis, analyzer *analyzer, maxDepth int, depth int, seen map[string]bool, seenFiles map[string]bool) {
+func printChildren(decl *declaration, prefix string, analysis *fileAnalysis, analyzer *analyzer, maxDepth int, depth int, seen map[string]bool, seenFiles map[string]bool, currentFile string) {
 	byName := declarationsByName(analysis.declarations)
 	children := declarationChildren(decl, byName)
 	for i, child := range children {
@@ -916,20 +916,21 @@ func printChildren(decl *declaration, prefix string, analysis *fileAnalysis, ana
 		}
 
 		if child.decl != nil && seen[child.name] {
-			fmt.Printf("%s%s%s%s (cycle)\n", prefix, connector, child.name, propsSuffix(child.props()))
+			fmt.Printf("%s%s%s (cycle)\n", prefix, connector, nodeLabelForContext(child.name, child.props(), analysis.path, currentFile))
 			continue
 		}
 
-		fmt.Printf("%s%s%s%s\n", prefix, connector, child.name, propsSuffix(child.props()))
+		childFile := filePathForChild(child, analysis)
+		fmt.Printf("%s%s%s\n", prefix, connector, nodeLabelForContext(child.name, child.props(), childFile, currentFile))
 		if child.decl == nil {
-			printExternalExpansion(child.name, nextPrefix, analysis, analyzer, maxDepth, depth, seenFiles)
-			printJSXChildren(child.jsx.children, nextPrefix, analysis, analyzer, maxDepth, depth, seen, seenFiles)
+			printExternalExpansion(child.name, nextPrefix, analysis, analyzer, maxDepth, depth, seenFiles, childFile)
+			printJSXChildren(child.jsx.children, nextPrefix, analysis, analyzer, maxDepth, depth, seen, seenFiles, childFile)
 			continue
 		}
 
 		nextSeen := copySeen(seen)
 		nextSeen[child.decl.name] = true
-		printChildren(child.decl, nextPrefix, analysis, analyzer, maxDepth, depth, nextSeen, seenFiles)
+		printChildren(child.decl, nextPrefix, analysis, analyzer, maxDepth, depth, nextSeen, seenFiles, childFile)
 	}
 }
 
@@ -983,7 +984,7 @@ func (c printableChild) props() []propValue {
 	return c.jsx.props
 }
 
-func printJSXChildren(nodes []*treeNode, prefix string, analysis *fileAnalysis, analyzer *analyzer, maxDepth int, depth int, seen map[string]bool, seenFiles map[string]bool) {
+func printJSXChildren(nodes []*treeNode, prefix string, analysis *fileAnalysis, analyzer *analyzer, maxDepth int, depth int, seen map[string]bool, seenFiles map[string]bool, currentFile string) {
 	byName := declarationsByName(analysis.declarations)
 	for i, node := range nodes {
 		last := i == len(nodes)-1
@@ -995,23 +996,25 @@ func printJSXChildren(nodes []*treeNode, prefix string, analysis *fileAnalysis, 
 		}
 
 		if decl := byName[node.name]; decl != nil {
-			fmt.Printf("%s%s%s%s\n", prefix, connector, decl.name, propsSuffix(node.props))
+			nodeFile := analysis.path
+			fmt.Printf("%s%s%s\n", prefix, connector, nodeLabelForContext(decl.name, node.props, nodeFile, currentFile))
 			if seen[decl.name] {
 				continue
 			}
 			nextSeen := copySeen(seen)
 			nextSeen[decl.name] = true
-			printChildren(decl, nextPrefix, analysis, analyzer, maxDepth, depth, nextSeen, seenFiles)
+			printChildren(decl, nextPrefix, analysis, analyzer, maxDepth, depth, nextSeen, seenFiles, nodeFile)
 			continue
 		}
 
-		fmt.Printf("%s%s%s%s\n", prefix, connector, node.name, propsSuffix(node.props))
-		printExternalExpansion(node.name, nextPrefix, analysis, analyzer, maxDepth, depth, seenFiles)
-		printJSXChildren(node.children, nextPrefix, analysis, analyzer, maxDepth, depth, seen, seenFiles)
+		nodeFile := filePathForName(node.name, analysis)
+		fmt.Printf("%s%s%s\n", prefix, connector, nodeLabelForContext(node.name, node.props, nodeFile, currentFile))
+		printExternalExpansion(node.name, nextPrefix, analysis, analyzer, maxDepth, depth, seenFiles, nodeFile)
+		printJSXChildren(node.children, nextPrefix, analysis, analyzer, maxDepth, depth, seen, seenFiles, nodeFile)
 	}
 }
 
-func printExternalExpansion(name string, prefix string, analysis *fileAnalysis, analyzer *analyzer, maxDepth int, depth int, seenFiles map[string]bool) {
+func printExternalExpansion(name string, prefix string, analysis *fileAnalysis, analyzer *analyzer, maxDepth int, depth int, seenFiles map[string]bool, currentFile string) {
 	if depth >= maxDepth {
 		return
 	}
@@ -1037,7 +1040,7 @@ func printExternalExpansion(name string, prefix string, analysis *fileAnalysis, 
 		root = findDeclaration(imported.declarations, strings.TrimPrefix(name[strings.LastIndex(name, "."):], "."))
 	}
 	if root != nil {
-		printChildren(root, prefix, imported, analyzer, maxDepth, depth+1, map[string]bool{root.name: true}, nextSeenFiles)
+		printChildren(root, prefix, imported, analyzer, maxDepth, depth+1, map[string]bool{root.name: true}, nextSeenFiles, imported.path)
 		return
 	}
 
@@ -1049,9 +1052,52 @@ func printExternalExpansion(name string, prefix string, analysis *fileAnalysis, 
 			connector = "`- "
 			nextPrefix = prefix + "   "
 		}
-		fmt.Printf("%s%s%s\n", prefix, connector, importedRoot.name)
-		printChildren(importedRoot, nextPrefix, imported, analyzer, maxDepth, depth+1, map[string]bool{importedRoot.name: true}, nextSeenFiles)
+		fmt.Printf("%s%s%s\n", prefix, connector, nodeLabelForContext(importedRoot.name, nil, imported.path, currentFile))
+		printChildren(importedRoot, nextPrefix, imported, analyzer, maxDepth, depth+1, map[string]bool{importedRoot.name: true}, nextSeenFiles, imported.path)
 	}
+}
+
+func nodeLabel(name string, props []propValue, filePath string) string {
+	label := name + propsSuffix(props)
+	if filePath == "" {
+		return label
+	}
+	return fmt.Sprintf("%s [file=%s]", label, filePath)
+}
+
+func nodeLabelForContext(name string, props []propValue, filePath string, currentFile string) string {
+	if filePath == currentFile {
+		return nodeLabel(name, props, "")
+	}
+	return nodeLabel(name, props, filePath)
+}
+
+func filePathForChild(child printableChild, analysis *fileAnalysis) string {
+	if child.decl != nil {
+		return analysis.path
+	}
+	return filePathForName(child.name, analysis)
+}
+
+func filePathForName(name string, analysis *fileAnalysis) string {
+	if path := importedPathForName(name, analysis); path != "" {
+		return path
+	}
+	if analysis == nil {
+		return ""
+	}
+	return analysis.path
+}
+
+func importedPathForName(name string, analysis *fileAnalysis) string {
+	if analysis == nil {
+		return ""
+	}
+	importedPath := analysis.imports[name]
+	if importedPath == "" && strings.Contains(name, ".") {
+		importedPath = analysis.imports[strings.Split(name, ".")[0]]
+	}
+	return importedPath
 }
 
 func printJSONTree(analysis *fileAnalysis, analyzer *analyzer, maxDepth int) error {
