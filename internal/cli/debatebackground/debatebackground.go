@@ -34,6 +34,8 @@ func (fn codexStarterFunc) Start(ctx context.Context, req CodexStartRequest) err
 
 var defaultCodexStarter CodexStarter = codexStarterFunc(startCodex)
 
+const defaultOutputPath = "/tmp"
+
 func Run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("debate-background", flag.ContinueOnError)
 	if isHelpRequest(args) {
@@ -54,6 +56,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	agentTimeout := fs.Duration("agent-timeout", 2*time.Minute, "per-agent debate response timeout")
 	configPath := fs.String("config", "", "YAML file defining debate background agent commands")
 	cwd := fs.String("cwd", ".", "working directory for agent commands")
+	outputPath := fs.String("output", defaultOutputPath, "file or directory path for saving the printed debate result before stdout output")
 	startCodex := fs.Bool("start-codex", false, "start Codex after the debate using the printed result as the initial prompt")
 	codexBin := fs.String("codex-bin", "codex", "Codex executable used with --start-codex")
 	if err := fs.Parse(args); err != nil {
@@ -86,21 +89,21 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	var resultOutput strings.Builder
 	debate.PrintResult(&resultOutput, result)
 	printedResult := resultOutput.String()
+	savedOutputPath, err := writeDebateOutputFile(printedResult, *outputPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "zellij-agent debate-background output file failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "saved debate output to %s\n", savedOutputPath)
 	fmt.Fprint(stdout, printedResult)
 	if *startCodex {
-		promptFile, err := writeCodexPromptFile(printedResult)
-		if err != nil {
-			fmt.Fprintf(stderr, "zellij-agent debate-background codex prompt file failed: %v\n", err)
-			return 1
-		}
 		fmt.Fprintln(stdout, "\n[debate-background codex]")
-		fmt.Fprintf(stdout, "saved debate output to %s\n", promptFile)
 		fmt.Fprintln(stdout, "starting Codex with debate output as initial prompt...")
 		req := CodexStartRequest{
-			Command:       codexCommand(*codexBin, *cwd, promptFile),
+			Command:       codexCommand(*codexBin, *cwd, savedOutputPath),
 			CWD:           *cwd,
 			InitialPrompt: printedResult,
-			PromptFile:    promptFile,
+			PromptFile:    savedOutputPath,
 		}
 		if err := defaultCodexStarter.Start(context.Background(), req); err != nil {
 			fmt.Fprintf(stderr, "zellij-agent debate-background codex start failed: %v\n", err)
@@ -143,16 +146,40 @@ func codexCommand(codexBin, cwd, promptFile string) []string {
 	return append(command, prompt)
 }
 
-func writeCodexPromptFile(initialPrompt string) (string, error) {
-	dir, err := os.MkdirTemp("", "zellij-agent-debate-")
+func writeDebateOutputFile(output, path string) (string, error) {
+	target := strings.TrimSpace(path)
+	if target == "" {
+		target = defaultOutputPath
+	}
+	resolved, err := resolveDebateOutputPath(target)
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, "result.md")
-	if err := os.WriteFile(path, []byte(initialPrompt), 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
 		return "", err
 	}
+	if err := os.WriteFile(resolved, []byte(output), 0o600); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+func resolveDebateOutputPath(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err == nil && info.IsDir() {
+		return filepath.Join(path, generatedOutputFilename(time.Now())), nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	if err != nil && strings.HasSuffix(path, string(os.PathSeparator)) {
+		return filepath.Join(path, generatedOutputFilename(time.Now())), nil
+	}
 	return path, nil
+}
+
+func generatedOutputFilename(now time.Time) string {
+	return fmt.Sprintf("zellij-agent-debate-%s.md", now.Format("20060102-150405.000000000"))
 }
 
 func startCodex(ctx context.Context, req CodexStartRequest) error {

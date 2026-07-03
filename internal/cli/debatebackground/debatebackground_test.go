@@ -3,6 +3,8 @@ package debatebackground
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -52,11 +54,62 @@ func TestRunHelpPrintsUsageToStdout(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "Usage: zellij-agent debate-background") || !strings.Contains(stdout.String(), "-topic string") {
+	if !strings.Contains(stdout.String(), "Usage: zellij-agent debate-background") ||
+		!strings.Contains(stdout.String(), "-topic string") ||
+		!strings.Contains(stdout.String(), `-output string`) ||
+		!strings.Contains(stdout.String(), `(default "/tmp")`) {
 		t.Fatalf("stdout = %q, want debate-background usage", stdout.String())
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunSavesPrintedResultBeforeFinalOutput(t *testing.T) {
+	runner := &fakeBackgroundRunner{}
+	restore := SetBackgroundRunnerForTesting(runner)
+	defer restore()
+	outputDir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"--topic", "save result",
+		"--agents", "agy,codex",
+		"--cwd", "/repo",
+		"--agent-timeout", "1s",
+		"--timeout", "5s",
+		"--output", outputDir,
+	}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	output := stdout.String()
+	notice := "saved debate output to "
+	resultHeader := "debate request="
+	noticeIndex := strings.Index(output, notice)
+	resultIndex := strings.Index(output, resultHeader)
+	if noticeIndex == -1 || resultIndex == -1 || noticeIndex > resultIndex {
+		t.Fatalf("stdout = %q, want save notice before final result", output)
+	}
+	savedPath := strings.TrimSpace(output[noticeIndex+len(notice) : strings.Index(output[noticeIndex:], "\n")+noticeIndex])
+	if filepath.Dir(savedPath) != outputDir {
+		t.Fatalf("saved path = %q, want file under %q", savedPath, outputDir)
+	}
+	saved, err := os.ReadFile(savedPath)
+	if err != nil {
+		t.Fatalf("read saved output: %v", err)
+	}
+	for _, want := range []string{
+		"debate request=",
+		"[round 1 debate-agy]",
+		"background answer from agy",
+		"[debate-coordinator synthesis]",
+		"background synthesis",
+	} {
+		if !strings.Contains(string(saved), want) {
+			t.Fatalf("saved output = %q, missing %q", string(saved), want)
+		}
 	}
 }
 
