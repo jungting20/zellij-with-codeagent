@@ -860,6 +860,86 @@ func TestDetailFiltersAreScopedPerPane(t *testing.T) {
 	}
 }
 
+func TestCtrlCClearsAppliedFiltersWithoutQuitting(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	first := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	model.store.Upsert(networkEvent{Kind: eventResponse, Method: "GET", URL: "https://example.com/api/users", Status: 200, ObservedAt: first})
+	model.store.Upsert(networkEvent{
+		Kind:           eventResponse,
+		Method:         "POST",
+		URL:            "https://example.com/api/orders",
+		Status:         201,
+		RequestHeaders: map[string]string{"Authorization": "Bearer token"},
+		ResponseBody:   `{"invoice":"INV-1"}`,
+		ObservedAt:     first.Add(time.Second),
+	})
+	model.uiFilter = "orders"
+	model.detailFilters[detailPaneRequest] = "authorization"
+	model.detailFilters[detailPaneResult] = "invoice"
+	model.filterInputActive = true
+	model.syncRows()
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	cleared := updated.(trackerModel)
+
+	if cmd != nil {
+		t.Fatal("ctrl+c returned a command, want no quit command")
+	}
+	if cleared.uiFilter != "" {
+		t.Fatalf("uiFilter = %q, want cleared", cleared.uiFilter)
+	}
+	if cleared.detailFilterForPane(detailPaneRequest) != "" || cleared.detailFilterForPane(detailPaneResult) != "" {
+		t.Fatalf("detail filters = %#v, want cleared", cleared.detailFilters)
+	}
+	if cleared.filterInputActive {
+		t.Fatal("filterInputActive = true, want false")
+	}
+	if len(cleared.rows) != 2 {
+		t.Fatalf("len(rows) = %d, want all rows after clearing filters", len(cleared.rows))
+	}
+}
+
+func TestCtrlCClearsDetailFiltersAndKeepsDetailMode(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	model.store.Upsert(networkEvent{
+		Kind:           eventResponse,
+		Method:         "POST",
+		URL:            "https://example.com/api/orders",
+		Status:         201,
+		RequestHeaders: map[string]string{"Authorization": "Bearer token"},
+		ResponseBody:   `{"invoice":"INV-1"}`,
+		ObservedAt:     time.Now(),
+	})
+	model.syncRows()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	detail := updated.(trackerModel)
+	detail.detailFilters[detailPaneRequest] = "authorization"
+	detail.detailFilters[detailPaneResult] = "invoice"
+	detail.filterInputActive = true
+	detail.detailLeftScroll = 3
+	detail.detailRightScroll = 4
+
+	updated, cmd := detail.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	cleared := updated.(trackerModel)
+
+	if cmd != nil {
+		t.Fatal("ctrl+c returned a command, want no quit command")
+	}
+	if !cleared.DetailMode {
+		t.Fatal("DetailMode = false, want to stay in detail")
+	}
+	if cleared.detailFilterForPane(detailPaneRequest) != "" || cleared.detailFilterForPane(detailPaneResult) != "" {
+		t.Fatalf("detail filters = %#v, want cleared", cleared.detailFilters)
+	}
+	if cleared.detailLeftScroll != 0 || cleared.detailRightScroll != 0 {
+		t.Fatalf("detail scrolls = %d/%d, want reset", cleared.detailLeftScroll, cleared.detailRightScroll)
+	}
+	if cleared.filterInputActive {
+		t.Fatal("filterInputActive = true, want false")
+	}
+}
+
 func TestListViewMarksErrorAPIsForRedRendering(t *testing.T) {
 	model := newTrackerModel(trackerConfig{Port: 9222})
 	model.store.Upsert(networkEvent{Kind: eventResponse, Method: "GET", URL: "https://example.com/api/bad", Status: 500, ObservedAt: time.Now()})
@@ -915,6 +995,71 @@ func TestModelKeepsFocusedAPIWhenEventsReorderRows(t *testing.T) {
 
 	if reordered.rows[reordered.selected].URL != "https://example.com/api/newer" {
 		t.Fatalf("selected URL after reorder = %q, want focus to stay on newer API", reordered.rows[reordered.selected].URL)
+	}
+}
+
+func TestNetworkEventMovesListToLatestFilteredAPI(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	model.listHeight = 2
+	first := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	model.store.Upsert(networkEvent{Kind: eventResponse, Method: "GET", URL: "https://example.com/api/orders/old", Status: 200, ObservedAt: first})
+	model.store.Upsert(networkEvent{Kind: eventResponse, Method: "GET", URL: "https://example.com/api/users/ignored", Status: 200, ObservedAt: first.Add(time.Second)})
+	model.uiFilter = "orders"
+	model.syncRows()
+
+	if len(model.rows) != 1 || model.rows[0].URL != "https://example.com/api/orders/old" {
+		t.Fatalf("initial filtered rows = %#v, want only old orders API", model.rows)
+	}
+
+	updated, _ := model.Update(networkEvent{
+		Kind:       eventResponse,
+		Method:     "POST",
+		URL:        "https://example.com/api/orders/new",
+		Status:     201,
+		ObservedAt: first.Add(2 * time.Second),
+	})
+	refreshed := updated.(trackerModel)
+
+	if len(refreshed.rows) != 2 {
+		t.Fatalf("len(rows) = %d, want 2 filtered orders APIs", len(refreshed.rows))
+	}
+	if refreshed.selected != len(refreshed.rows)-1 {
+		t.Fatalf("selected = %d, want latest index %d", refreshed.selected, len(refreshed.rows)-1)
+	}
+	if refreshed.rows[refreshed.selected].URL != "https://example.com/api/orders/new" {
+		t.Fatalf("selected URL = %q, want latest filtered API", refreshed.rows[refreshed.selected].URL)
+	}
+}
+
+func TestNetworkEventInDetailDoesNotChangeSelectedAPI(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	first := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	model.store.Upsert(networkEvent{Kind: eventResponse, Method: "GET", URL: "https://example.com/api/selected", Status: 200, ObservedAt: first})
+	model.store.Upsert(networkEvent{Kind: eventResponse, Method: "GET", URL: "https://example.com/api/existing", Status: 200, ObservedAt: first.Add(time.Second)})
+	model.syncRows()
+	model.selected = 0
+	model.syncFocus()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	detail := updated.(trackerModel)
+	if !detail.DetailMode {
+		t.Fatal("DetailMode = false, want true before network event")
+	}
+
+	updated, _ = detail.Update(networkEvent{
+		Kind:       eventResponse,
+		Method:     "GET",
+		URL:        "https://example.com/api/latest",
+		Status:     200,
+		ObservedAt: first.Add(2 * time.Second),
+	})
+	refreshed := updated.(trackerModel)
+
+	if !refreshed.DetailMode {
+		t.Fatal("DetailMode = false after network event, want true")
+	}
+	if refreshed.rows[refreshed.selected].URL != "https://example.com/api/selected" {
+		t.Fatalf("selected URL after detail refresh = %q, want original detail API", refreshed.rows[refreshed.selected].URL)
 	}
 }
 

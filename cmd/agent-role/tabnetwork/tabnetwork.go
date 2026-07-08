@@ -779,7 +779,7 @@ func (m trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.filterInputActive {
 			switch msg.String() {
 			case "ctrl+c":
-				return m, tea.Quit
+				m.resetConfiguredState()
 			case "esc", "enter":
 				m.filterInputActive = false
 			case "backspace":
@@ -793,7 +793,9 @@ func (m trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "ctrl+c":
+			m.resetConfiguredState()
+		case "q":
 			return m, tea.Quit
 		case "up", "k":
 			m.pendingG = false
@@ -881,7 +883,11 @@ func (m trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case networkEvent:
 		m.store.Upsert(msg)
-		m.syncRows()
+		if m.DetailMode {
+			m.syncRows()
+		} else {
+			m.syncRowsToBottom()
+		}
 		return m, waitForEvent(m.events)
 	case tabEvent:
 		m.applyTabEvent(msg)
@@ -926,6 +932,36 @@ func (m *trackerModel) syncRows() {
 	}
 	m.syncFocus()
 	m.syncScroll()
+}
+
+func (m *trackerModel) syncRowsToBottom() {
+	m.rows = m.filteredRows()
+	if len(m.rows) == 0 {
+		m.selected = 0
+		m.focusedKey = ""
+		m.scroll = 0
+		return
+	}
+	m.selected = len(m.rows) - 1
+	m.syncFocus()
+}
+
+func (m *trackerModel) resetConfiguredState() {
+	m.uiFilter = ""
+	if m.detailFilters == nil {
+		m.detailFilters = map[detailPane]string{}
+	}
+	m.detailFilters[detailPaneRequest] = ""
+	m.detailFilters[detailPaneResult] = ""
+	m.filterInputActive = false
+	m.pendingG = false
+	m.copyStatus = ""
+	m.resetDetailScrolls()
+	if m.DetailMode {
+		m.syncRows()
+		return
+	}
+	m.syncRowsToBottom()
 }
 
 func (m trackerModel) activeFilter() string {
