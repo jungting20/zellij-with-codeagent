@@ -22,13 +22,45 @@ func TestRunHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run() exit code = %d, want 0", code)
 	}
-	for _, want := range []string{"Usage: zellij-agent", "planner", "work", "code-review", "debate-background"} {
+	for _, want := range []string{"Usage: zellij-agent", "planner", "work", "chrome", "code-review", "debate-background"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, missing %q", stdout.String(), want)
 		}
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunDispatchesChromeDryRun(t *testing.T) {
+	cwd := t.TempDir()
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"chrome", "--cwd", cwd, "--session", "chrome-debug", "--dry-run", "--", "--port", "9333"}, strings.NewReader(""), &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	var envelope transport.RequestEnvelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatalf("dry-run JSON decode error = %v; output=%q", err, stdout.String())
+	}
+	if envelope.Type != transport.RequestTypeExecutionPlan || envelope.RequestID != "req_chrome-debug" {
+		t.Fatalf("envelope = %#v, want chrome execution plan", envelope)
+	}
+	var payload transport.ExecutionPlanPayload
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		t.Fatalf("payload decode error = %v", err)
+	}
+	if payload.Session != "chrome-debug" || payload.Layout != "single-tab" || len(payload.Tabs) != 1 || payload.Tabs[0].Name != "chrome" {
+		t.Fatalf("payload = %#v, want chrome-debug single chrome tab", payload)
+	}
+	pane := payload.Tabs[0].Panes[0]
+	if pane.Role != "tab-network" || len(pane.Command) != 5 || pane.Command[1] != "role" || pane.Command[2] != "tab-network" || pane.Command[3] != "--port" || pane.Command[4] != "9333" {
+		t.Fatalf("pane = %#v, want tab-network command with passthrough port", pane)
+	}
+	if _, err := os.Stat(pane.Command[0]); err != nil {
+		t.Fatalf("chrome command executable = %q is not stat-able: %v", pane.Command[0], err)
 	}
 }
 

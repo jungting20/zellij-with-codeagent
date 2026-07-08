@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	chromecli "zellij-with-codeagent/internal/cli/chrome"
 	codereviewcli "zellij-with-codeagent/internal/cli/codereview"
 	ctlcli "zellij-with-codeagent/internal/cli/ctl"
 	daemoncli "zellij-with-codeagent/internal/cli/daemon"
@@ -42,6 +43,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return workcli.Run(args[1:], stdin, stdout, stderr, newWorkClient, workcli.Config{
 			DefaultRoleCommand: []string{executablePath(), "role"},
 		})
+	case "chrome":
+		return chromecli.Run(args[1:], stdin, stdout, stderr, newChromeClient, chromecli.Config{
+			DefaultRoleCommand: []string{executablePath(), "role"},
+		})
 	case "code-review":
 		return codereviewcli.Run(args[1:], stdout, stderr)
 	case "debate-background":
@@ -64,6 +69,10 @@ func newPlannerClient(socketPath string, timeout time.Duration) plannercli.Agent
 }
 
 func newWorkClient(socketPath string, timeout time.Duration) workcli.AgentClient {
+	return newAutoStartClient(socketPath, timeout)
+}
+
+func newChromeClient(socketPath string, timeout time.Duration) chromecli.AgentClient {
 	return newAutoStartClient(socketPath, timeout)
 }
 
@@ -98,6 +107,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  ctl      Inspect and control the daemon runtime")
 	fmt.Fprintln(w, "  planner  Generate, validate, and submit planner requests")
 	fmt.Fprintln(w, "  work     Start a personal mixed-mode coding workspace")
+	fmt.Fprintln(w, "  chrome   Start a Chrome network tracking tab")
 	fmt.Fprintln(w, "  code-review")
 	fmt.Fprintln(w, "           Review the latest git diff with debate-background")
 	fmt.Fprintln(w, "  debate-background")
