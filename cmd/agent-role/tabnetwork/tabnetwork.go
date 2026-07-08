@@ -542,6 +542,10 @@ type requestRow struct {
 	TargetID        string
 }
 
+func (r requestRow) isError() bool {
+	return r.Status >= 400 || r.ErrorText != "" || r.BodyError != ""
+}
+
 func (r requestRow) key() string {
 	return requestKey(r.Method, r.URL)
 }
@@ -655,29 +659,42 @@ func (s *requestStore) Rows() []requestRow {
 }
 
 type trackerModel struct {
-	config       trackerConfig
-	events       <-chan any
-	store        *requestStore
-	rows         []requestRow
-	selected     int
-	focusedKey   string
-	scroll       int
-	listHeight   int
-	width        int
-	height       int
-	detailScroll int
-	pendingG     bool
-	DetailMode   bool
-	tabs         map[string]PageTarget
-	lastError    string
-	chromePID    int
+	config            trackerConfig
+	events            <-chan any
+	store             *requestStore
+	rows              []requestRow
+	selected          int
+	focusedKey        string
+	scroll            int
+	listHeight        int
+	width             int
+	height            int
+	detailScroll      int
+	detailLeftScroll  int
+	detailRightScroll int
+	detailPane        detailPane
+	uiFilter          string
+	filterInputActive bool
+	pendingG          bool
+	DetailMode        bool
+	tabs              map[string]PageTarget
+	lastError         string
+	chromePID         int
 }
+
+type detailPane int
+
+const (
+	detailPaneRequest detailPane = iota + 1
+	detailPaneResult
+)
 
 func newTrackerModel(config trackerConfig) trackerModel {
 	return trackerModel{
-		config: config,
-		store:  newRequestStore(),
-		tabs:   map[string]PageTarget{},
+		config:     config,
+		store:      newRequestStore(),
+		tabs:       map[string]PageTarget{},
+		detailPane: detailPaneRequest,
 	}
 }
 
@@ -703,6 +720,26 @@ type collectorDone struct{}
 func (m trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.filterInputActive {
+			switch msg.String() {
+			case "ctrl+c":
+				return m, tea.Quit
+			case "esc", "enter":
+				m.filterInputActive = false
+			case "backspace":
+				if m.uiFilter != "" {
+					m.uiFilter = string([]rune(m.uiFilter)[:len([]rune(m.uiFilter))-1])
+					m.syncRows()
+				}
+			default:
+				if len(msg.Runes) > 0 {
+					m.uiFilter += string(msg.Runes)
+					m.syncRows()
+				}
+			}
+			m.pendingG = false
+			return m, nil
+		}
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
@@ -726,22 +763,45 @@ func (m trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingG = false
 			if len(m.rows) > 0 {
 				m.DetailMode = true
-				m.detailScroll = 0
+				m.detailPane = detailPaneRequest
+				m.resetDetailScrolls()
 			}
 		case "esc", "h":
 			m.pendingG = false
 			m.DetailMode = false
+		case "1":
+			m.pendingG = false
+			if m.DetailMode {
+				m.detailPane = detailPaneRequest
+				m.syncDetailScrollMirror()
+			}
+		case "2":
+			m.pendingG = false
+			if m.DetailMode {
+				m.detailPane = detailPaneResult
+				m.syncDetailScrollMirror()
+			}
+		case "e":
+			m.pendingG = false
+			m.moveToNextError()
+			if m.DetailMode {
+				m.resetDetailScrolls()
+			}
+		case "f":
+			m.pendingG = false
+			m.DetailMode = false
+			m.filterInputActive = true
 		case "G":
 			m.pendingG = false
 			if m.DetailMode {
-				m.detailScroll = m.maxDetailScroll()
+				m.scrollDetailToBottom()
 			} else {
 				m.moveToBottom()
 			}
 		case "g":
 			if m.pendingG {
 				if m.DetailMode {
-					m.detailScroll = 0
+					m.scrollDetailToTop()
 				} else {
 					m.moveToTop()
 				}
@@ -782,7 +842,7 @@ func (m *trackerModel) syncRows() {
 		m.focusedKey = m.rows[m.selected].key()
 	}
 
-	m.rows = m.store.Rows()
+	m.rows = m.filteredRows()
 	if m.focusedKey != "" {
 		for i, row := range m.rows {
 			if row.key() == m.focusedKey {
@@ -801,6 +861,41 @@ func (m *trackerModel) syncRows() {
 	}
 	m.syncFocus()
 	m.syncScroll()
+}
+
+func (m trackerModel) filteredRows() []requestRow {
+	rows := m.store.Rows()
+	filter := strings.ToLower(strings.TrimSpace(m.uiFilter))
+	if filter == "" {
+		return rows
+	}
+	out := make([]requestRow, 0, len(rows))
+	for _, row := range rows {
+		if row.matchesFilter(filter) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func (r requestRow) matchesFilter(filter string) bool {
+	if filter == "" {
+		return true
+	}
+	values := []string{
+		r.Method,
+		r.URL,
+		fmt.Sprint(r.Status),
+		r.ContentType,
+		r.ErrorText,
+		r.BodyError,
+	}
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), filter) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *trackerModel) syncFocus() {
@@ -834,24 +929,119 @@ func (m *trackerModel) moveToBottom() {
 	m.syncFocus()
 }
 
-func (m *trackerModel) scrollDetail(delta int) {
-	m.detailScroll += delta
-	if m.detailScroll < 0 {
-		m.detailScroll = 0
+func (m *trackerModel) moveToNextError() {
+	if len(m.rows) == 0 {
+		return
 	}
-	maxScroll := m.maxDetailScroll()
-	if m.detailScroll > maxScroll {
-		m.detailScroll = maxScroll
+	for offset := 1; offset <= len(m.rows); offset++ {
+		next := (m.selected + offset) % len(m.rows)
+		if m.rows[next].isError() {
+			m.selected = next
+			m.syncFocus()
+			return
+		}
 	}
 }
 
+func (m *trackerModel) scrollDetail(delta int) {
+	pane := m.effectiveScrollableDetailPane()
+	switch pane {
+	case detailPaneResult:
+		m.detailRightScroll = clampScroll(m.detailRightScroll+delta, m.maxDetailPaneScroll(detailPaneResult))
+	default:
+		m.detailLeftScroll = clampScroll(m.detailLeftScroll+delta, m.maxDetailPaneScroll(detailPaneRequest))
+	}
+	m.syncDetailScrollMirror()
+}
+
 func (m trackerModel) maxDetailScroll() int {
-	lines := m.fullDetailLines()
-	maxScroll := len(lines) - m.effectiveDetailHeight()
+	return m.maxDetailPaneScroll(m.effectiveScrollableDetailPane())
+}
+
+func (m trackerModel) maxDetailPaneScroll(pane detailPane) int {
+	left, right := m.detailColumns()
+	lineCount := len(left)
+	if pane == detailPaneResult {
+		lineCount = len(right)
+	}
+	maxScroll := lineCount - m.effectiveDetailHeight()
 	if maxScroll < 0 {
 		return 0
 	}
 	return maxScroll
+}
+
+func (m trackerModel) effectiveScrollableDetailPane() detailPane {
+	active := m.detailPane
+	if active == 0 {
+		active = detailPaneRequest
+	}
+	if m.maxDetailPaneScroll(active) > 0 {
+		return active
+	}
+	other := detailPaneResult
+	if active == detailPaneResult {
+		other = detailPaneRequest
+	}
+	if m.maxDetailPaneScroll(other) > 0 {
+		return other
+	}
+	return active
+}
+
+func (m *trackerModel) scrollDetailToTop() {
+	switch m.effectiveScrollableDetailPane() {
+	case detailPaneResult:
+		m.detailRightScroll = 0
+	default:
+		m.detailLeftScroll = 0
+	}
+	m.syncDetailScrollMirror()
+}
+
+func (m *trackerModel) scrollDetailToBottom() {
+	pane := m.detailPaneWithMostScroll()
+	m.detailPane = pane
+	switch pane {
+	case detailPaneResult:
+		m.detailRightScroll = m.maxDetailPaneScroll(detailPaneResult)
+	default:
+		m.detailLeftScroll = m.maxDetailPaneScroll(detailPaneRequest)
+	}
+	m.syncDetailScrollMirror()
+}
+
+func (m trackerModel) detailPaneWithMostScroll() detailPane {
+	leftMax := m.maxDetailPaneScroll(detailPaneRequest)
+	rightMax := m.maxDetailPaneScroll(detailPaneResult)
+	if rightMax > leftMax {
+		return detailPaneResult
+	}
+	return detailPaneRequest
+}
+
+func (m *trackerModel) resetDetailScrolls() {
+	m.detailScroll = 0
+	m.detailLeftScroll = 0
+	m.detailRightScroll = 0
+}
+
+func (m *trackerModel) syncDetailScrollMirror() {
+	if m.effectiveScrollableDetailPane() == detailPaneResult {
+		m.detailScroll = m.detailRightScroll
+		return
+	}
+	m.detailScroll = m.detailLeftScroll
+}
+
+func clampScroll(value, max int) int {
+	if value < 0 {
+		return 0
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
 
 func (m *trackerModel) syncScroll() {
@@ -951,11 +1141,18 @@ func (m trackerModel) View() string {
 	if m.config.TargetURL != "" || m.config.Filter.URLContains != "" || m.config.Filter.Method != "" {
 		fmt.Fprintf(&b, "target=%q filter-url=%q method=%q\n", m.config.TargetURL, m.config.Filter.URLContains, m.config.Filter.Method)
 	}
+	if m.filterInputActive || m.uiFilter != "" {
+		prompt := "filter"
+		if m.filterInputActive {
+			prompt = "filter>"
+		}
+		fmt.Fprintf(&b, "%s %q\n", prompt, m.uiFilter)
+	}
 	fmt.Fprintf(&b, "current-url=%s\n", valueOrDash(m.currentURL()))
 	if m.lastError != "" {
 		fmt.Fprintf(&b, "%s\n", errorStyle.Render(m.lastError))
 	}
-	b.WriteString(mutedStyle.Render("j/k or arrows: move  l/enter: detail  h/esc: list  gg/G: top/bottom  q: quit"))
+	b.WriteString(mutedStyle.Render("j/k or arrows: move/scroll  e: next error  f: filter  1/2: detail pane  l/enter: detail  h/esc: list  gg/G: top/bottom  q: quit"))
 	b.WriteString("\n\n")
 
 	if m.DetailMode {
@@ -985,6 +1182,8 @@ func (m trackerModel) listView() string {
 
 	var b strings.Builder
 	focusedStyle := lipgloss.NewStyle().Bold(true).Reverse(true)
+	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	focusedErrorStyle := lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(lipgloss.Color("196"))
 	visibleRows := m.visibleRows()
 	for visibleIndex, row := range visibleRows {
 		i := m.scroll + visibleIndex
@@ -996,16 +1195,25 @@ func (m trackerModel) listView() string {
 		if row.Status != 0 {
 			status = fmt.Sprintf("%d", row.Status)
 		}
-		line := fmt.Sprintf("%s %-6s %-4s x%-3d %-12s %s",
+		marker := "   "
+		if row.isError() {
+			marker = "ERR"
+		}
+		line := fmt.Sprintf("%s %-3s %-6s %-4s x%-3d %-12s %s",
 			cursor,
+			marker,
 			row.Method,
 			status,
 			row.Count,
 			row.LastSeen.Format("15:04:05.000"),
 			shorten(row.URL, 84),
 		)
-		if i == m.selected {
+		if i == m.selected && row.isError() {
+			line = focusedErrorStyle.Render(line)
+		} else if i == m.selected {
 			line = focusedStyle.Render(line)
+		} else if row.isError() {
+			line = errorStyle.Render(line)
 		}
 		fmt.Fprintln(&b, line)
 	}
@@ -1021,34 +1229,55 @@ func (m trackerModel) detailView() string {
 }
 
 func (m trackerModel) detailScrollIndicator() string {
-	total := len(m.fullDetailLines())
+	pane := m.effectiveScrollableDetailPane()
+	scroll := m.detailLeftScroll
+	if pane == detailPaneResult {
+		scroll = m.detailRightScroll
+	}
+	total := len(m.detailPaneLines(pane))
 	if total == 0 {
 		return "detail-scroll 0-0 of 0"
 	}
 	height := m.effectiveDetailHeight()
-	start := m.detailScroll + 1
-	end := m.detailScroll + height
+	start := scroll + 1
+	end := scroll + height
 	if end > total {
 		end = total
 	}
-	return fmt.Sprintf("detail-scroll %d-%d of %d", start, end, total)
+	return fmt.Sprintf(
+		"detail-scroll %d-%d of %d  active=%d request-scroll=%d result-scroll=%d",
+		start,
+		end,
+		total,
+		m.normalizedDetailPane(),
+		m.detailLeftScroll,
+		m.detailRightScroll,
+	)
 }
 
 func (m trackerModel) visibleDetailLines() []string {
-	lines := m.fullDetailLines()
 	height := m.effectiveDetailHeight()
-	if height <= 0 || len(lines) <= height {
-		return lines
+	if height <= 0 {
+		return nil
 	}
-	start := m.detailScroll
-	if start > len(lines) {
-		start = len(lines)
+	left, right := m.detailColumns()
+	left = sliceLines(left, m.detailLeftScroll, height)
+	right = sliceLines(right, m.detailRightScroll, height)
+
+	width := m.effectiveWidth()
+	leftWidth := (width - 3) / 2
+	if leftWidth < 30 {
+		leftWidth = 30
 	}
-	end := start + height
-	if end > len(lines) {
-		end = len(lines)
+	rightWidth := width - leftWidth - 3
+	if rightWidth < 30 {
+		rightWidth = 30
 	}
-	return lines[start:end]
+	rendered := strings.TrimRight(joinColumns(left, right, leftWidth, rightWidth), "\n")
+	if rendered == "" {
+		return nil
+	}
+	return strings.Split(rendered, "\n")
 }
 
 func (m trackerModel) effectiveDetailHeight() int {
@@ -1062,15 +1291,7 @@ func (m trackerModel) effectiveDetailHeight() int {
 }
 
 func (m trackerModel) fullDetailLines() []string {
-	if len(m.rows) == 0 {
-		return []string{"No request selected."}
-	}
-	row := m.rows[m.selected]
-	status := "-"
-	if row.Status != 0 {
-		status = fmt.Sprintf("%d", row.Status)
-	}
-
+	left, right := m.detailColumns()
 	width := m.effectiveWidth()
 	leftWidth := (width - 3) / 2
 	if leftWidth < 30 {
@@ -1081,8 +1302,25 @@ func (m trackerModel) fullDetailLines() []string {
 		rightWidth = 30
 	}
 
+	rendered := strings.TrimRight(joinColumns(left, right, leftWidth, rightWidth), "\n")
+	if rendered == "" {
+		return nil
+	}
+	return strings.Split(rendered, "\n")
+}
+
+func (m trackerModel) detailColumns() ([]string, []string) {
+	if len(m.rows) == 0 {
+		return []string{"[1] REQUEST HEADERS", "", "No request selected."}, []string{"[2] CALL RESULT", "", "No request selected."}
+	}
+	row := m.rows[m.selected]
+	status := "-"
+	if row.Status != 0 {
+		status = fmt.Sprintf("%d", row.Status)
+	}
+
 	left := []string{
-		"REQUEST HEADERS",
+		m.detailTitle(detailPaneRequest, "REQUEST HEADERS"),
 		"",
 		"Method: " + row.Method,
 		"URL: " + row.URL,
@@ -1093,7 +1331,7 @@ func (m trackerModel) fullDetailLines() []string {
 	left = append(left, formatHeaders(row.RequestHeaders)...)
 
 	right := []string{
-		"CALL RESULT",
+		m.detailTitle(detailPaneResult, "CALL RESULT"),
 		"",
 		"Status: " + status,
 		"Content-Type: " + valueOrDash(row.ContentType),
@@ -1109,11 +1347,49 @@ func (m trackerModel) fullDetailLines() []string {
 	right = append(right, "", "Response Body")
 	right = append(right, strings.Split(formatResponseBody(valueOrDash(row.ResponseBody)), "\n")...)
 
-	rendered := strings.TrimRight(joinColumns(left, right, leftWidth, rightWidth), "\n")
-	if rendered == "" {
+	return left, right
+}
+
+func (m trackerModel) detailTitle(pane detailPane, title string) string {
+	prefix := fmt.Sprintf("[%d] ", pane)
+	if m.normalizedDetailPane() == pane {
+		return prefix + title + " *"
+	}
+	return prefix + title
+}
+
+func (m trackerModel) normalizedDetailPane() detailPane {
+	if m.detailPane == detailPaneResult {
+		return detailPaneResult
+	}
+	return detailPaneRequest
+}
+
+func (m trackerModel) detailPaneLines(pane detailPane) []string {
+	left, right := m.detailColumns()
+	if pane == detailPaneResult {
+		return right
+	}
+	return left
+}
+
+func sliceLines(lines []string, start, height int) []string {
+	if height <= 0 {
 		return nil
 	}
-	return strings.Split(rendered, "\n")
+	if start < 0 {
+		start = 0
+	}
+	if start > len(lines) {
+		start = len(lines)
+	}
+	end := start + height
+	if end > len(lines) {
+		end = len(lines)
+	}
+	out := make([]string, end-start)
+	copy(out, lines[start:end])
+	return out
 }
 
 func (m trackerModel) fillScreen(content string) string {

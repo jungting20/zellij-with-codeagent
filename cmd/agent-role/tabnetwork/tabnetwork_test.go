@@ -387,6 +387,138 @@ func TestDetailViewScrollsWithJAndK(t *testing.T) {
 	}
 }
 
+func TestDetailViewFocusesIndependentPanesWithOneAndTwo(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	model.width = 100
+	model.height = 12
+	model.store.Upsert(networkEvent{
+		Kind:   eventResponse,
+		Method: "POST",
+		URL:    "https://example.com/api",
+		Status: 500,
+		RequestHeaders: map[string]string{
+			"X-A": "a",
+			"X-B": "b",
+			"X-C": "c",
+			"X-D": "d",
+			"X-E": "e",
+		},
+		ResponseBody: `{"lines":["line-00","line-01","line-02","line-03","line-04","line-05","line-06","line-07","line-08","line-09"],"tail":"last-value"}`,
+		ObservedAt:   time.Now(),
+	})
+	model.syncRows()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	detail := updated.(trackerModel)
+	if detail.detailPane != detailPaneRequest {
+		t.Fatalf("detailPane after enter = %v, want request pane", detail.detailPane)
+	}
+
+	updated, _ = detail.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	resultFocused := updated.(trackerModel)
+	if resultFocused.detailPane != detailPaneResult {
+		t.Fatalf("detailPane after 2 = %v, want result pane", resultFocused.detailPane)
+	}
+
+	updated, _ = resultFocused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	resultScrolled := updated.(trackerModel)
+	if resultScrolled.detailRightScroll != 1 {
+		t.Fatalf("detailRightScroll after j = %d, want 1", resultScrolled.detailRightScroll)
+	}
+	if resultScrolled.detailLeftScroll != 0 {
+		t.Fatalf("detailLeftScroll after right-pane j = %d, want 0", resultScrolled.detailLeftScroll)
+	}
+
+	updated, _ = resultScrolled.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
+	requestFocused := updated.(trackerModel)
+	if requestFocused.detailPane != detailPaneRequest {
+		t.Fatalf("detailPane after 1 = %v, want request pane", requestFocused.detailPane)
+	}
+
+	updated, _ = requestFocused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	requestScrolled := updated.(trackerModel)
+	if requestScrolled.detailLeftScroll != 1 {
+		t.Fatalf("detailLeftScroll after request-pane j = %d, want 1", requestScrolled.detailLeftScroll)
+	}
+	if requestScrolled.detailRightScroll != 1 {
+		t.Fatalf("detailRightScroll after request-pane j = %d, want preserved 1", requestScrolled.detailRightScroll)
+	}
+}
+
+func TestEKeyLoopsThroughErrorAPIs(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	first := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	model.store.Upsert(networkEvent{Kind: eventResponse, Method: "GET", URL: "https://example.com/api/ok", Status: 200, ObservedAt: first})
+	model.store.Upsert(networkEvent{Kind: eventResponse, Method: "GET", URL: "https://example.com/api/bad", Status: 500, ObservedAt: first.Add(time.Second)})
+	model.store.Upsert(networkEvent{Kind: eventFailure, Method: "GET", URL: "https://example.com/api/failed", ErrorText: "net::ERR_FAILED", ObservedAt: first.Add(2 * time.Second)})
+	model.syncRows()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	firstError := updated.(trackerModel)
+	if firstError.rows[firstError.selected].URL != "https://example.com/api/bad" {
+		t.Fatalf("selected after first e = %q, want first error API", firstError.rows[firstError.selected].URL)
+	}
+
+	updated, _ = firstError.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	secondError := updated.(trackerModel)
+	if secondError.rows[secondError.selected].URL != "https://example.com/api/failed" {
+		t.Fatalf("selected after second e = %q, want second error API", secondError.rows[secondError.selected].URL)
+	}
+
+	updated, _ = secondError.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	wrapped := updated.(trackerModel)
+	if wrapped.rows[wrapped.selected].URL != "https://example.com/api/bad" {
+		t.Fatalf("selected after wrapped e = %q, want first error API", wrapped.rows[wrapped.selected].URL)
+	}
+}
+
+func TestFKeyFiltersRowsInRealtime(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	first := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	model.store.Upsert(networkEvent{Kind: eventResponse, Method: "GET", URL: "https://example.com/api/users", Status: 200, ObservedAt: first})
+	model.store.Upsert(networkEvent{Kind: eventResponse, Method: "POST", URL: "https://example.com/api/orders", Status: 201, ObservedAt: first.Add(time.Second)})
+	model.syncRows()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	filtering := updated.(trackerModel)
+	if !filtering.filterInputActive {
+		t.Fatal("filterInputActive = false, want true after f")
+	}
+
+	updated, _ = filtering.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("orders")})
+	filtered := updated.(trackerModel)
+	if filtered.uiFilter != "orders" {
+		t.Fatalf("uiFilter = %q, want orders", filtered.uiFilter)
+	}
+	if len(filtered.rows) != 1 || filtered.rows[0].URL != "https://example.com/api/orders" {
+		t.Fatalf("filtered rows = %#v, want only orders API", filtered.rows)
+	}
+
+	updated, _ = filtered.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	lessFiltered := updated.(trackerModel)
+	if lessFiltered.uiFilter != "order" {
+		t.Fatalf("uiFilter after backspace = %q, want order", lessFiltered.uiFilter)
+	}
+
+	updated, _ = lessFiltered.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	exited := updated.(trackerModel)
+	if exited.filterInputActive {
+		t.Fatal("filterInputActive = true, want false after esc")
+	}
+}
+
+func TestListViewMarksErrorAPIsForRedRendering(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	model.store.Upsert(networkEvent{Kind: eventResponse, Method: "GET", URL: "https://example.com/api/bad", Status: 500, ObservedAt: time.Now()})
+	model.syncRows()
+
+	view := model.View()
+
+	if !strings.Contains(view, "ERR") {
+		t.Fatalf("View() missing error API marker used by red rendering: %q", view)
+	}
+}
+
 func TestModelLShowsDetailAndHReturnsToList(t *testing.T) {
 	model := newTrackerModel(trackerConfig{Port: 9222})
 	model.store.Upsert(networkEvent{Kind: eventResponse, Method: "GET", URL: "https://example.com/api", Status: 200, ObservedAt: time.Now()})
