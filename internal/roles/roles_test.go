@@ -9,6 +9,7 @@ func TestAllIncludesRoleDescriptions(t *testing.T) {
 		RoleLSP,
 		RoleNetworkTracker,
 		RoleConsoleTracker,
+		RoleTabNetwork,
 		RoleCodingAgent,
 	} {
 		spec, ok := Lookup(name)
@@ -26,6 +27,22 @@ func TestAllIncludesRoleDescriptions(t *testing.T) {
 	}
 	if len(spec.Arguments) != 1 || spec.Arguments[0].Name != "path" || !spec.Arguments[0].Required {
 		t.Fatalf("Lookup(%q) arguments = %#v, want required path argument", RoleCodingAgent, spec.Arguments)
+	}
+}
+
+func TestLookupTabNetwork(t *testing.T) {
+	spec, ok := Lookup(RoleTabNetwork)
+	if !ok {
+		t.Fatal("Lookup(RoleTabNetwork) ok = false, want true")
+	}
+	if spec.Name != "tab-network" {
+		t.Fatalf("name = %q, want tab-network", spec.Name)
+	}
+	if spec.Usage != "tab-network [options]" {
+		t.Fatalf("usage = %q, want tab-network [options]", spec.Usage)
+	}
+	if len(spec.Arguments) == 0 {
+		t.Fatal("arguments is empty, want documented options")
 	}
 }
 

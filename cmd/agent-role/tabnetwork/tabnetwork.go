@@ -1,0 +1,1237 @@
+package tabnetwork
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"os/signal"
+	"sort"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
+	cdptarget "github.com/chromedp/cdproto/target"
+	"github.com/chromedp/chromedp"
+)
+
+const defaultUserDataDir = "/tmp/chrome-debug-network-tracker"
+
+type PageTarget struct {
+	ID    string
+	Type  string
+	Title string
+	URL   string
+}
+
+type RequestFilter struct {
+	Method      string
+	URLContains string
+}
+
+type trackerConfig struct {
+	Port         int
+	ChromePath   string
+	UserDataDir  string
+	LaunchChrome bool
+	TargetURL    string
+	Filter       RequestFilter
+	ListTargets  bool
+}
+
+type requestSnapshot struct {
+	Method  string
+	URL     string
+	Headers map[string]string
+}
+
+type targetRegistry struct {
+	seen map[string]PageTarget
+}
+
+func Run(args []string) int {
+	return runWithIO(args, os.Stdin, os.Stdout, os.Stderr)
+}
+
+func runWithIO(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	opts, err := parseOptionsWithOutput(args, stderr)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := runTracker(ctx, opts, stdin, stdout, stderr); err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func parseOptions(args []string) (trackerConfig, error) {
+	return parseOptionsWithOutput(args, io.Discard)
+}
+
+func parseOptionsWithOutput(args []string, output io.Writer) (trackerConfig, error) {
+	opts := trackerConfig{
+		Port:         9222,
+		UserDataDir:  defaultUserDataDir,
+		LaunchChrome: true,
+	}
+	fs := flag.NewFlagSet("tab-network", flag.ContinueOnError)
+	fs.SetOutput(output)
+	fs.IntVar(&opts.Port, "port", opts.Port, "Chrome remote debugging port")
+	fs.StringVar(&opts.ChromePath, "chrome-path", "", "Chrome executable path")
+	fs.StringVar(&opts.UserDataDir, "user-data-dir", opts.UserDataDir, "Chrome user data directory used when launching Chrome")
+	noLaunch := fs.Bool("no-launch", false, "do not launch Chrome; attach to an already running debug port")
+	fs.StringVar(&opts.TargetURL, "target-url", "", "track only page targets whose URL contains this text")
+	fs.StringVar(&opts.Filter.URLContains, "filter-url", "", "show only requests/responses whose URL contains this text")
+	fs.StringVar(&opts.Filter.Method, "method", "", "show only requests with this HTTP method")
+	fs.BoolVar(&opts.ListTargets, "list", false, "list attachable page targets and exit")
+
+	if err := fs.Parse(args); err != nil {
+		return trackerConfig{}, err
+	}
+	if fs.NArg() != 0 {
+		return trackerConfig{}, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	if opts.Port < 1 || opts.Port > 65535 {
+		return trackerConfig{}, fmt.Errorf("--port must be between 1 and 65535")
+	}
+	opts.LaunchChrome = !*noLaunch
+	opts.Filter.Method = strings.ToUpper(strings.TrimSpace(opts.Filter.Method))
+	return opts, nil
+}
+
+func runTracker(ctx context.Context, opts trackerConfig, stdin io.Reader, stdout, stderr io.Writer) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var launched *exec.Cmd
+	if opts.LaunchChrome {
+		cmd, err := launchChrome(ctx, opts.ChromePath, opts.Port, opts.UserDataDir)
+		if err != nil {
+			return err
+		}
+		launched = cmd
+	}
+	if err := waitForDebugPort(ctx, opts.Port, 10*time.Second); err != nil {
+		return err
+	}
+
+	allocatorURL := fmt.Sprintf("http://127.0.0.1:%d", opts.Port)
+	allocatorCtx, cancelAllocator := chromedp.NewRemoteAllocator(ctx, allocatorURL)
+	defer cancelAllocator()
+	browserCtx, cancelBrowser := chromedp.NewContext(allocatorCtx)
+	defer cancelBrowser()
+
+	targets, err := pageTargets(browserCtx)
+	if err != nil {
+		return err
+	}
+	if opts.ListTargets {
+		for _, target := range targets {
+			if target.Type == "page" {
+				fmt.Fprintf(stdout, "%s\t%s\t%s\n", target.ID, target.Title, target.URL)
+			}
+		}
+		return nil
+	}
+
+	events := make(chan any, 128)
+	registry := newTargetRegistry()
+	go collectTargets(ctx, browserCtx, allocatorCtx, registry, targets, opts, events, stderr)
+
+	model := newTrackerModel(opts)
+	model.events = events
+	if launched != nil && launched.Process != nil {
+		model.chromePID = launched.Process.Pid
+	}
+
+	program := tea.NewProgram(model, tea.WithInput(stdin), tea.WithOutput(stdout), tea.WithAltScreen())
+	if _, err := program.Run(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func collectTargets(ctx context.Context, browserCtx context.Context, allocatorCtx context.Context, registry *targetRegistry, initial []PageTarget, opts trackerConfig, out chan<- any, stderr io.Writer) {
+	defer close(out)
+	trackTargets(ctx, allocatorCtx, registry, initial, opts.TargetURL, opts.Filter, out)
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			targets, err := pageTargets(browserCtx)
+			if err != nil {
+				if ctx.Err() == nil {
+					fmt.Fprintf(stderr, "target scan failed: %v\n", err)
+				}
+				continue
+			}
+			trackTargets(ctx, allocatorCtx, registry, targets, opts.TargetURL, opts.Filter, out)
+		}
+	}
+}
+
+func newTargetRegistry() *targetRegistry {
+	return &targetRegistry{seen: map[string]PageTarget{}}
+}
+
+func (r *targetRegistry) MarkIfNewPage(target PageTarget) bool {
+	if target.Type != "page" {
+		return false
+	}
+	if _, ok := r.seen[target.ID]; ok {
+		return false
+	}
+	r.seen[target.ID] = target
+	return true
+}
+
+func (r *targetRegistry) UpdateURLIfChanged(targetID, url string) bool {
+	if url == "" {
+		return false
+	}
+	target, ok := r.seen[targetID]
+	if !ok || target.URL == url {
+		return false
+	}
+	target.URL = url
+	r.seen[targetID] = target
+	return true
+}
+
+func (r *targetRegistry) ClosedTargets(open map[string]bool) []string {
+	var closed []string
+	for targetID := range r.seen {
+		if !open[targetID] {
+			closed = append(closed, targetID)
+			delete(r.seen, targetID)
+		}
+	}
+	sort.Strings(closed)
+	return closed
+}
+
+func (f RequestFilter) Include(method, url string) bool {
+	if f.Method != "" && !strings.EqualFold(f.Method, method) {
+		return false
+	}
+	if f.URLContains != "" && !strings.Contains(url, f.URLContains) {
+		return false
+	}
+	return true
+}
+
+func targetMatches(target PageTarget, urlContains string) bool {
+	if target.Type != "page" {
+		return false
+	}
+	return urlContains == "" || strings.Contains(target.URL, urlContains)
+}
+
+func trackTargets(ctx context.Context, allocatorCtx context.Context, registry *targetRegistry, targets []PageTarget, targetURL string, filter RequestFilter, out chan<- any) {
+	open := map[string]bool{}
+	for _, target := range targets {
+		if target.Type == "page" {
+			open[target.ID] = true
+		}
+		if !targetMatches(target, targetURL) {
+			continue
+		}
+		if registry.MarkIfNewPage(target) {
+			sendTrackerMsg(ctx, out, tabEvent{Kind: tabCreated, Target: target, ObservedAt: time.Now()})
+			go attachAndTrackTarget(ctx, allocatorCtx, target, filter, out)
+			continue
+		}
+		if registry.UpdateURLIfChanged(target.ID, target.URL) {
+			sendTrackerMsg(ctx, out, tabEvent{Kind: tabNavigated, Target: target, URL: target.URL, ObservedAt: time.Now()})
+		}
+	}
+	for _, targetID := range registry.ClosedTargets(open) {
+		sendTrackerMsg(ctx, out, tabEvent{Kind: tabClosed, TargetID: targetID, ObservedAt: time.Now()})
+	}
+}
+
+func sendTrackerMsg(ctx context.Context, out chan<- any, msg any) {
+	select {
+	case <-ctx.Done():
+	case out <- msg:
+	}
+}
+
+func launchChrome(ctx context.Context, chromePath string, port int, userDataDir string) (*exec.Cmd, error) {
+	path, err := resolveChromePath(chromePath)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(userDataDir, 0o755); err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, path, chromeArgs(port, userDataDir)...)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	go func() {
+		_ = cmd.Wait()
+	}()
+	return cmd, nil
+}
+
+func resolveChromePath(chromePath string) (string, error) {
+	if chromePath != "" {
+		return chromePath, nil
+	}
+	if envPath := os.Getenv("CHROME_PATH"); envPath != "" {
+		return envPath, nil
+	}
+	candidates := []string{
+		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		"/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+		"google-chrome",
+		"chromium",
+		"chromium-browser",
+	}
+	for _, candidate := range candidates {
+		if strings.Contains(candidate, "/") {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			}
+			continue
+		}
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path, nil
+		}
+	}
+	return "", errors.New("Chrome executable not found; pass --chrome-path or set CHROME_PATH")
+}
+
+func chromeArgs(port int, userDataDir string) []string {
+	return []string{
+		fmt.Sprintf("--remote-debugging-port=%d", port),
+		fmt.Sprintf("--user-data-dir=%s", userDataDir),
+		"--no-first-run",
+		"--no-default-browser-check",
+		"about:blank",
+	}
+}
+
+func waitForDebugPort(ctx context.Context, port int, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/json/version", port)
+	client := http.Client{Timeout: 500 * time.Millisecond}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				return nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("Chrome debug port %d did not become ready: %w", port, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func attachAndTrackTarget(ctx context.Context, allocatorCtx context.Context, target PageTarget, filter RequestFilter, out chan<- any) {
+	targetCtx, cancel := chromedp.NewContext(allocatorCtx, chromedp.WithTargetID(cdptarget.ID(target.ID)))
+	defer cancel()
+
+	var mu sync.Mutex
+	requests := map[network.RequestID]requestSnapshot{}
+	chromedp.ListenTarget(targetCtx, func(event any) {
+		now := time.Now()
+		switch e := event.(type) {
+		case *network.EventRequestWillBeSent:
+			mu.Lock()
+			requests[e.RequestID] = requestSnapshot{
+				Method:  e.Request.Method,
+				URL:     e.Request.URL,
+				Headers: headersToStrings(e.Request.Headers),
+			}
+			mu.Unlock()
+			if filter.Include(e.Request.Method, e.Request.URL) {
+				sendTrackerMsg(ctx, out, networkEvent{
+					Kind:           eventRequest,
+					Method:         e.Request.Method,
+					URL:            e.Request.URL,
+					RequestHeaders: headersToStrings(e.Request.Headers),
+					RequestID:      string(e.RequestID),
+					TargetID:       target.ID,
+					ObservedAt:     now,
+				})
+			}
+		case *network.EventResponseReceived:
+			mu.Lock()
+			request := requests[e.RequestID]
+			mu.Unlock()
+			if request.URL == "" {
+				request.URL = e.Response.URL
+			}
+			if filter.Include(request.Method, request.URL) {
+				sendTrackerMsg(ctx, out, networkEvent{
+					Kind:            eventResponse,
+					Method:          request.Method,
+					URL:             request.URL,
+					Status:          int64(e.Response.Status),
+					ContentType:     e.Response.MimeType,
+					RequestHeaders:  request.Headers,
+					ResponseHeaders: headersToStrings(e.Response.Headers),
+					RequestID:       string(e.RequestID),
+					TargetID:        target.ID,
+					ObservedAt:      now,
+				})
+			}
+		case *network.EventLoadingFailed:
+			mu.Lock()
+			request := requests[e.RequestID]
+			delete(requests, e.RequestID)
+			mu.Unlock()
+			if filter.Include(request.Method, request.URL) {
+				sendTrackerMsg(ctx, out, networkEvent{
+					Kind:       eventFailure,
+					Method:     request.Method,
+					URL:        request.URL,
+					BodyError:  e.ErrorText,
+					ErrorText:  e.ErrorText,
+					RequestID:  string(e.RequestID),
+					TargetID:   target.ID,
+					ObservedAt: now,
+				})
+			}
+		case *network.EventLoadingFinished:
+			mu.Lock()
+			delete(requests, e.RequestID)
+			mu.Unlock()
+		case *page.EventFrameNavigated:
+			if e.Frame.ParentID == "" {
+				sendTrackerMsg(ctx, out, tabEvent{Kind: tabNavigated, TargetID: target.ID, URL: e.Frame.URL, ObservedAt: now})
+			}
+		case *page.EventNavigatedWithinDocument:
+			sendTrackerMsg(ctx, out, tabEvent{Kind: tabNavigated, TargetID: target.ID, URL: e.URL, ObservedAt: now})
+		}
+	})
+
+	if err := chromedp.Run(targetCtx, network.Enable(), page.Enable()); err != nil && ctx.Err() == nil {
+		sendTrackerMsg(ctx, out, errorEvent{Message: fmt.Sprintf("target attach failed %s: %v", target.ID, err)})
+		return
+	}
+	<-ctx.Done()
+}
+
+func headersToStrings(headers network.Headers) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(headers))
+	for key, value := range headers {
+		out[key] = fmt.Sprint(value)
+	}
+	return out
+}
+
+func pageTargets(ctx context.Context) ([]PageTarget, error) {
+	infos, err := chromedp.Targets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]PageTarget, 0, len(infos))
+	for _, info := range infos {
+		targets = append(targets, PageTarget{
+			ID:    string(info.TargetID),
+			Type:  info.Type,
+			Title: info.Title,
+			URL:   info.URL,
+		})
+	}
+	return targets, nil
+}
+
+type networkEventKind int
+
+const (
+	eventRequest networkEventKind = iota
+	eventResponse
+	eventFailure
+)
+
+type networkEvent struct {
+	Kind            networkEventKind
+	Method          string
+	URL             string
+	Status          int64
+	ContentType     string
+	ErrorText       string
+	BodyError       string
+	RequestHeaders  map[string]string
+	ResponseHeaders map[string]string
+	ResponseBody    string
+	RequestID       string
+	TargetID        string
+	ObservedAt      time.Time
+}
+
+type tabEventKind int
+
+const (
+	tabCreated tabEventKind = iota
+	tabClosed
+	tabNavigated
+)
+
+type tabEvent struct {
+	Kind       tabEventKind
+	Target     PageTarget
+	TargetID   string
+	URL        string
+	ObservedAt time.Time
+}
+
+type errorEvent struct {
+	Message string
+}
+
+type requestRow struct {
+	Method          string
+	URL             string
+	Status          int64
+	ContentType     string
+	Count           int
+	FirstSeen       time.Time
+	LastSeen        time.Time
+	ErrorText       string
+	BodyError       string
+	RequestHeaders  map[string]string
+	ResponseHeaders map[string]string
+	ResponseBody    string
+	LastRequestID   string
+	TargetID        string
+}
+
+func (r requestRow) key() string {
+	return requestKey(r.Method, r.URL)
+}
+
+type requestStore struct {
+	rows        []requestRow
+	index       map[string]int
+	seenRequest map[string]bool
+}
+
+func newRequestStore() *requestStore {
+	return &requestStore{
+		index:       map[string]int{},
+		seenRequest: map[string]bool{},
+	}
+}
+
+func (s *requestStore) Upsert(event networkEvent) {
+	method := strings.ToUpper(strings.TrimSpace(event.Method))
+	if method == "" {
+		method = "-"
+	}
+	if event.URL == "" {
+		return
+	}
+	if event.ObservedAt.IsZero() {
+		event.ObservedAt = time.Now()
+	}
+
+	key := requestKey(method, event.URL)
+	idx, ok := s.index[key]
+	if !ok {
+		idx = len(s.rows)
+		s.index[key] = idx
+		s.rows = append(s.rows, requestRow{
+			Method:    method,
+			URL:       event.URL,
+			FirstSeen: event.ObservedAt,
+		})
+	}
+
+	row := s.rows[idx]
+	if shouldIncrementCount(event, s.seenRequest, row.Count) {
+		row.Count++
+	}
+	if event.RequestID != "" {
+		s.seenRequest[event.RequestID] = true
+		row.LastRequestID = event.RequestID
+	}
+	row.LastSeen = event.ObservedAt
+	row.TargetID = event.TargetID
+	if event.Status != 0 {
+		row.Status = event.Status
+	}
+	if event.ContentType != "" {
+		row.ContentType = event.ContentType
+	}
+	if len(event.RequestHeaders) > 0 {
+		row.RequestHeaders = cloneStringMap(event.RequestHeaders)
+	}
+	if len(event.ResponseHeaders) > 0 {
+		row.ResponseHeaders = cloneStringMap(event.ResponseHeaders)
+	}
+	if event.ResponseBody != "" {
+		row.ResponseBody = event.ResponseBody
+		row.BodyError = ""
+	}
+	if event.BodyError != "" {
+		row.BodyError = event.BodyError
+	}
+	if event.Kind == eventFailure {
+		row.ErrorText = event.ErrorText
+	} else if event.ErrorText == "" {
+		row.ErrorText = ""
+	}
+	s.rows[idx] = row
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func requestKey(method, url string) string {
+	return strings.ToUpper(strings.TrimSpace(method)) + "\x00" + url
+}
+
+func shouldIncrementCount(event networkEvent, seen map[string]bool, currentCount int) bool {
+	if event.Kind == eventRequest {
+		return event.RequestID == "" || !seen[event.RequestID]
+	}
+	if event.RequestID != "" {
+		return !seen[event.RequestID]
+	}
+	return currentCount == 0
+}
+
+func (s *requestStore) Rows() []requestRow {
+	out := make([]requestRow, len(s.rows))
+	copy(out, s.rows)
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].LastSeen.Before(out[j].LastSeen)
+	})
+	return out
+}
+
+type trackerModel struct {
+	config       trackerConfig
+	events       <-chan any
+	store        *requestStore
+	rows         []requestRow
+	selected     int
+	focusedKey   string
+	scroll       int
+	listHeight   int
+	width        int
+	height       int
+	detailScroll int
+	pendingG     bool
+	DetailMode   bool
+	tabs         map[string]PageTarget
+	lastError    string
+	chromePID    int
+}
+
+func newTrackerModel(config trackerConfig) trackerModel {
+	return trackerModel{
+		config: config,
+		store:  newRequestStore(),
+		tabs:   map[string]PageTarget{},
+	}
+}
+
+func (m trackerModel) Init() tea.Cmd {
+	if m.events == nil {
+		return nil
+	}
+	return waitForEvent(m.events)
+}
+
+func waitForEvent(events <-chan any) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-events
+		if !ok {
+			return collectorDone{}
+		}
+		return msg
+	}
+}
+
+type collectorDone struct{}
+
+func (m trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c", "q":
+			return m, tea.Quit
+		case "up", "k":
+			m.pendingG = false
+			if m.DetailMode {
+				m.scrollDetail(-1)
+			} else if m.selected > 0 {
+				m.selected--
+				m.syncFocus()
+			}
+		case "down", "j":
+			m.pendingG = false
+			if m.DetailMode {
+				m.scrollDetail(1)
+			} else if m.selected < len(m.rows)-1 {
+				m.selected++
+				m.syncFocus()
+			}
+		case "enter", "l":
+			m.pendingG = false
+			if len(m.rows) > 0 {
+				m.DetailMode = true
+				m.detailScroll = 0
+			}
+		case "esc", "h":
+			m.pendingG = false
+			m.DetailMode = false
+		case "G":
+			m.pendingG = false
+			if m.DetailMode {
+				m.detailScroll = m.maxDetailScroll()
+			} else {
+				m.moveToBottom()
+			}
+		case "g":
+			if m.pendingG {
+				if m.DetailMode {
+					m.detailScroll = 0
+				} else {
+					m.moveToTop()
+				}
+				m.pendingG = false
+			} else {
+				m.pendingG = true
+			}
+		default:
+			m.pendingG = false
+		}
+		return m, nil
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.listHeight = listHeightForWindow(msg.Height)
+		m.syncScroll()
+		return m, nil
+	case networkEvent:
+		m.store.Upsert(msg)
+		m.syncRows()
+		return m, waitForEvent(m.events)
+	case tabEvent:
+		m.applyTabEvent(msg)
+		return m, waitForEvent(m.events)
+	case errorEvent:
+		m.lastError = msg.Message
+		return m, waitForEvent(m.events)
+	case collectorDone:
+		m.lastError = "collector stopped"
+		return m, tea.Quit
+	}
+
+	return m, nil
+}
+
+func (m *trackerModel) syncRows() {
+	if m.focusedKey == "" && m.selected >= 0 && m.selected < len(m.rows) {
+		m.focusedKey = m.rows[m.selected].key()
+	}
+
+	m.rows = m.store.Rows()
+	if m.focusedKey != "" {
+		for i, row := range m.rows {
+			if row.key() == m.focusedKey {
+				m.selected = i
+				m.syncScroll()
+				return
+			}
+		}
+	}
+
+	if m.selected >= len(m.rows) {
+		m.selected = len(m.rows) - 1
+	}
+	if m.selected < 0 {
+		m.selected = 0
+	}
+	m.syncFocus()
+	m.syncScroll()
+}
+
+func (m *trackerModel) syncFocus() {
+	if len(m.rows) == 0 {
+		m.focusedKey = ""
+		return
+	}
+	if m.selected < 0 {
+		m.selected = 0
+	}
+	if m.selected >= len(m.rows) {
+		m.selected = len(m.rows) - 1
+	}
+	m.focusedKey = m.rows[m.selected].key()
+	m.syncScroll()
+}
+
+func (m *trackerModel) moveToTop() {
+	if len(m.rows) == 0 {
+		return
+	}
+	m.selected = 0
+	m.syncFocus()
+}
+
+func (m *trackerModel) moveToBottom() {
+	if len(m.rows) == 0 {
+		return
+	}
+	m.selected = len(m.rows) - 1
+	m.syncFocus()
+}
+
+func (m *trackerModel) scrollDetail(delta int) {
+	m.detailScroll += delta
+	if m.detailScroll < 0 {
+		m.detailScroll = 0
+	}
+	maxScroll := m.maxDetailScroll()
+	if m.detailScroll > maxScroll {
+		m.detailScroll = maxScroll
+	}
+}
+
+func (m trackerModel) maxDetailScroll() int {
+	lines := m.fullDetailLines()
+	maxScroll := len(lines) - m.effectiveDetailHeight()
+	if maxScroll < 0 {
+		return 0
+	}
+	return maxScroll
+}
+
+func (m *trackerModel) syncScroll() {
+	if len(m.rows) == 0 {
+		m.scroll = 0
+		return
+	}
+	height := m.effectiveListHeight()
+	if m.selected < m.scroll {
+		m.scroll = m.selected
+	}
+	if m.selected >= m.scroll+height {
+		m.scroll = m.selected - height + 1
+	}
+	maxScroll := len(m.rows) - height
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.scroll > maxScroll {
+		m.scroll = maxScroll
+	}
+	if m.scroll < 0 {
+		m.scroll = 0
+	}
+}
+
+func (m trackerModel) effectiveListHeight() int {
+	if m.listHeight > 0 {
+		return m.listHeight
+	}
+	return 15
+}
+
+func listHeightForWindow(height int) int {
+	const headerLines = 7
+	listHeight := height - headerLines
+	if listHeight < 3 {
+		return 3
+	}
+	return listHeight
+}
+
+func (m trackerModel) visibleRows() []requestRow {
+	if len(m.rows) == 0 {
+		return nil
+	}
+	height := m.effectiveListHeight()
+	start := m.scroll
+	if start > len(m.rows) {
+		start = len(m.rows)
+	}
+	end := start + height
+	if end > len(m.rows) {
+		end = len(m.rows)
+	}
+	out := make([]requestRow, end-start)
+	copy(out, m.rows[start:end])
+	return out
+}
+
+func (m *trackerModel) applyTabEvent(event tabEvent) {
+	switch event.Kind {
+	case tabCreated:
+		m.tabs[event.Target.ID] = event.Target
+	case tabClosed:
+		delete(m.tabs, event.TargetID)
+	case tabNavigated:
+		targetID := event.TargetID
+		if targetID == "" {
+			targetID = event.Target.ID
+		}
+		target := m.tabs[targetID]
+		target.ID = targetID
+		if event.URL != "" {
+			target.URL = event.URL
+		}
+		m.tabs[targetID] = target
+	}
+}
+
+func (m trackerModel) View() string {
+	var b strings.Builder
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+
+	fmt.Fprintf(&b, "%s\n", titleStyle.Render("TAB NETWORK"))
+	mode := "launch"
+	if !m.config.LaunchChrome {
+		mode = "attach"
+	}
+	fmt.Fprintf(&b, "mode=%s port=%d tabs=%d requests=%d", mode, m.config.Port, len(m.tabs), len(m.rows))
+	if m.chromePID != 0 {
+		fmt.Fprintf(&b, " chrome-pid=%d", m.chromePID)
+	}
+	b.WriteString("\n")
+	if m.config.TargetURL != "" || m.config.Filter.URLContains != "" || m.config.Filter.Method != "" {
+		fmt.Fprintf(&b, "target=%q filter-url=%q method=%q\n", m.config.TargetURL, m.config.Filter.URLContains, m.config.Filter.Method)
+	}
+	fmt.Fprintf(&b, "current-url=%s\n", valueOrDash(m.currentURL()))
+	if m.lastError != "" {
+		fmt.Fprintf(&b, "%s\n", errorStyle.Render(m.lastError))
+	}
+	b.WriteString(mutedStyle.Render("j/k or arrows: move  l/enter: detail  h/esc: list  gg/G: top/bottom  q: quit"))
+	b.WriteString("\n\n")
+
+	if m.DetailMode {
+		return m.fillScreen(b.String() + m.detailView())
+	}
+	return m.fillScreen(b.String() + m.listView())
+}
+
+func (m trackerModel) currentURL() string {
+	var ids []string
+	for id, target := range m.tabs {
+		if target.URL != "" {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	if len(ids) == 0 {
+		return ""
+	}
+	return m.tabs[ids[0]].URL
+}
+
+func (m trackerModel) listView() string {
+	if len(m.rows) == 0 {
+		return "Waiting for network requests...\n"
+	}
+
+	var b strings.Builder
+	focusedStyle := lipgloss.NewStyle().Bold(true).Reverse(true)
+	visibleRows := m.visibleRows()
+	for visibleIndex, row := range visibleRows {
+		i := m.scroll + visibleIndex
+		cursor := " "
+		if i == m.selected {
+			cursor = ">"
+		}
+		status := "-"
+		if row.Status != 0 {
+			status = fmt.Sprintf("%d", row.Status)
+		}
+		line := fmt.Sprintf("%s %-6s %-4s x%-3d %-12s %s",
+			cursor,
+			row.Method,
+			status,
+			row.Count,
+			row.LastSeen.Format("15:04:05.000"),
+			shorten(row.URL, 84),
+		)
+		if i == m.selected {
+			line = focusedStyle.Render(line)
+		}
+		fmt.Fprintln(&b, line)
+	}
+	if len(m.rows) > m.effectiveListHeight() {
+		fmt.Fprintf(&b, "showing %d-%d of %d\n", m.scroll+1, m.scroll+len(visibleRows), len(m.rows))
+	}
+	return b.String()
+}
+
+func (m trackerModel) detailView() string {
+	lines := m.visibleDetailLines()
+	return m.detailScrollIndicator() + "\n" + strings.Join(lines, "\n") + "\n"
+}
+
+func (m trackerModel) detailScrollIndicator() string {
+	total := len(m.fullDetailLines())
+	if total == 0 {
+		return "detail-scroll 0-0 of 0"
+	}
+	height := m.effectiveDetailHeight()
+	start := m.detailScroll + 1
+	end := m.detailScroll + height
+	if end > total {
+		end = total
+	}
+	return fmt.Sprintf("detail-scroll %d-%d of %d", start, end, total)
+}
+
+func (m trackerModel) visibleDetailLines() []string {
+	lines := m.fullDetailLines()
+	height := m.effectiveDetailHeight()
+	if height <= 0 || len(lines) <= height {
+		return lines
+	}
+	start := m.detailScroll
+	if start > len(lines) {
+		start = len(lines)
+	}
+	end := start + height
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return lines[start:end]
+}
+
+func (m trackerModel) effectiveDetailHeight() int {
+	if m.listHeight > 0 {
+		return m.listHeight
+	}
+	if m.height > 0 {
+		return listHeightForWindow(m.height)
+	}
+	return 15
+}
+
+func (m trackerModel) fullDetailLines() []string {
+	if len(m.rows) == 0 {
+		return []string{"No request selected."}
+	}
+	row := m.rows[m.selected]
+	status := "-"
+	if row.Status != 0 {
+		status = fmt.Sprintf("%d", row.Status)
+	}
+
+	width := m.effectiveWidth()
+	leftWidth := (width - 3) / 2
+	if leftWidth < 30 {
+		leftWidth = 30
+	}
+	rightWidth := width - leftWidth - 3
+	if rightWidth < 30 {
+		rightWidth = 30
+	}
+
+	left := []string{
+		"REQUEST HEADERS",
+		"",
+		"Method: " + row.Method,
+		"URL: " + row.URL,
+		"Request ID: " + valueOrDash(row.LastRequestID),
+		"Target ID: " + valueOrDash(row.TargetID),
+		"",
+	}
+	left = append(left, formatHeaders(row.RequestHeaders)...)
+
+	right := []string{
+		"CALL RESULT",
+		"",
+		"Status: " + status,
+		"Content-Type: " + valueOrDash(row.ContentType),
+		"Count: " + fmt.Sprint(row.Count),
+		"First Seen: " + row.FirstSeen.Format(time.RFC3339),
+		"Last Seen: " + row.LastSeen.Format(time.RFC3339),
+		"Error: " + valueOrDash(row.ErrorText),
+		"Body Error: " + valueOrDash(row.BodyError),
+		"",
+		"Response Headers",
+	}
+	right = append(right, formatHeaders(row.ResponseHeaders)...)
+	right = append(right, "", "Response Body")
+	right = append(right, strings.Split(formatResponseBody(valueOrDash(row.ResponseBody)), "\n")...)
+
+	rendered := strings.TrimRight(joinColumns(left, right, leftWidth, rightWidth), "\n")
+	if rendered == "" {
+		return nil
+	}
+	return strings.Split(rendered, "\n")
+}
+
+func (m trackerModel) fillScreen(content string) string {
+	if m.height <= 0 {
+		return content
+	}
+	width := m.effectiveWidth()
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	if len(lines) > m.height {
+		lines = lines[:m.height]
+	}
+	for i, line := range lines {
+		if plainLen(line) < width {
+			lines[i] = line + strings.Repeat(" ", width-plainLen(line))
+		}
+	}
+	for len(lines) < m.height {
+		lines = append(lines, strings.Repeat(" ", width))
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func (m trackerModel) effectiveWidth() int {
+	if m.width > 0 {
+		return m.width
+	}
+	return 100
+}
+
+func formatHeaders(headers map[string]string) []string {
+	if len(headers) == 0 {
+		return []string{"-"}
+	}
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		lines = append(lines, key+": "+headers[key])
+	}
+	return lines
+}
+
+func joinColumns(left, right []string, leftWidth, rightWidth int) string {
+	left = wrapColumnLines(left, leftWidth)
+	right = wrapColumnLines(right, rightWidth)
+	lineCount := len(left)
+	if len(right) > lineCount {
+		lineCount = len(right)
+	}
+	var b strings.Builder
+	for i := 0; i < lineCount; i++ {
+		leftLine := ""
+		if i < len(left) {
+			leftLine = left[i]
+		}
+		rightLine := ""
+		if i < len(right) {
+			rightLine = right[i]
+		}
+		fmt.Fprintf(&b, "%s │ %s\n", padToWidth(leftLine, leftWidth), padToWidth(rightLine, rightWidth))
+	}
+	return b.String()
+}
+
+func wrapColumnLines(lines []string, width int) []string {
+	if width <= 0 {
+		return nil
+	}
+	var out []string
+	for _, line := range lines {
+		if line == "" {
+			out = append(out, "")
+			continue
+		}
+		for len(line) > width {
+			out = append(out, line[:width])
+			line = line[width:]
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func padToWidth(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	return value + strings.Repeat(" ", width-plainLen(value))
+}
+
+func plainLen(value string) int {
+	return len(value)
+}
+
+func formatResponseBody(value string) string {
+	if value == "" || value == "-" {
+		return valueOrDash(value)
+	}
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, []byte(value), "", "  "); err == nil {
+		return buf.String()
+	}
+	return value
+}
+
+func shorten(value string, max int) string {
+	if max <= 3 || len(value) <= max {
+		return value
+	}
+	return value[:max-3] + "..."
+}
+
+func valueOrDash(value string) string {
+	if value == "" {
+		return "-"
+	}
+	return value
+}

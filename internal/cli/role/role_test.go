@@ -55,3 +55,9 @@ func TestRunDispatchesDebateCoordinator(t *testing.T) {
 		t.Fatalf("Run(debate-coordinator) = %d, want 0", code)
 	}
 }
+
+func TestRunDispatchesTabNetworkValidation(t *testing.T) {
+	if code := Run([]string{"tab-network", "--port", "0"}); code == 0 {
+		t.Fatalf("Run(tab-network --port 0) = %d, want non-zero", code)
+	}
+}

@@ -19,6 +19,7 @@ const (
 	RoleLSP               = "lsp"
 	RoleNetworkTracker    = "network-tracker"
 	RoleConsoleTracker    = "console-tracker"
+	RoleTabNetwork        = "tab-network"
 	RoleCodingAgent       = "coding-agent"
 	RoleDebateCoordinator = "debate-coordinator"
 )
@@ -62,6 +63,21 @@ var specs = []RoleSpec{
 		Description: "Visualizes console log tracking for a specific browser URL.",
 		Arguments: []ArgumentSpec{
 			{Name: "--url", Required: true, Description: "Target URL to track console logs for."},
+		},
+	},
+	{
+		Name:        RoleTabNetwork,
+		Usage:       "tab-network [options]",
+		Description: "Tracks Chrome tabs and network requests through a selectable TUI.",
+		Arguments: []ArgumentSpec{
+			{Name: "--port", Required: false, Description: "Chrome remote debugging port. Defaults to 9222."},
+			{Name: "--chrome-path", Required: false, Description: "Chrome executable path."},
+			{Name: "--user-data-dir", Required: false, Description: "Chrome profile directory used when launching Chrome."},
+			{Name: "--no-launch", Required: false, Description: "Attach to an already running Chrome debug port."},
+			{Name: "--target-url", Required: false, Description: "Track only page targets whose URL contains this text."},
+			{Name: "--filter-url", Required: false, Description: "Show only requests whose URL contains this text."},
+			{Name: "--method", Required: false, Description: "Show only requests with this HTTP method."},
+			{Name: "--list", Required: false, Description: "List attachable page targets and exit."},
 		},
 	},
 	{
