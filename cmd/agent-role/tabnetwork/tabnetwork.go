@@ -3,6 +3,7 @@ package tabnetwork
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -55,6 +56,8 @@ type requestSnapshot struct {
 	URL     string
 	Headers map[string]string
 }
+
+type responseBodyFetcher func(context.Context, network.RequestID) ([]byte, error)
 
 type targetRegistry struct {
 	seen map[string]PageTarget
@@ -371,6 +374,8 @@ func attachAndTrackTarget(ctx context.Context, allocatorCtx context.Context, tar
 	targetCtx, cancel := chromedp.NewContext(allocatorCtx, chromedp.WithTargetID(cdptarget.ID(target.ID)))
 	defer cancel()
 
+	fetchBody := fetchResponseBody
+
 	var mu sync.Mutex
 	requests := map[network.RequestID]requestSnapshot{}
 	chromedp.ListenTarget(targetCtx, func(event any) {
@@ -398,10 +403,11 @@ func attachAndTrackTarget(ctx context.Context, allocatorCtx context.Context, tar
 		case *network.EventResponseReceived:
 			mu.Lock()
 			request := requests[e.RequestID]
-			mu.Unlock()
 			if request.URL == "" {
 				request.URL = e.Response.URL
 			}
+			requests[e.RequestID] = request
+			mu.Unlock()
 			if filter.Include(request.Method, request.URL) {
 				sendTrackerMsg(ctx, out, networkEvent{
 					Kind:            eventResponse,
@@ -435,8 +441,14 @@ func attachAndTrackTarget(ctx context.Context, allocatorCtx context.Context, tar
 			}
 		case *network.EventLoadingFinished:
 			mu.Lock()
+			request := requests[e.RequestID]
 			delete(requests, e.RequestID)
 			mu.Unlock()
+			if filter.Include(request.Method, request.URL) {
+				go func(requestID network.RequestID, request requestSnapshot) {
+					sendTrackerMsg(ctx, out, responseBodyEventFromLoadingFinished(targetCtx, fetchBody, target.ID, requestID, request, time.Now()))
+				}(e.RequestID, request)
+			}
 		case *page.EventFrameNavigated:
 			if e.Frame.ParentID == "" {
 				sendTrackerMsg(ctx, out, tabEvent{Kind: tabNavigated, TargetID: target.ID, URL: e.Frame.URL, ObservedAt: now})
@@ -451,6 +463,44 @@ func attachAndTrackTarget(ctx context.Context, allocatorCtx context.Context, tar
 		return
 	}
 	<-ctx.Done()
+}
+
+func responseBodyEventFromLoadingFinished(targetCtx context.Context, fetchBody responseBodyFetcher, targetID string, requestID network.RequestID, request requestSnapshot, observedAt time.Time) networkEvent {
+	return responseBodyEventFromFinished(targetCtx, fetchBody, targetID, requestID, request, observedAt)
+}
+
+func fetchResponseBody(ctx context.Context, requestID network.RequestID) ([]byte, error) {
+	return fetchResponseBodyWithRunner(ctx, requestID, chromedp.Run)
+}
+
+func fetchResponseBodyWithRunner(ctx context.Context, requestID network.RequestID, run func(context.Context, ...chromedp.Action) error) ([]byte, error) {
+	var body []byte
+	err := run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		var err error
+		body, err = network.GetResponseBody(requestID).Do(ctx)
+		return err
+	}))
+	return body, err
+}
+
+func responseBodyEventFromFinished(ctx context.Context, fetchBody responseBodyFetcher, targetID string, requestID network.RequestID, request requestSnapshot, observedAt time.Time) networkEvent {
+	event := networkEvent{
+		Kind:       eventResponse,
+		Method:     request.Method,
+		URL:        request.URL,
+		RequestID:  string(requestID),
+		TargetID:   targetID,
+		ObservedAt: observedAt,
+	}
+	body, err := fetchBody(ctx, requestID)
+	if err != nil {
+		event.BodyError = err.Error()
+		return event
+	}
+	if len(body) > 0 {
+		event.ResponseBody = string(body)
+	}
+	return event
 }
 
 func headersToStrings(headers network.Headers) map[string]string {
@@ -543,7 +593,7 @@ type requestRow struct {
 }
 
 func (r requestRow) isError() bool {
-	return r.Status >= 400 || r.ErrorText != "" || r.BodyError != ""
+	return r.Status >= 400 || r.ErrorText != ""
 }
 
 func (r requestRow) key() string {
@@ -674,7 +724,9 @@ type trackerModel struct {
 	detailRightScroll int
 	detailPane        detailPane
 	uiFilter          string
+	detailFilters     map[detailPane]string
 	filterInputActive bool
+	copyStatus        string
 	pendingG          bool
 	DetailMode        bool
 	tabs              map[string]PageTarget
@@ -691,9 +743,13 @@ const (
 
 func newTrackerModel(config trackerConfig) trackerModel {
 	return trackerModel{
-		config:     config,
-		store:      newRequestStore(),
-		tabs:       map[string]PageTarget{},
+		config: config,
+		store:  newRequestStore(),
+		tabs:   map[string]PageTarget{},
+		detailFilters: map[detailPane]string{
+			detailPaneRequest: "",
+			detailPaneResult:  "",
+		},
 		detailPane: detailPaneRequest,
 	}
 }
@@ -727,14 +783,10 @@ func (m trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc", "enter":
 				m.filterInputActive = false
 			case "backspace":
-				if m.uiFilter != "" {
-					m.uiFilter = string([]rune(m.uiFilter)[:len([]rune(m.uiFilter))-1])
-					m.syncRows()
-				}
+				m.backspaceActiveFilter()
 			default:
 				if len(msg.Runes) > 0 {
-					m.uiFilter += string(msg.Runes)
-					m.syncRows()
+					m.appendActiveFilter(string(msg.Runes))
 				}
 			}
 			m.pendingG = false
@@ -781,6 +833,15 @@ func (m trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.detailPane = detailPaneResult
 				m.syncDetailScrollMirror()
 			}
+		case "c":
+			m.pendingG = false
+			if m.DetailMode {
+				text, label := m.focusedDetailCopyText()
+				if text != "" {
+					m.copyStatus = "copied " + label
+					return m, copyToClipboard(text)
+				}
+			}
 		case "e":
 			m.pendingG = false
 			m.moveToNextError()
@@ -789,7 +850,6 @@ func (m trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "f":
 			m.pendingG = false
-			m.DetailMode = false
 			m.filterInputActive = true
 		case "G":
 			m.pendingG = false
@@ -829,6 +889,11 @@ func (m trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case errorEvent:
 		m.lastError = msg.Message
 		return m, waitForEvent(m.events)
+	case clipboardEvent:
+		if msg.Err != nil {
+			m.lastError = "clipboard copy failed: " + msg.Err.Error()
+		}
+		return m, nil
 	case collectorDone:
 		m.lastError = "collector stopped"
 		return m, tea.Quit
@@ -861,6 +926,58 @@ func (m *trackerModel) syncRows() {
 	}
 	m.syncFocus()
 	m.syncScroll()
+}
+
+func (m trackerModel) activeFilter() string {
+	if m.DetailMode {
+		return m.detailFilterForActivePane()
+	}
+	return m.uiFilter
+}
+
+func (m trackerModel) detailFilterForActivePane() string {
+	return m.detailFilterForPane(m.normalizedDetailPane())
+}
+
+func (m trackerModel) detailFilterForPane(pane detailPane) string {
+	if m.detailFilters == nil {
+		return ""
+	}
+	return m.detailFilters[pane]
+}
+
+func (m *trackerModel) setDetailFilterForPane(pane detailPane, value string) {
+	if m.detailFilters == nil {
+		m.detailFilters = map[detailPane]string{}
+	}
+	m.detailFilters[pane] = value
+	m.clampDetailScrolls()
+	m.syncDetailScrollMirror()
+}
+
+func (m *trackerModel) appendActiveFilter(value string) {
+	if m.DetailMode {
+		pane := m.normalizedDetailPane()
+		m.setDetailFilterForPane(pane, m.detailFilterForPane(pane)+value)
+		return
+	}
+	m.uiFilter += value
+	m.syncRows()
+}
+
+func (m *trackerModel) backspaceActiveFilter() {
+	current := m.activeFilter()
+	if current == "" {
+		return
+	}
+	runes := []rune(current)
+	next := string(runes[:len(runes)-1])
+	if m.DetailMode {
+		m.setDetailFilterForPane(m.normalizedDetailPane(), next)
+		return
+	}
+	m.uiFilter = next
+	m.syncRows()
 }
 
 func (m trackerModel) filteredRows() []requestRow {
@@ -944,7 +1061,7 @@ func (m *trackerModel) moveToNextError() {
 }
 
 func (m *trackerModel) scrollDetail(delta int) {
-	pane := m.effectiveScrollableDetailPane()
+	pane := m.normalizedDetailPane()
 	switch pane {
 	case detailPaneResult:
 		m.detailRightScroll = clampScroll(m.detailRightScroll+delta, m.maxDetailPaneScroll(detailPaneResult))
@@ -955,16 +1072,16 @@ func (m *trackerModel) scrollDetail(delta int) {
 }
 
 func (m trackerModel) maxDetailScroll() int {
-	return m.maxDetailPaneScroll(m.effectiveScrollableDetailPane())
+	return m.maxDetailPaneScroll(m.normalizedDetailPane())
 }
 
 func (m trackerModel) maxDetailPaneScroll(pane detailPane) int {
-	left, right := m.detailColumns()
+	left, right := m.filteredDetailColumns()
 	lineCount := len(left)
 	if pane == detailPaneResult {
 		lineCount = len(right)
 	}
-	maxScroll := lineCount - m.effectiveDetailHeight()
+	maxScroll := lineCount - m.effectiveDetailPaneContentHeight(pane)
 	if maxScroll < 0 {
 		return 0
 	}
@@ -972,25 +1089,11 @@ func (m trackerModel) maxDetailPaneScroll(pane detailPane) int {
 }
 
 func (m trackerModel) effectiveScrollableDetailPane() detailPane {
-	active := m.detailPane
-	if active == 0 {
-		active = detailPaneRequest
-	}
-	if m.maxDetailPaneScroll(active) > 0 {
-		return active
-	}
-	other := detailPaneResult
-	if active == detailPaneResult {
-		other = detailPaneRequest
-	}
-	if m.maxDetailPaneScroll(other) > 0 {
-		return other
-	}
-	return active
+	return m.normalizedDetailPane()
 }
 
 func (m *trackerModel) scrollDetailToTop() {
-	switch m.effectiveScrollableDetailPane() {
+	switch m.normalizedDetailPane() {
 	case detailPaneResult:
 		m.detailRightScroll = 0
 	default:
@@ -1000,8 +1103,7 @@ func (m *trackerModel) scrollDetailToTop() {
 }
 
 func (m *trackerModel) scrollDetailToBottom() {
-	pane := m.detailPaneWithMostScroll()
-	m.detailPane = pane
+	pane := m.normalizedDetailPane()
 	switch pane {
 	case detailPaneResult:
 		m.detailRightScroll = m.maxDetailPaneScroll(detailPaneResult)
@@ -1011,23 +1113,19 @@ func (m *trackerModel) scrollDetailToBottom() {
 	m.syncDetailScrollMirror()
 }
 
-func (m trackerModel) detailPaneWithMostScroll() detailPane {
-	leftMax := m.maxDetailPaneScroll(detailPaneRequest)
-	rightMax := m.maxDetailPaneScroll(detailPaneResult)
-	if rightMax > leftMax {
-		return detailPaneResult
-	}
-	return detailPaneRequest
-}
-
 func (m *trackerModel) resetDetailScrolls() {
 	m.detailScroll = 0
 	m.detailLeftScroll = 0
 	m.detailRightScroll = 0
 }
 
+func (m *trackerModel) clampDetailScrolls() {
+	m.detailLeftScroll = clampScroll(m.detailLeftScroll, m.maxDetailPaneScroll(detailPaneRequest))
+	m.detailRightScroll = clampScroll(m.detailRightScroll, m.maxDetailPaneScroll(detailPaneResult))
+}
+
 func (m *trackerModel) syncDetailScrollMirror() {
-	if m.effectiveScrollableDetailPane() == detailPaneResult {
+	if m.normalizedDetailPane() == detailPaneResult {
 		m.detailScroll = m.detailRightScroll
 		return
 	}
@@ -1141,18 +1239,22 @@ func (m trackerModel) View() string {
 	if m.config.TargetURL != "" || m.config.Filter.URLContains != "" || m.config.Filter.Method != "" {
 		fmt.Fprintf(&b, "target=%q filter-url=%q method=%q\n", m.config.TargetURL, m.config.Filter.URLContains, m.config.Filter.Method)
 	}
-	if m.filterInputActive || m.uiFilter != "" {
-		prompt := "filter"
+	activeFilter := m.activeFilter()
+	if m.filterInputActive || activeFilter != "" {
+		prompt := m.activeFilterLabel()
 		if m.filterInputActive {
-			prompt = "filter>"
+			prompt += ">"
 		}
-		fmt.Fprintf(&b, "%s %q\n", prompt, m.uiFilter)
+		fmt.Fprintf(&b, "%s %q\n", prompt, activeFilter)
 	}
 	fmt.Fprintf(&b, "current-url=%s\n", valueOrDash(m.currentURL()))
 	if m.lastError != "" {
 		fmt.Fprintf(&b, "%s\n", errorStyle.Render(m.lastError))
 	}
-	b.WriteString(mutedStyle.Render("j/k or arrows: move/scroll  e: next error  f: filter  1/2: detail pane  l/enter: detail  h/esc: list  gg/G: top/bottom  q: quit"))
+	if m.copyStatus != "" {
+		fmt.Fprintf(&b, "%s\n", mutedStyle.Render(m.copyStatus))
+	}
+	b.WriteString(mutedStyle.Render("j/k or arrows: move/scroll  c: copy focused pane  e: next error  f: filter  1/2: detail pane  l/enter: detail  h/esc: list  gg/G: top/bottom  q: quit"))
 	b.WriteString("\n\n")
 
 	if m.DetailMode {
@@ -1173,6 +1275,13 @@ func (m trackerModel) currentURL() string {
 		return ""
 	}
 	return m.tabs[ids[0]].URL
+}
+
+func (m trackerModel) activeFilterLabel() string {
+	if !m.DetailMode {
+		return "list-filter"
+	}
+	return fmt.Sprintf("detail-filter[%d]", m.normalizedDetailPane())
 }
 
 func (m trackerModel) listView() string {
@@ -1238,9 +1347,9 @@ func (m trackerModel) detailScrollIndicator() string {
 	if total == 0 {
 		return "detail-scroll 0-0 of 0"
 	}
-	height := m.effectiveDetailHeight()
+	contentHeight := m.effectiveDetailPaneContentHeight(pane)
 	start := scroll + 1
-	end := scroll + height
+	end := scroll + contentHeight
 	if end > total {
 		end = total
 	}
@@ -1260,9 +1369,7 @@ func (m trackerModel) visibleDetailLines() []string {
 	if height <= 0 {
 		return nil
 	}
-	left, right := m.detailColumns()
-	left = sliceLines(left, m.detailLeftScroll, height)
-	right = sliceLines(right, m.detailRightScroll, height)
+	left, right := m.filteredDetailColumns()
 
 	width := m.effectiveWidth()
 	leftWidth := (width - 3) / 2
@@ -1273,6 +1380,10 @@ func (m trackerModel) visibleDetailLines() []string {
 	if rightWidth < 30 {
 		rightWidth = 30
 	}
+	left = sliceLines(left, m.detailLeftScroll, m.effectiveDetailPaneContentHeight(detailPaneRequest))
+	right = sliceLines(right, m.detailRightScroll, m.effectiveDetailPaneContentHeight(detailPaneResult))
+	left = m.decorateDetailPane(detailPaneRequest, left, leftWidth)
+	right = m.decorateDetailPane(detailPaneResult, right, rightWidth)
 	rendered := strings.TrimRight(joinColumns(left, right, leftWidth, rightWidth), "\n")
 	if rendered == "" {
 		return nil
@@ -1290,8 +1401,19 @@ func (m trackerModel) effectiveDetailHeight() int {
 	return 15
 }
 
+func (m trackerModel) effectiveDetailPaneContentHeight(pane detailPane) int {
+	height := m.effectiveDetailHeight()
+	if m.normalizedDetailPane() == pane {
+		height -= 2
+	}
+	if height < 1 {
+		return 1
+	}
+	return height
+}
+
 func (m trackerModel) fullDetailLines() []string {
-	left, right := m.detailColumns()
+	left, right := m.filteredDetailColumns()
 	width := m.effectiveWidth()
 	leftWidth := (width - 3) / 2
 	if leftWidth < 30 {
@@ -1350,6 +1472,32 @@ func (m trackerModel) detailColumns() ([]string, []string) {
 	return left, right
 }
 
+func (m trackerModel) filteredDetailColumns() ([]string, []string) {
+	left, right := m.detailColumns()
+	return filterDetailLines(left, m.detailFilterForPane(detailPaneRequest)),
+		filterDetailLines(right, m.detailFilterForPane(detailPaneResult))
+}
+
+func filterDetailLines(lines []string, filter string) []string {
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	if filter == "" {
+		return lines
+	}
+	out := make([]string, 0, len(lines))
+	if len(lines) > 0 {
+		out = append(out, lines[0])
+	}
+	for _, line := range lines[1:] {
+		if strings.Contains(strings.ToLower(line), filter) {
+			out = append(out, line)
+		}
+	}
+	if len(out) == 1 {
+		out = append(out, "", "No matching detail lines.")
+	}
+	return out
+}
+
 func (m trackerModel) detailTitle(pane detailPane, title string) string {
 	prefix := fmt.Sprintf("[%d] ", pane)
 	if m.normalizedDetailPane() == pane {
@@ -1366,11 +1514,43 @@ func (m trackerModel) normalizedDetailPane() detailPane {
 }
 
 func (m trackerModel) detailPaneLines(pane detailPane) []string {
-	left, right := m.detailColumns()
+	left, right := m.filteredDetailColumns()
 	if pane == detailPaneResult {
 		return right
 	}
 	return left
+}
+
+func (m trackerModel) focusedDetailCopyText() (string, string) {
+	if len(m.rows) == 0 {
+		return "", ""
+	}
+	left, right := m.filteredDetailColumns()
+	if m.normalizedDetailPane() == detailPaneResult {
+		return strings.Join(right, "\n"), "result"
+	}
+	return strings.Join(left, "\n"), "request"
+}
+
+func (m trackerModel) decorateDetailPane(pane detailPane, lines []string, width int) []string {
+	if m.normalizedDetailPane() != pane {
+		return lines
+	}
+	return borderedLines(lines, width)
+}
+
+func borderedLines(lines []string, width int) []string {
+	if width < 2 {
+		return lines
+	}
+	innerWidth := width - 2
+	out := make([]string, 0, len(lines)+2)
+	out = append(out, "╭"+strings.Repeat("─", innerWidth)+"╮")
+	for _, line := range lines {
+		out = append(out, "│"+padToWidth(shorten(line, innerWidth), innerWidth)+"│")
+	}
+	out = append(out, "╰"+strings.Repeat("─", innerWidth)+"╯")
+	return out
 }
 
 func sliceLines(lines []string, start, height int) []string {
@@ -1467,9 +1647,10 @@ func wrapColumnLines(lines []string, width int) []string {
 			out = append(out, "")
 			continue
 		}
-		for len(line) > width {
-			out = append(out, line[:width])
-			line = line[width:]
+		for plainLen(line) > width {
+			head, tail := splitAtRunes(line, width)
+			out = append(out, head)
+			line = tail
 		}
 		out = append(out, line)
 	}
@@ -1484,7 +1665,7 @@ func padToWidth(value string, width int) string {
 }
 
 func plainLen(value string) int {
-	return len(value)
+	return len([]rune(value))
 }
 
 func formatResponseBody(value string) string {
@@ -1499,10 +1680,76 @@ func formatResponseBody(value string) string {
 }
 
 func shorten(value string, max int) string {
-	if max <= 3 || len(value) <= max {
+	runes := []rune(value)
+	if max <= 3 || len(runes) <= max {
 		return value
 	}
-	return value[:max-3] + "..."
+	return string(runes[:max-3]) + "..."
+}
+
+func splitAtRunes(value string, width int) (string, string) {
+	if width <= 0 {
+		return "", value
+	}
+	runes := []rune(value)
+	if len(runes) <= width {
+		return value, ""
+	}
+	return string(runes[:width]), string(runes[width:])
+}
+
+type clipboardEvent struct {
+	Err error
+}
+
+func copyToClipboard(value string) tea.Cmd {
+	return func() tea.Msg {
+		return clipboardEvent{Err: writeClipboard(value)}
+	}
+}
+
+func writeClipboard(value string) error {
+	if value == "" {
+		return nil
+	}
+	commands := []struct {
+		name string
+		args []string
+	}{
+		{name: "pbcopy"},
+		{name: "wl-copy"},
+		{name: "xclip", args: []string{"-selection", "clipboard"}},
+		{name: "xsel", args: []string{"--clipboard", "--input"}},
+	}
+	for _, candidate := range commands {
+		path, err := exec.LookPath(candidate.name)
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command(path, candidate.args...)
+		cmd.Stdin = strings.NewReader(value)
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+	}
+	if err := writeOSC52ToTTY(value); err == nil {
+		return nil
+	}
+	return errors.New("no clipboard command or tty OSC52 fallback available")
+}
+
+func osc52ClipboardSequence(value string) string {
+	return "\x1b]52;c;" + base64.StdEncoding.EncodeToString([]byte(value)) + "\a"
+}
+
+func writeOSC52ToTTY(value string) error {
+	tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer tty.Close()
+	_, err = tty.WriteString(osc52ClipboardSequence(value))
+	return err
 }
 
 func valueOrDash(value string) string {

@@ -1,12 +1,17 @@
 package tabnetwork
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/chromedp"
 )
 
 func TestParseOptionsDefaults(t *testing.T) {
@@ -341,6 +346,8 @@ func TestDetailViewCanScrollToFullResponseBody(t *testing.T) {
 		t.Fatalf("first detail page unexpectedly contains tail before scrolling: %q", firstPage)
 	}
 
+	updated, _ = detail.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	detail = updated.(trackerModel)
 	updated, _ = detail.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
 	bottom := updated.(trackerModel)
 	lastPage := bottom.View()
@@ -365,6 +372,8 @@ func TestDetailViewScrollsWithJAndK(t *testing.T) {
 
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	detail := updated.(trackerModel)
+	updated, _ = detail.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	detail = updated.(trackerModel)
 	before := detail.View()
 
 	updated, _ = detail.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
@@ -384,6 +393,40 @@ func TestDetailViewScrollsWithJAndK(t *testing.T) {
 	back := updated.(trackerModel)
 	if back.detailScroll != 0 {
 		t.Fatalf("detailScroll after k = %d, want 0", back.detailScroll)
+	}
+}
+
+func TestDetailViewScrollsOnlyFocusedPane(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	model.width = 100
+	model.height = 12
+	model.store.Upsert(networkEvent{
+		Kind:         eventResponse,
+		Method:       "GET",
+		URL:          "https://example.com/api",
+		Status:       200,
+		ResponseBody: `{"lines":["line-00","line-01","line-02","line-03","line-04","line-05","line-06","line-07","line-08","line-09"],"tail":"last-value"}`,
+		ObservedAt:   time.Now(),
+	})
+	model.syncRows()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	requestFocused := updated.(trackerModel)
+	updated, _ = requestFocused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	stillTop := updated.(trackerModel)
+	if stillTop.detailRightScroll != 0 {
+		t.Fatalf("detailRightScroll after request-pane j = %d, want 0", stillTop.detailRightScroll)
+	}
+
+	updated, _ = stillTop.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	resultFocused := updated.(trackerModel)
+	updated, _ = resultFocused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	scrolled := updated.(trackerModel)
+	if scrolled.detailRightScroll != 1 {
+		t.Fatalf("detailRightScroll after result-pane j = %d, want 1", scrolled.detailRightScroll)
+	}
+	if scrolled.detailLeftScroll != stillTop.detailLeftScroll {
+		t.Fatalf("detailLeftScroll after result-pane j = %d, want preserved %d", scrolled.detailLeftScroll, stillTop.detailLeftScroll)
 	}
 }
 
@@ -442,6 +485,209 @@ func TestDetailViewFocusesIndependentPanesWithOneAndTwo(t *testing.T) {
 	}
 	if requestScrolled.detailRightScroll != 1 {
 		t.Fatalf("detailRightScroll after request-pane j = %d, want preserved 1", requestScrolled.detailRightScroll)
+	}
+}
+
+func TestDetailViewDrawsBorderAroundFocusedPane(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	model.width = 100
+	model.height = 18
+	model.store.Upsert(networkEvent{
+		Kind:           eventResponse,
+		Method:         "GET",
+		URL:            "https://example.com/api",
+		Status:         200,
+		RequestHeaders: map[string]string{"Accept": "application/json"},
+		ResponseBody:   `{"ok":true}`,
+		ObservedAt:     time.Now(),
+	})
+	model.syncRows()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	requestFocused := updated.(trackerModel)
+	requestView := requestFocused.View()
+	if !strings.Contains(requestView, "\n╭") {
+		t.Fatalf("request-focused detail view missing left pane border: %q", requestView)
+	}
+	if strings.Contains(requestView, "│ ╭") {
+		t.Fatalf("request-focused detail view unexpectedly bordered right pane: %q", requestView)
+	}
+
+	updated, _ = requestFocused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	resultFocused := updated.(trackerModel)
+	resultView := resultFocused.View()
+	if !strings.Contains(resultView, "│ ╭") {
+		t.Fatalf("result-focused detail view missing right pane border: %q", resultView)
+	}
+}
+
+func TestDetailCopyTextUsesFocusedPane(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	model.store.Upsert(networkEvent{
+		Kind:           eventResponse,
+		Method:         "POST",
+		URL:            "https://example.com/api",
+		Status:         201,
+		RequestHeaders: map[string]string{"Authorization": "Bearer token"},
+		ResponseBody:   `{"ok":true}`,
+		ObservedAt:     time.Now(),
+	})
+	model.syncRows()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	requestFocused := updated.(trackerModel)
+	text, label := requestFocused.focusedDetailCopyText()
+	if label != "request" {
+		t.Fatalf("copy label = %q, want request", label)
+	}
+	if !strings.Contains(text, "Authorization: Bearer token") {
+		t.Fatalf("request copy text missing request header: %q", text)
+	}
+	if strings.Contains(text, `"ok": true`) {
+		t.Fatalf("request copy text unexpectedly contains response body: %q", text)
+	}
+
+	updated, _ = requestFocused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	resultFocused := updated.(trackerModel)
+	text, label = resultFocused.focusedDetailCopyText()
+	if label != "result" {
+		t.Fatalf("copy label = %q, want result", label)
+	}
+	if !strings.Contains(text, `"ok": true`) {
+		t.Fatalf("result copy text missing response body: %q", text)
+	}
+	if strings.Contains(text, "Authorization: Bearer token") {
+		t.Fatalf("result copy text unexpectedly contains request header: %q", text)
+	}
+}
+
+func TestCKeyCopiesFocusedDetailPane(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	model.store.Upsert(networkEvent{
+		Kind:       eventResponse,
+		Method:     "GET",
+		URL:        "https://example.com/api",
+		Status:     200,
+		ObservedAt: time.Now(),
+	})
+	model.syncRows()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	detail := updated.(trackerModel)
+	updated, cmd := detail.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	copied := updated.(trackerModel)
+
+	if cmd == nil {
+		t.Fatal("c key returned nil command, want clipboard command")
+	}
+	if copied.copyStatus != "copied request" {
+		t.Fatalf("copyStatus = %q, want copied request", copied.copyStatus)
+	}
+}
+
+func TestLoadingFinishedBuildsResponseBodyEvent(t *testing.T) {
+	request := requestSnapshot{Method: "GET", URL: "https://example.com/api"}
+	event := responseBodyEventFromFinished(
+		context.Background(),
+		func(context.Context, network.RequestID) ([]byte, error) {
+			return []byte(`{"ok":true}`), nil
+		},
+		"target-1",
+		"request-1",
+		request,
+		time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC),
+	)
+
+	if event.ResponseBody != `{"ok":true}` {
+		t.Fatalf("ResponseBody = %q, want fetched body", event.ResponseBody)
+	}
+	if event.Method != "GET" || event.URL != "https://example.com/api" || event.RequestID != "request-1" || event.TargetID != "target-1" {
+		t.Fatalf("event = %#v, want request identity preserved", event)
+	}
+}
+
+func TestLoadingFinishedFetchesBodyWithTargetContext(t *testing.T) {
+	type contextKey string
+	targetCtx := context.WithValue(context.Background(), contextKey("kind"), "target")
+	request := requestSnapshot{Method: "GET", URL: "https://example.com/api"}
+	var gotContext string
+
+	event := responseBodyEventFromLoadingFinished(
+		targetCtx,
+		func(ctx context.Context, _ network.RequestID) ([]byte, error) {
+			value, _ := ctx.Value(contextKey("kind")).(string)
+			gotContext = value
+			return []byte(`{"ok":true}`), nil
+		},
+		"target-1",
+		"request-1",
+		request,
+		time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC),
+	)
+
+	if gotContext != "target" {
+		t.Fatalf("body fetch context = %q, want target context", gotContext)
+	}
+	if event.ResponseBody != `{"ok":true}` {
+		t.Fatalf("ResponseBody = %q, want fetched body", event.ResponseBody)
+	}
+}
+
+func TestFetchResponseBodyRunsInsideChromedpActionContext(t *testing.T) {
+	var runnerCalled bool
+	body, err := fetchResponseBodyWithRunner(
+		context.Background(),
+		"request-1",
+		func(ctx context.Context, actions ...chromedp.Action) error {
+			runnerCalled = true
+			if len(actions) != 1 {
+				t.Fatalf("len(actions) = %d, want 1", len(actions))
+			}
+			return actions[0].Do(cdp.WithExecutor(ctx, fakeResponseBodyExecutor{body: `{"ok":true}`}))
+		},
+	)
+	if err != nil {
+		t.Fatalf("fetchResponseBodyWithRunner() error = %v", err)
+	}
+	if !runnerCalled {
+		t.Fatal("runner was not called")
+	}
+	if string(body) != `{"ok":true}` {
+		t.Fatalf("body = %q, want fetched body", body)
+	}
+}
+
+type fakeResponseBodyExecutor struct {
+	body string
+}
+
+func (e fakeResponseBodyExecutor) Execute(_ context.Context, method string, _ any, res any) error {
+	if method != network.CommandGetResponseBody {
+		return errors.New("unexpected method: " + method)
+	}
+	out, ok := res.(*network.GetResponseBodyReturns)
+	if !ok {
+		return errors.New("unexpected result type")
+	}
+	out.Body = e.body
+	return nil
+}
+
+func TestLoadingFinishedBodyFetchErrorIsShownAsBodyError(t *testing.T) {
+	request := requestSnapshot{Method: "GET", URL: "https://example.com/api"}
+	event := responseBodyEventFromFinished(
+		context.Background(),
+		func(context.Context, network.RequestID) ([]byte, error) {
+			return nil, errors.New("body unavailable")
+		},
+		"target-1",
+		"request-1",
+		request,
+		time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC),
+	)
+
+	if event.BodyError != "body unavailable" {
+		t.Fatalf("BodyError = %q, want fetch error", event.BodyError)
 	}
 }
 
@@ -504,6 +750,113 @@ func TestFKeyFiltersRowsInRealtime(t *testing.T) {
 	exited := updated.(trackerModel)
 	if exited.filterInputActive {
 		t.Fatal("filterInputActive = true, want false after esc")
+	}
+}
+
+func TestDetailFilterDoesNotChangeListFilterOrLeaveDetail(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	first := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	model.store.Upsert(networkEvent{Kind: eventResponse, Method: "GET", URL: "https://example.com/api/users", Status: 200, ObservedAt: first})
+	model.store.Upsert(networkEvent{
+		Kind:           eventResponse,
+		Method:         "POST",
+		URL:            "https://example.com/api/orders",
+		Status:         201,
+		RequestHeaders: map[string]string{"Authorization": "Bearer token"},
+		ObservedAt:     first.Add(time.Second),
+	})
+	model.syncRows()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	filteringList := updated.(trackerModel)
+	updated, _ = filteringList.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("orders")})
+	listFiltered := updated.(trackerModel)
+	if len(listFiltered.rows) != 1 || listFiltered.rows[0].URL != "https://example.com/api/orders" {
+		t.Fatalf("list-filtered rows = %#v, want only orders API", listFiltered.rows)
+	}
+
+	updated, _ = listFiltered.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	listReady := updated.(trackerModel)
+	updated, _ = listReady.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	detail := updated.(trackerModel)
+	updated, _ = detail.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	filteringDetail := updated.(trackerModel)
+	if !filteringDetail.DetailMode {
+		t.Fatal("DetailMode = false after detail f, want to stay in detail")
+	}
+
+	updated, _ = filteringDetail.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("authorization")})
+	filteredDetail := updated.(trackerModel)
+	if filteredDetail.uiFilter != "orders" {
+		t.Fatalf("list uiFilter = %q, want preserved orders", filteredDetail.uiFilter)
+	}
+	if len(filteredDetail.rows) != 1 || filteredDetail.rows[0].URL != "https://example.com/api/orders" {
+		t.Fatalf("rows after detail filter = %#v, want preserved list filter result", filteredDetail.rows)
+	}
+	if !filteredDetail.DetailMode {
+		t.Fatal("DetailMode = false after detail filter input, want true")
+	}
+}
+
+func TestDetailFiltersAreScopedPerPane(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	model.width = 100
+	model.height = 32
+	model.store.Upsert(networkEvent{
+		Kind:           eventResponse,
+		Method:         "POST",
+		URL:            "https://example.com/api/orders",
+		Status:         201,
+		ContentType:    "application/json",
+		RequestHeaders: map[string]string{"Authorization": "Bearer token", "X-Trace": "trace-1"},
+		ResponseBody:   `{"invoice":"INV-1","status":"created"}`,
+		ObservedAt:     time.Now(),
+	})
+	model.syncRows()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	detail := updated.(trackerModel)
+	updated, _ = detail.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	filteringRequest := updated.(trackerModel)
+	updated, _ = filteringRequest.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("authorization")})
+	requestFiltered := updated.(trackerModel)
+	requestView := requestFiltered.View()
+	if !strings.Contains(requestView, "Authorization: Bearer token") {
+		t.Fatalf("request-filtered view missing Authorization header: %q", requestView)
+	}
+	if strings.Contains(requestView, "X-Trace: trace-1") {
+		t.Fatalf("request-filtered view still shows non-matching request header: %q", requestView)
+	}
+	if !strings.Contains(requestView, `"invoice": "INV-1"`) {
+		t.Fatalf("request filter should not hide result pane body: %q", requestView)
+	}
+
+	updated, _ = requestFiltered.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	requestReady := updated.(trackerModel)
+	updated, _ = requestReady.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	resultPane := updated.(trackerModel)
+	if resultPane.detailFilterForActivePane() != "" {
+		t.Fatalf("result detail filter = %q, want empty independent filter", resultPane.detailFilterForActivePane())
+	}
+
+	updated, _ = resultPane.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	filteringResult := updated.(trackerModel)
+	updated, _ = filteringResult.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("invoice")})
+	resultFiltered := updated.(trackerModel)
+	resultView := resultFiltered.View()
+	if !strings.Contains(resultView, `"invoice": "INV-1"`) {
+		t.Fatalf("result-filtered view missing invoice body line: %q", resultView)
+	}
+	if strings.Contains(resultView, "Content-Type: application/json") {
+		t.Fatalf("result-filtered view still shows non-matching result metadata: %q", resultView)
+	}
+
+	updated, _ = resultFiltered.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	resultReady := updated.(trackerModel)
+	updated, _ = resultReady.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
+	requestPane := updated.(trackerModel)
+	if requestPane.detailFilterForActivePane() != "authorization" {
+		t.Fatalf("request detail filter = %q, want preserved authorization", requestPane.detailFilterForActivePane())
 	}
 }
 
