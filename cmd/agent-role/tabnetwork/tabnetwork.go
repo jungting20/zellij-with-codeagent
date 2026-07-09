@@ -1715,15 +1715,15 @@ func (m trackerModel) listView() string {
 		if row.isError() {
 			marker = "ERR"
 		}
-		line := fmt.Sprintf("%s %-3s %-6s %-4s x%-3d %-12s %s",
+		prefix := fmt.Sprintf("%s %-3s %-6s %-4s x%-3d %-12s ",
 			cursor,
 			marker,
 			row.Method,
 			status,
 			row.Count,
 			row.LastSeen.Format("15:04:05.000"),
-			shorten(row.URL, 84),
 		)
+		line := prefix + shorten(row.URL, m.effectiveWidth()-plainLen(prefix))
 		if i == m.selected && row.isError() {
 			line = focusedErrorStyle.Render(line)
 		} else if i == m.selected {
@@ -2107,11 +2107,16 @@ func formatResponseBody(value string) string {
 }
 
 func shorten(value string, max int) string {
-	runes := []rune(value)
-	if max <= 3 || len(runes) <= max {
+	if max <= 0 {
+		return ""
+	}
+	if plainLen(value) <= max {
 		return value
 	}
-	return string(runes[:max-3]) + "..."
+	if max <= 3 {
+		return truncateToWidth(value, max)
+	}
+	return truncateToWidth(value, max-3) + "..."
 }
 
 func splitAtRunes(value string, width int) (string, string) {

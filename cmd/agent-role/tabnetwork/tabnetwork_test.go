@@ -1399,6 +1399,21 @@ func TestReturningToListPadsStyledSelectedRowToScreenWidth(t *testing.T) {
 	t.Fatal("returned list view missing selected API row")
 }
 
+func TestListViewUsesAvailableScreenWidthForURL(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	model.width = 160
+	model.height = 20
+	longURL := "https://example.com/" + strings.Repeat("a", 90) + "/wide"
+	model.store.Upsert(networkEvent{Kind: eventResponse, Method: "GET", URL: longURL, Status: 200, ObservedAt: time.Now()})
+	model.syncRows()
+
+	view := model.View()
+
+	if !strings.Contains(view, "/wide") {
+		t.Fatalf("list view did not use available width for URL suffix: %q", view)
+	}
+}
+
 func TestDetailViewLinesDoNotExceedScreenWidth(t *testing.T) {
 	model := newTrackerModel(trackerConfig{Port: 9222})
 	model.width = 60
