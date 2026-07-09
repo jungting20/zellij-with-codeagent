@@ -46,7 +46,7 @@ type trackerConfig struct {
 	ChromePath   string
 	UserDataDir  string
 	LaunchChrome bool
-	TargetURL    string
+	TargetID     string
 	Filter       RequestFilter
 	ListTargets  bool
 }
@@ -58,10 +58,6 @@ type requestSnapshot struct {
 }
 
 type responseBodyFetcher func(context.Context, network.RequestID) ([]byte, error)
-
-type targetRegistry struct {
-	seen map[string]PageTarget
-}
 
 func Run(args []string) int {
 	return runWithIO(args, os.Stdin, os.Stdout, os.Stderr)
@@ -103,7 +99,7 @@ func parseOptionsWithOutput(args []string, output io.Writer) (trackerConfig, err
 	fs.StringVar(&opts.ChromePath, "chrome-path", "", "Chrome executable path")
 	fs.StringVar(&opts.UserDataDir, "user-data-dir", opts.UserDataDir, "Chrome user data directory used when launching Chrome")
 	noLaunch := fs.Bool("no-launch", false, "do not launch Chrome; attach to an already running debug port")
-	fs.StringVar(&opts.TargetURL, "target-url", "", "track only page targets whose URL contains this text")
+	fs.StringVar(&opts.TargetID, "target-id", "", "Chrome page target ID to track")
 	fs.StringVar(&opts.Filter.URLContains, "filter-url", "", "show only requests/responses whose URL contains this text")
 	fs.StringVar(&opts.Filter.Method, "method", "", "show only requests with this HTTP method")
 	fs.BoolVar(&opts.ListTargets, "list", false, "list attachable page targets and exit")
@@ -118,6 +114,7 @@ func parseOptionsWithOutput(args []string, output io.Writer) (trackerConfig, err
 		return trackerConfig{}, fmt.Errorf("--port must be between 1 and 65535")
 	}
 	opts.LaunchChrome = !*noLaunch
+	opts.TargetID = strings.TrimSpace(opts.TargetID)
 	opts.Filter.Method = strings.ToUpper(strings.TrimSpace(opts.Filter.Method))
 	return opts, nil
 }
@@ -157,9 +154,16 @@ func runTracker(ctx context.Context, opts trackerConfig, stdin io.Reader, stdout
 		return nil
 	}
 
+	target, err := selectOrCreateTarget(ctx, targets, opts.TargetID, func(ctx context.Context) (PageTarget, error) {
+		return createPageTarget(ctx, opts.Port)
+	})
+	if err != nil {
+		return err
+	}
+	opts.TargetID = target.ID
+
 	events := make(chan any, 128)
-	registry := newTargetRegistry()
-	go collectTargets(ctx, browserCtx, allocatorCtx, registry, targets, opts, events, stderr)
+	go collectTarget(ctx, browserCtx, allocatorCtx, target, opts.Filter, events, stderr)
 
 	model := newTrackerModel(opts)
 	model.events = events
@@ -174,9 +178,100 @@ func runTracker(ctx context.Context, opts trackerConfig, stdin io.Reader, stdout
 	return nil
 }
 
-func collectTargets(ctx context.Context, browserCtx context.Context, allocatorCtx context.Context, registry *targetRegistry, initial []PageTarget, opts trackerConfig, out chan<- any, stderr io.Writer) {
-	defer close(out)
-	trackTargets(ctx, allocatorCtx, registry, initial, opts.TargetURL, opts.Filter, out)
+type pageTargetCreator func(context.Context) (PageTarget, error)
+
+func selectTarget(targets []PageTarget, targetID string) (PageTarget, error) {
+	if targetID != "" {
+		for _, target := range targets {
+			if target.ID == targetID && target.Type == "page" {
+				return target, nil
+			}
+		}
+		return PageTarget{}, fmt.Errorf("Chrome target %q not found", targetID)
+	}
+
+	for _, target := range targets {
+		if target.Type == "page" {
+			return target, nil
+		}
+	}
+	return PageTarget{}, errors.New("no attachable Chrome page targets found")
+}
+
+func selectOrCreateTarget(ctx context.Context, targets []PageTarget, targetID string, create pageTargetCreator) (PageTarget, error) {
+	if targetID != "" {
+		return selectTarget(targets, targetID)
+	}
+	for _, target := range targets {
+		if target.Type == "page" {
+			return target, nil
+		}
+	}
+	if create == nil {
+		return PageTarget{}, errors.New("no attachable Chrome page targets found")
+	}
+	target, err := create(ctx)
+	if err != nil {
+		return PageTarget{}, fmt.Errorf("create about:blank Chrome target: %w", err)
+	}
+	if target.ID == "" {
+		return PageTarget{}, errors.New("create about:blank Chrome target: response missing target id")
+	}
+	if target.Type == "" {
+		target.Type = "page"
+	}
+	if target.URL == "" {
+		target.URL = "about:blank"
+	}
+	return target, nil
+}
+
+func targetStillOpen(targets []PageTarget, targetID string) (PageTarget, bool) {
+	for _, target := range targets {
+		if target.ID == targetID && target.Type == "page" {
+			return target, true
+		}
+	}
+	return PageTarget{}, false
+}
+
+func createPageTarget(ctx context.Context, port int) (PageTarget, error) {
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	client := &http.Client{Timeout: 2 * time.Second}
+	return createPageTargetAt(ctx, baseURL, "about:blank", client)
+}
+
+func createPageTargetAt(ctx context.Context, baseURL string, targetURL string, client *http.Client) (PageTarget, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	endpoint := strings.TrimRight(baseURL, "/") + "/json/new?" + targetURL
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, nil)
+	if err != nil {
+		return PageTarget{}, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return PageTarget{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return PageTarget{}, fmt.Errorf("Chrome target creation returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var target PageTarget
+	if err := json.NewDecoder(resp.Body).Decode(&target); err != nil {
+		return PageTarget{}, err
+	}
+	return target, nil
+}
+
+func collectTarget(ctx context.Context, browserCtx context.Context, allocatorCtx context.Context, target PageTarget, filter RequestFilter, out chan<- any, stderr io.Writer) {
+	trackCtx, cancelTrack := context.WithCancel(ctx)
+	defer cancelTrack()
+
+	sendTrackerMsg(ctx, out, tabEvent{Kind: tabCreated, Target: target, ObservedAt: time.Now()})
+	go attachAndTrackTarget(trackCtx, allocatorCtx, target, filter, out)
 
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -192,49 +287,19 @@ func collectTargets(ctx context.Context, browserCtx context.Context, allocatorCt
 				}
 				continue
 			}
-			trackTargets(ctx, allocatorCtx, registry, targets, opts.TargetURL, opts.Filter, out)
+			latest, ok := targetStillOpen(targets, target.ID)
+			if !ok {
+				cancelTrack()
+				sendTrackerMsg(ctx, out, tabEvent{Kind: tabClosed, TargetID: target.ID, ObservedAt: time.Now()})
+				sendTrackerMsg(ctx, out, collectorDone{})
+				return
+			}
+			if latest.URL != "" && latest.URL != target.URL {
+				target = latest
+				sendTrackerMsg(ctx, out, tabEvent{Kind: tabNavigated, Target: target, TargetID: target.ID, URL: target.URL, ObservedAt: time.Now()})
+			}
 		}
 	}
-}
-
-func newTargetRegistry() *targetRegistry {
-	return &targetRegistry{seen: map[string]PageTarget{}}
-}
-
-func (r *targetRegistry) MarkIfNewPage(target PageTarget) bool {
-	if target.Type != "page" {
-		return false
-	}
-	if _, ok := r.seen[target.ID]; ok {
-		return false
-	}
-	r.seen[target.ID] = target
-	return true
-}
-
-func (r *targetRegistry) UpdateURLIfChanged(targetID, url string) bool {
-	if url == "" {
-		return false
-	}
-	target, ok := r.seen[targetID]
-	if !ok || target.URL == url {
-		return false
-	}
-	target.URL = url
-	r.seen[targetID] = target
-	return true
-}
-
-func (r *targetRegistry) ClosedTargets(open map[string]bool) []string {
-	var closed []string
-	for targetID := range r.seen {
-		if !open[targetID] {
-			closed = append(closed, targetID)
-			delete(r.seen, targetID)
-		}
-	}
-	sort.Strings(closed)
-	return closed
 }
 
 func (f RequestFilter) Include(method, url string) bool {
@@ -245,36 +310,6 @@ func (f RequestFilter) Include(method, url string) bool {
 		return false
 	}
 	return true
-}
-
-func targetMatches(target PageTarget, urlContains string) bool {
-	if target.Type != "page" {
-		return false
-	}
-	return urlContains == "" || strings.Contains(target.URL, urlContains)
-}
-
-func trackTargets(ctx context.Context, allocatorCtx context.Context, registry *targetRegistry, targets []PageTarget, targetURL string, filter RequestFilter, out chan<- any) {
-	open := map[string]bool{}
-	for _, target := range targets {
-		if target.Type == "page" {
-			open[target.ID] = true
-		}
-		if !targetMatches(target, targetURL) {
-			continue
-		}
-		if registry.MarkIfNewPage(target) {
-			sendTrackerMsg(ctx, out, tabEvent{Kind: tabCreated, Target: target, ObservedAt: time.Now()})
-			go attachAndTrackTarget(ctx, allocatorCtx, target, filter, out)
-			continue
-		}
-		if registry.UpdateURLIfChanged(target.ID, target.URL) {
-			sendTrackerMsg(ctx, out, tabEvent{Kind: tabNavigated, Target: target, URL: target.URL, ObservedAt: time.Now()})
-		}
-	}
-	for _, targetID := range registry.ClosedTargets(open) {
-		sendTrackerMsg(ctx, out, tabEvent{Kind: tabClosed, TargetID: targetID, ObservedAt: time.Now()})
-	}
 }
 
 func sendTrackerMsg(ctx context.Context, out chan<- any, msg any) {
@@ -1267,13 +1302,13 @@ func (m trackerModel) View() string {
 	if !m.config.LaunchChrome {
 		mode = "attach"
 	}
-	fmt.Fprintf(&b, "mode=%s port=%d tabs=%d requests=%d", mode, m.config.Port, len(m.tabs), len(m.rows))
+	fmt.Fprintf(&b, "mode=%s port=%d target-id=%s requests=%d", mode, m.config.Port, valueOrDash(m.config.TargetID), len(m.rows))
 	if m.chromePID != 0 {
 		fmt.Fprintf(&b, " chrome-pid=%d", m.chromePID)
 	}
 	b.WriteString("\n")
-	if m.config.TargetURL != "" || m.config.Filter.URLContains != "" || m.config.Filter.Method != "" {
-		fmt.Fprintf(&b, "target=%q filter-url=%q method=%q\n", m.config.TargetURL, m.config.Filter.URLContains, m.config.Filter.Method)
+	if m.config.Filter.URLContains != "" || m.config.Filter.Method != "" {
+		fmt.Fprintf(&b, "filter-url=%q method=%q\n", m.config.Filter.URLContains, m.config.Filter.Method)
 	}
 	activeFilter := m.activeFilter()
 	if m.filterInputActive || activeFilter != "" {

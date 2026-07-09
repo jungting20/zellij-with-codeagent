@@ -3,6 +3,9 @@ package tabnetwork
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -35,7 +38,7 @@ func TestParseOptionsAcceptsFiltersAndNoLaunch(t *testing.T) {
 	opts, err := parseOptions([]string{
 		"--port", "9333",
 		"--no-launch",
-		"--target-url", "dashboard",
+		"--target-id", "target-123",
 		"--filter-url", "/api/",
 		"--method", "post",
 	})
@@ -43,8 +46,133 @@ func TestParseOptionsAcceptsFiltersAndNoLaunch(t *testing.T) {
 		t.Fatalf("parseOptions() error = %v", err)
 	}
 
-	if opts.Port != 9333 || opts.LaunchChrome || opts.TargetURL != "dashboard" || opts.Filter.URLContains != "/api/" || opts.Filter.Method != "POST" {
+	if opts.Port != 9333 || opts.LaunchChrome || opts.TargetID != "target-123" || opts.Filter.URLContains != "/api/" || opts.Filter.Method != "POST" {
 		t.Fatalf("options = %#v, want parsed filters and no launch", opts)
+	}
+}
+
+func TestSelectTargetUsesExplicitTargetID(t *testing.T) {
+	targets := []PageTarget{
+		{ID: "other", Type: "page", URL: "https://example.com/other"},
+		{ID: "wanted", Type: "page", URL: "https://example.com/wanted"},
+	}
+
+	got, err := selectTarget(targets, "wanted")
+	if err != nil {
+		t.Fatalf("selectTarget() error = %v", err)
+	}
+	if got.ID != "wanted" {
+		t.Fatalf("selected target ID = %q, want wanted", got.ID)
+	}
+}
+
+func TestSelectTargetRejectsMissingExplicitTargetID(t *testing.T) {
+	_, err := selectTarget([]PageTarget{{ID: "other", Type: "page"}}, "missing")
+	if err == nil {
+		t.Fatal("selectTarget() error = nil, want missing target error")
+	}
+	if !strings.Contains(err.Error(), `Chrome target "missing" not found`) {
+		t.Fatalf("selectTarget() error = %v, want missing target message", err)
+	}
+}
+
+func TestSelectTargetDefaultsToFirstPageTarget(t *testing.T) {
+	targets := []PageTarget{
+		{ID: "worker", Type: "service_worker", URL: "https://example.com/sw.js"},
+		{ID: "first-page", Type: "page", URL: "https://example.com/first"},
+		{ID: "second-page", Type: "page", URL: "https://example.com/second"},
+	}
+
+	got, err := selectTarget(targets, "")
+	if err != nil {
+		t.Fatalf("selectTarget() error = %v", err)
+	}
+	if got.ID != "first-page" {
+		t.Fatalf("selected target ID = %q, want first-page", got.ID)
+	}
+}
+
+func TestSelectTargetRejectsNoPageTargets(t *testing.T) {
+	_, err := selectTarget([]PageTarget{{ID: "worker", Type: "service_worker"}}, "")
+	if err == nil {
+		t.Fatal("selectTarget() error = nil, want no page target error")
+	}
+	if !strings.Contains(err.Error(), "no attachable Chrome page targets found") {
+		t.Fatalf("selectTarget() error = %v, want no page target message", err)
+	}
+}
+
+func TestSelectOrCreateTargetCreatesAboutBlankWhenNoPageTargets(t *testing.T) {
+	var called bool
+	got, err := selectOrCreateTarget(context.Background(), []PageTarget{{ID: "worker", Type: "service_worker"}}, "", func(context.Context) (PageTarget, error) {
+		called = true
+		return PageTarget{ID: "created", Type: "page", URL: "about:blank"}, nil
+	})
+	if err != nil {
+		t.Fatalf("selectOrCreateTarget() error = %v", err)
+	}
+	if !called {
+		t.Fatal("target creator was not called")
+	}
+	if got.ID != "created" || got.URL != "about:blank" {
+		t.Fatalf("created target = %#v, want about:blank page target", got)
+	}
+}
+
+func TestSelectOrCreateTargetDoesNotCreateForExplicitMissingTarget(t *testing.T) {
+	_, err := selectOrCreateTarget(context.Background(), []PageTarget{{ID: "worker", Type: "service_worker"}}, "missing", func(context.Context) (PageTarget, error) {
+		t.Fatal("target creator should not be called for explicit target-id")
+		return PageTarget{}, nil
+	})
+	if err == nil {
+		t.Fatal("selectOrCreateTarget() error = nil, want missing explicit target error")
+	}
+	if !strings.Contains(err.Error(), `Chrome target "missing" not found`) {
+		t.Fatalf("selectOrCreateTarget() error = %v, want missing target message", err)
+	}
+}
+
+func TestCreatePageTargetSendsPutAndParsesResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Fatalf("request method = %s, want PUT", r.Method)
+		}
+		if r.URL.Path != "/json/new" || r.URL.RawQuery != "about:blank" {
+			t.Fatalf("request URL = %s?%s, want /json/new?about:blank", r.URL.Path, r.URL.RawQuery)
+		}
+		fmt.Fprint(w, `{"id":"created","type":"page","title":"New Tab","url":"about:blank"}`)
+	}))
+	defer server.Close()
+
+	got, err := createPageTargetAt(context.Background(), server.URL, "about:blank", server.Client())
+	if err != nil {
+		t.Fatalf("createPageTargetAt() error = %v", err)
+	}
+	if got.ID != "created" || got.Type != "page" || got.URL != "about:blank" {
+		t.Fatalf("created target = %#v, want parsed page target", got)
+	}
+}
+
+func TestTargetStillOpenFindsSelectedPageTarget(t *testing.T) {
+	targets := []PageTarget{
+		{ID: "wanted", Type: "page", URL: "https://example.com/next"},
+	}
+
+	got, ok := targetStillOpen(targets, "wanted")
+	if !ok {
+		t.Fatal("targetStillOpen() ok = false, want true")
+	}
+	if got.URL != "https://example.com/next" {
+		t.Fatalf("target URL = %q, want updated URL", got.URL)
+	}
+}
+
+func TestTargetStillOpenRejectsClosedOrNonPageTarget(t *testing.T) {
+	if _, ok := targetStillOpen([]PageTarget{{ID: "wanted", Type: "service_worker"}}, "wanted"); ok {
+		t.Fatal("targetStillOpen() ok = true for non-page target, want false")
+	}
+	if _, ok := targetStillOpen([]PageTarget{{ID: "other", Type: "page"}}, "wanted"); ok {
+		t.Fatal("targetStillOpen() ok = true for missing target, want false")
 	}
 }
 

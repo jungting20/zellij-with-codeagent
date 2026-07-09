@@ -74,7 +74,7 @@ var specs = []RoleSpec{
 			{Name: "--chrome-path", Required: false, Description: "Chrome executable path."},
 			{Name: "--user-data-dir", Required: false, Description: "Chrome profile directory used when launching Chrome."},
 			{Name: "--no-launch", Required: false, Description: "Attach to an already running Chrome debug port."},
-			{Name: "--target-url", Required: false, Description: "Track only page targets whose URL contains this text."},
+			{Name: "--target-id", Required: false, Description: "Chrome page target ID to track. Defaults to the first page target."},
 			{Name: "--filter-url", Required: false, Description: "Show only requests whose URL contains this text."},
 			{Name: "--method", Required: false, Description: "Show only requests with this HTTP method."},
 			{Name: "--list", Required: false, Description: "List attachable page targets and exit."},
