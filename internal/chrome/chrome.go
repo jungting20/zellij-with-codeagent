@@ -14,8 +14,10 @@ var ErrInvalidPlanRequest = errors.New("chrome: invalid plan request")
 type PlanRequest struct {
 	CWD            string
 	Session        string
+	SocketPath     string
 	RoleCommand    []string
 	TabNetworkArgs []string
+	NoWatch        bool
 	Now            func() time.Time
 }
 
@@ -35,8 +37,24 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 	}
 
 	roleCommand := normalizeRoleCommand(req.RoleCommand)
-	command := append(append([]string{}, roleCommand...), "tab-network")
+	role := "tab-watcher"
+	idPrefix := "chrome-tab-watcher"
+	command := append(append([]string{}, roleCommand...), "tab-watcher")
+	if req.SocketPath != "" {
+		command = append(command, "--socket", req.SocketPath)
+	}
+	command = append(command,
+		"--cwd", cwd,
+		"--session", session,
+		"--role-bin", roleCommand[0],
+	)
 	command = append(command, req.TabNetworkArgs...)
+	if req.NoWatch {
+		role = "tab-network"
+		idPrefix = "chrome-tab-network"
+		command = append(append([]string{}, roleCommand...), "tab-network")
+		command = append(command, req.TabNetworkArgs...)
+	}
 
 	return transport.ExecutionPlanPayload{
 		Session: session,
@@ -46,8 +64,8 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 				Name: "chrome",
 				Panes: []transport.ExecutionPlanPane{
 					{
-						ID:      paneID(now()),
-						Role:    "tab-network",
+						ID:      paneID(idPrefix, now()),
+						Role:    role,
 						CWD:     cwd,
 						Command: command,
 					},
@@ -61,9 +79,9 @@ func RequestID(session string) string {
 	return "req_" + session
 }
 
-func paneID(t time.Time) string {
+func paneID(prefix string, t time.Time) string {
 	t = t.UTC()
-	return fmt.Sprintf("chrome-tab-network-%s-%09d", t.Format("20060102-150405"), t.Nanosecond())
+	return fmt.Sprintf("%s-%s-%09d", prefix, t.Format("20060102-150405"), t.Nanosecond())
 }
 
 func normalizeRoleCommand(command []string) []string {
