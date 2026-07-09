@@ -22,6 +22,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	cdptarget "github.com/chromedp/cdproto/target"
@@ -1777,15 +1778,7 @@ func (m trackerModel) visibleDetailLines() []string {
 	}
 	left, right := m.filteredDetailColumns()
 
-	width := m.effectiveWidth()
-	leftWidth := (width - 3) / 2
-	if leftWidth < 30 {
-		leftWidth = 30
-	}
-	rightWidth := width - leftWidth - 3
-	if rightWidth < 30 {
-		rightWidth = 30
-	}
+	leftWidth, rightWidth := detailColumnWidths(m.effectiveWidth())
 	left = sliceLines(left, m.detailLeftScroll, m.effectiveDetailPaneContentHeight(detailPaneRequest))
 	right = sliceLines(right, m.detailRightScroll, m.effectiveDetailPaneContentHeight(detailPaneResult))
 	left = m.decorateDetailPane(detailPaneRequest, left, leftWidth)
@@ -1820,15 +1813,7 @@ func (m trackerModel) effectiveDetailPaneContentHeight(pane detailPane) int {
 
 func (m trackerModel) fullDetailLines() []string {
 	left, right := m.filteredDetailColumns()
-	width := m.effectiveWidth()
-	leftWidth := (width - 3) / 2
-	if leftWidth < 30 {
-		leftWidth = 30
-	}
-	rightWidth := width - leftWidth - 3
-	if rightWidth < 30 {
-		rightWidth = 30
-	}
+	leftWidth, rightWidth := detailColumnWidths(m.effectiveWidth())
 
 	rendered := strings.TrimRight(joinColumns(left, right, leftWidth, rightWidth), "\n")
 	if rendered == "" {
@@ -1988,9 +1973,11 @@ func (m trackerModel) fillScreen(content string) string {
 		lines = lines[:m.height]
 	}
 	for i, line := range lines {
+		line = truncateToWidth(line, width)
 		if plainLen(line) < width {
-			lines[i] = line + strings.Repeat(" ", width-plainLen(line))
+			line += strings.Repeat(" ", width-plainLen(line))
 		}
+		lines[i] = line
 	}
 	for len(lines) < m.height {
 		lines = append(lines, strings.Repeat(" ", width))
@@ -2003,6 +1990,19 @@ func (m trackerModel) effectiveWidth() int {
 		return m.width
 	}
 	return 100
+}
+
+func detailColumnWidths(width int) (int, int) {
+	if width <= 0 {
+		return 0, 0
+	}
+	if width <= 3 {
+		return width, 0
+	}
+	available := width - 3
+	left := available / 2
+	right := available - left
+	return left, right
 }
 
 func formatHeaders(headers map[string]string) []string {
@@ -2023,6 +2023,13 @@ func formatHeaders(headers map[string]string) []string {
 
 func joinColumns(left, right []string, leftWidth, rightWidth int) string {
 	left = wrapColumnLines(left, leftWidth)
+	if rightWidth <= 0 {
+		var b strings.Builder
+		for _, leftLine := range left {
+			fmt.Fprintf(&b, "%s\n", padToWidth(leftLine, leftWidth))
+		}
+		return b.String()
+	}
 	right = wrapColumnLines(right, rightWidth)
 	lineCount := len(left)
 	if len(right) > lineCount {
@@ -2067,11 +2074,25 @@ func padToWidth(value string, width int) string {
 	if width <= 0 {
 		return ""
 	}
+	value = truncateToWidth(value, width)
+	if plainLen(value) >= width {
+		return value
+	}
 	return value + strings.Repeat(" ", width-plainLen(value))
 }
 
 func plainLen(value string) int {
-	return len([]rune(value))
+	return ansi.StringWidth(value)
+}
+
+func truncateToWidth(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if plainLen(value) <= width {
+		return value
+	}
+	return ansi.Truncate(value, width, "")
 }
 
 func formatResponseBody(value string) string {

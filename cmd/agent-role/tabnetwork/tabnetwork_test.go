@@ -13,6 +13,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
@@ -1371,6 +1372,56 @@ func TestModelLShowsDetailAndHReturnsToList(t *testing.T) {
 	exited := updated.(trackerModel)
 	if exited.DetailMode != false {
 		t.Fatal("DetailMode = true, want false after h")
+	}
+}
+
+func TestReturningToListPadsStyledSelectedRowToScreenWidth(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	model.width = 100
+	model.height = 20
+	model.store.Upsert(networkEvent{Kind: eventResponse, Method: "GET", URL: "https://example.com/api", Status: 200, ObservedAt: time.Now()})
+	model.syncRows()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	entered := updated.(trackerModel)
+	updated, _ = entered.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	exited := updated.(trackerModel)
+
+	for _, line := range strings.Split(strings.TrimRight(exited.View(), "\n"), "\n") {
+		if !strings.Contains(line, "https://example.com/api") {
+			continue
+		}
+		if got := lipgloss.Width(line); got != model.width {
+			t.Fatalf("selected row visible width after returning to list = %d, want %d; line=%q", got, model.width, line)
+		}
+		return
+	}
+	t.Fatal("returned list view missing selected API row")
+}
+
+func TestDetailViewLinesDoNotExceedScreenWidth(t *testing.T) {
+	model := newTrackerModel(trackerConfig{Port: 9222})
+	model.width = 60
+	model.height = 20
+	model.store.Upsert(networkEvent{
+		Kind:            eventResponse,
+		Method:          "GET",
+		URL:             "https://example.com/api",
+		Status:          200,
+		RequestHeaders:  map[string]string{"Authorization": "Bearer token"},
+		ResponseHeaders: map[string]string{"Content-Type": "application/json"},
+		ResponseBody:    `{"ok":true}`,
+		ObservedAt:      time.Now(),
+	})
+	model.syncRows()
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	detail := updated.(trackerModel)
+
+	for _, line := range detail.visibleDetailLines() {
+		if got := lipgloss.Width(line); got > model.width {
+			t.Fatalf("detail line visible width = %d, want <= %d; line=%q", got, model.width, line)
+		}
 	}
 }
 
