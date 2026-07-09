@@ -36,6 +36,9 @@ func TestParseOptionsDefaults(t *testing.T) {
 	if opts.LaunchChrome != true {
 		t.Fatalf("LaunchChrome = %v, want true", opts.LaunchChrome)
 	}
+	if opts.MaxRows != 500 {
+		t.Fatalf("MaxRows = %d, want 500", opts.MaxRows)
+	}
 }
 
 func TestParseOptionsAcceptsFiltersAndNoLaunch(t *testing.T) {
@@ -87,6 +90,7 @@ func TestBuildChildPaneRequestTargetsParentZellijTab(t *testing.T) {
 		RoleBin:     "/tmp/bin/zellij-agent",
 		Session:     "chrome-task",
 		UserDataDir: defaultUserDataDir,
+		MaxRows:     defaultMaxRows,
 	}
 
 	req := buildChildPaneRequest(cfg, PageTarget{ID: "ABCDEF1234567890", Type: "page"}, tabID, "/repo")
@@ -551,6 +555,26 @@ func TestRequestStoreCountsRequestAndResponseWithSameRequestIDOnce(t *testing.T)
 	}
 	if rows[0].Status != 200 {
 		t.Fatalf("Status = %d, want latest response status 200", rows[0].Status)
+	}
+}
+
+func TestRequestStorePrunesOldestRowsAtLimit(t *testing.T) {
+	store := newRequestStoreWithMaxRows(2)
+	first := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+
+	store.Upsert(networkEvent{Kind: eventRequest, Method: "GET", URL: "https://example.com/api/old", RequestID: "old-request", ObservedAt: first})
+	store.Upsert(networkEvent{Kind: eventRequest, Method: "GET", URL: "https://example.com/api/mid", RequestID: "mid-request", ObservedAt: first.Add(time.Second)})
+	store.Upsert(networkEvent{Kind: eventRequest, Method: "GET", URL: "https://example.com/api/new", RequestID: "new-request", ObservedAt: first.Add(2 * time.Second)})
+
+	rows := store.Rows()
+	if len(rows) != 2 {
+		t.Fatalf("len(rows) = %d, want 2", len(rows))
+	}
+	if rows[0].URL != "https://example.com/api/mid" || rows[1].URL != "https://example.com/api/new" {
+		t.Fatalf("rows = %#v, want oldest pruned", rows)
+	}
+	if store.seenRequest["old-request"] {
+		t.Fatalf("old request id still tracked after pruning")
 	}
 }
 

@@ -32,7 +32,10 @@ import (
 	"zellij-with-codeagent/internal/transport"
 )
 
-const defaultUserDataDir = "/tmp/chrome-debug-network-tracker"
+const (
+	defaultUserDataDir = "/tmp/chrome-debug-network-tracker"
+	defaultMaxRows     = 500
+)
 
 type PageTarget struct {
 	ID    string
@@ -58,6 +61,7 @@ type trackerConfig struct {
 	RoleBin       string
 	Session       string
 	SpawnOnNewTab bool
+	MaxRows       int
 }
 
 type requestSnapshot struct {
@@ -104,6 +108,7 @@ func parseOptionsWithOutput(args []string, output io.Writer) (trackerConfig, err
 		SocketPath:   cli.DefaultSocketPath,
 		RoleBin:      "zellij-agent",
 		Session:      "chrome",
+		MaxRows:      defaultMaxRows,
 	}
 	fs := flag.NewFlagSet("tab-network", flag.ContinueOnError)
 	fs.SetOutput(output)
@@ -119,6 +124,7 @@ func parseOptionsWithOutput(args []string, output io.Writer) (trackerConfig, err
 	fs.StringVar(&opts.RoleBin, "role-bin", opts.RoleBin, "executable used to run zellij-agent roles")
 	fs.StringVar(&opts.Session, "session", opts.Session, "execution session/task id for generated tab panes")
 	fs.BoolVar(&opts.SpawnOnNewTab, "spawn-on-new-tab", false, "request a daemon pane in the same Zellij tab when a new Chrome tab opens")
+	fs.IntVar(&opts.MaxRows, "max-rows", opts.MaxRows, "maximum network rows to retain; 0 keeps all rows")
 	noSpawn := fs.Bool("no-spawn-on-new-tab", false, "disable daemon pane requests for newly opened Chrome tabs")
 
 	if err := fs.Parse(args); err != nil {
@@ -129,6 +135,9 @@ func parseOptionsWithOutput(args []string, output io.Writer) (trackerConfig, err
 	}
 	if opts.Port < 1 || opts.Port > 65535 {
 		return trackerConfig{}, fmt.Errorf("--port must be between 1 and 65535")
+	}
+	if opts.MaxRows < 0 {
+		return trackerConfig{}, fmt.Errorf("--max-rows must be 0 or greater")
 	}
 	opts.LaunchChrome = !*noLaunch
 	if *noSpawn {
@@ -595,6 +604,20 @@ func normalizeZellijPaneID(id string) string {
 func buildChildPaneRequest(config trackerConfig, target PageTarget, tabID int, cwd string) transport.CreatePaneRequest {
 	shortID := shortTargetID(target.ID)
 	paneID := "chrome-tab-network-" + shortID
+	command := []string{
+		config.RoleBin,
+		"role",
+		"tab-network",
+		"--port",
+		strconv.Itoa(config.Port),
+		"--no-launch",
+		"--target-id",
+		target.ID,
+		"--no-spawn-on-new-tab",
+	}
+	if config.MaxRows != defaultMaxRows {
+		command = append(command, "--max-rows", strconv.Itoa(config.MaxRows))
+	}
 	return transport.CreatePaneRequest{
 		ID:          paneID,
 		TaskID:      config.Session,
@@ -602,17 +625,7 @@ func buildChildPaneRequest(config trackerConfig, target PageTarget, tabID int, c
 		Name:        paneID,
 		ZellijTabID: &tabID,
 		CWD:         cwd,
-		Command: []string{
-			config.RoleBin,
-			"role",
-			"tab-network",
-			"--port",
-			strconv.Itoa(config.Port),
-			"--no-launch",
-			"--target-id",
-			target.ID,
-			"--no-spawn-on-new-tab",
-		},
+		Command:     command,
 	}
 }
 
@@ -972,15 +985,23 @@ func (r requestRow) key() string {
 }
 
 type requestStore struct {
-	rows        []requestRow
-	index       map[string]int
-	seenRequest map[string]bool
+	rows            []requestRow
+	index           map[string]int
+	seenRequest     map[string]bool
+	requestIDsByKey map[string]map[string]struct{}
+	maxRows         int
 }
 
 func newRequestStore() *requestStore {
+	return newRequestStoreWithMaxRows(defaultMaxRows)
+}
+
+func newRequestStoreWithMaxRows(maxRows int) *requestStore {
 	return &requestStore{
-		index:       map[string]int{},
-		seenRequest: map[string]bool{},
+		index:           map[string]int{},
+		seenRequest:     map[string]bool{},
+		requestIDsByKey: map[string]map[string]struct{}{},
+		maxRows:         maxRows,
 	}
 }
 
@@ -1014,6 +1035,7 @@ func (s *requestStore) Upsert(event networkEvent) {
 	}
 	if event.RequestID != "" {
 		s.seenRequest[event.RequestID] = true
+		s.trackRequestID(key, event.RequestID)
 		row.LastRequestID = event.RequestID
 	}
 	row.LastSeen = event.ObservedAt
@@ -1043,6 +1065,48 @@ func (s *requestStore) Upsert(event networkEvent) {
 		row.ErrorText = ""
 	}
 	s.rows[idx] = row
+	s.pruneRows()
+}
+
+func (s *requestStore) trackRequestID(key, requestID string) {
+	if s.requestIDsByKey == nil {
+		s.requestIDsByKey = map[string]map[string]struct{}{}
+	}
+	requestIDs := s.requestIDsByKey[key]
+	if requestIDs == nil {
+		requestIDs = map[string]struct{}{}
+		s.requestIDsByKey[key] = requestIDs
+	}
+	requestIDs[requestID] = struct{}{}
+}
+
+func (s *requestStore) pruneRows() {
+	if s.maxRows <= 0 {
+		return
+	}
+	for len(s.rows) > s.maxRows {
+		oldest := 0
+		for i := 1; i < len(s.rows); i++ {
+			if s.rows[i].LastSeen.Before(s.rows[oldest].LastSeen) {
+				oldest = i
+			}
+		}
+		s.removeRowAt(oldest)
+	}
+}
+
+func (s *requestStore) removeRowAt(idx int) {
+	key := s.rows[idx].key()
+	delete(s.index, key)
+	for requestID := range s.requestIDsByKey[key] {
+		delete(s.seenRequest, requestID)
+	}
+	delete(s.requestIDsByKey, key)
+
+	s.rows = append(s.rows[:idx], s.rows[idx+1:]...)
+	for i, row := range s.rows {
+		s.index[row.key()] = i
+	}
 }
 
 func cloneStringMap(in map[string]string) map[string]string {
@@ -1115,7 +1179,7 @@ const (
 func newTrackerModel(config trackerConfig) trackerModel {
 	return trackerModel{
 		config: config,
-		store:  newRequestStore(),
+		store:  newRequestStoreWithMaxRows(config.MaxRows),
 		tabs:   map[string]PageTarget{},
 		detailFilters: map[detailPane]string{
 			detailPaneRequest: "",
