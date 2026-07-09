@@ -1,9 +1,16 @@
 package tabwatcher
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
+
+	"zellij-with-codeagent/internal/transport"
 )
 
 func TestParseOptionsDefaults(t *testing.T) {
@@ -91,4 +98,85 @@ func TestBuildTargetPlanCreatesTabNetworkPaneForTarget(t *testing.T) {
 	if !reflect.DeepEqual(pane.Command, wantCommand) {
 		t.Fatalf("command = %#v, want %#v", pane.Command, wantCommand)
 	}
+}
+
+func TestTargetTrackerMarksStartupTargetsAsBaseline(t *testing.T) {
+	submitter := &fakeSubmitter{}
+	tracker := newTargetTracker(watcherConfig{Port: 9222, Session: "chrome-tabs", RoleBin: "zellij-agent"}, submitter, io.Discard, io.Discard)
+
+	tracker.MarkBaseline([]PageTarget{{ID: "existing", Type: "page"}})
+	tracker.ProcessTargets(context.Background(), []PageTarget{{ID: "existing", Type: "page"}})
+
+	if len(submitter.requests) != 0 {
+		t.Fatalf("submitted %d requests, want 0 for baseline target", len(submitter.requests))
+	}
+}
+
+func TestTargetTrackerSubmitsNewPageTargetOnce(t *testing.T) {
+	submitter := &fakeSubmitter{}
+	var stdout bytes.Buffer
+	tracker := newTargetTracker(watcherConfig{Port: 9333, CWD: "/repo", Session: "chrome-tabs", RoleBin: "/tmp/bin/zellij-agent"}, submitter, &stdout, io.Discard)
+
+	target := PageTarget{ID: "new-target-123456", Type: "page", URL: "https://example.com"}
+	tracker.MarkBaseline(nil)
+	tracker.ProcessTargets(context.Background(), []PageTarget{target})
+	tracker.ProcessTargets(context.Background(), []PageTarget{target})
+
+	if len(submitter.requests) != 1 {
+		t.Fatalf("submitted %d requests, want exactly 1", len(submitter.requests))
+	}
+	got := submitter.requests[0]
+	if got.requestID != "req_chrome-tab-network-new-target-1" {
+		t.Fatalf("requestID = %q, want target-specific id", got.requestID)
+	}
+	if !strings.Contains(stdout.String(), "submitted target=new-target-123456") {
+		t.Fatalf("stdout = %q, want submitted target log", stdout.String())
+	}
+}
+
+func TestTargetTrackerIgnoresNonPageTargets(t *testing.T) {
+	submitter := &fakeSubmitter{}
+	tracker := newTargetTracker(watcherConfig{Port: 9222, Session: "chrome-tabs", RoleBin: "zellij-agent"}, submitter, io.Discard, io.Discard)
+
+	tracker.MarkBaseline(nil)
+	tracker.ProcessTargets(context.Background(), []PageTarget{{ID: "worker", Type: "service_worker"}})
+
+	if len(submitter.requests) != 0 {
+		t.Fatalf("submitted %d requests, want 0 for non-page target", len(submitter.requests))
+	}
+}
+
+func TestTargetTrackerLogsSubmitFailureAndDoesNotRetrySameTarget(t *testing.T) {
+	submitter := &fakeSubmitter{err: errors.New("daemon down")}
+	var stderr bytes.Buffer
+	tracker := newTargetTracker(watcherConfig{Port: 9222, Session: "chrome-tabs", RoleBin: "zellij-agent"}, submitter, io.Discard, &stderr)
+
+	target := PageTarget{ID: "target-fail", Type: "page"}
+	tracker.ProcessTargets(context.Background(), []PageTarget{target})
+	tracker.ProcessTargets(context.Background(), []PageTarget{target})
+
+	if len(submitter.requests) != 1 {
+		t.Fatalf("submitted %d requests, want no retry for same target", len(submitter.requests))
+	}
+	if !strings.Contains(stderr.String(), "submit target=target-fail failed") {
+		t.Fatalf("stderr = %q, want failure log", stderr.String())
+	}
+}
+
+type submittedRequest struct {
+	requestID string
+	payload   transport.ExecutionPlanPayload
+}
+
+type fakeSubmitter struct {
+	requests []submittedRequest
+	err      error
+}
+
+func (f *fakeSubmitter) SubmitExecutionPlan(_ context.Context, requestID string, payload transport.ExecutionPlanPayload) (transport.ExecutionPlanResponse, error) {
+	f.requests = append(f.requests, submittedRequest{requestID: requestID, payload: payload})
+	if f.err != nil {
+		return transport.ExecutionPlanResponse{}, f.err
+	}
+	return transport.ExecutionPlanResponse{RequestID: requestID, Session: payload.Session, Layout: payload.Layout}, nil
 }

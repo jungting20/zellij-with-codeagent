@@ -136,6 +136,54 @@ func buildTargetPlan(cfg watcherConfig, target PageTarget) (string, transport.Ex
 	return "req_" + paneID, payload
 }
 
+type targetTracker struct {
+	cfg       watcherConfig
+	submitter planSubmitter
+	stdout    io.Writer
+	stderr    io.Writer
+	seen      map[string]struct{}
+}
+
+func newTargetTracker(cfg watcherConfig, submitter planSubmitter, stdout, stderr io.Writer) *targetTracker {
+	return &targetTracker{
+		cfg:       cfg,
+		submitter: submitter,
+		stdout:    stdout,
+		stderr:    stderr,
+		seen:      map[string]struct{}{},
+	}
+}
+
+func (t *targetTracker) MarkBaseline(targets []PageTarget) {
+	count := 0
+	for _, target := range targets {
+		if target.Type != "page" || strings.TrimSpace(target.ID) == "" {
+			continue
+		}
+		t.seen[target.ID] = struct{}{}
+		count++
+	}
+	fmt.Fprintf(t.stdout, "baseline page-targets=%d\n", count)
+}
+
+func (t *targetTracker) ProcessTargets(ctx context.Context, targets []PageTarget) {
+	for _, target := range targets {
+		if target.Type != "page" || strings.TrimSpace(target.ID) == "" {
+			continue
+		}
+		if _, ok := t.seen[target.ID]; ok {
+			continue
+		}
+		t.seen[target.ID] = struct{}{}
+		requestID, payload := buildTargetPlan(t.cfg, target)
+		if _, err := t.submitter.SubmitExecutionPlan(ctx, requestID, payload); err != nil {
+			fmt.Fprintf(t.stderr, "submit target=%s failed: %v\n", target.ID, err)
+			continue
+		}
+		fmt.Fprintf(t.stdout, "submitted target=%s request=%s\n", target.ID, requestID)
+	}
+}
+
 func shortTargetID(id string) string {
 	id = strings.TrimSpace(id)
 	if len(id) <= 12 {
