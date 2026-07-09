@@ -231,6 +231,98 @@ func TestTargetPaneSpawnerForgetsClosedTargetWhenPaneAlreadyDisappeared(t *testi
 	}
 }
 
+func TestBrowserShutdownSupervisorCleansTaskAndStopsWhenLaunchedChromeExits(t *testing.T) {
+	t.Setenv("ZELLIJ_PANE_ID", "99")
+	client := &fakePaneClient{runtime: transport.InspectRuntimeResponse{Panes: []transport.Pane{
+		{ID: "parent", TaskID: "chrome-task", Role: "tab-network", ZellijPaneID: "terminal_99"},
+		{ID: "child", TaskID: "chrome-task", Role: "tab-network", ZellijPaneID: "terminal_100"},
+		{ID: "other-task", TaskID: "other", Role: "tab-network", ZellijPaneID: "terminal_101"},
+	}}}
+	events := make(chan any, 1)
+	supervisor := newBrowserShutdownSupervisor(trackerConfig{
+		Session:       "chrome-task",
+		SpawnOnNewTab: true,
+	}, client, events, io.Discard)
+	chromeDone := make(chan error, 1)
+
+	supervisor.watchLaunchedChrome(context.Background(), chromeDone)
+	chromeDone <- nil
+
+	msg := waitForTrackerEvent(t, events)
+	if _, ok := msg.(collectorDone); !ok {
+		t.Fatalf("event = %#v, want collectorDone", msg)
+	}
+	if len(client.cleanupRequests) != 2 {
+		t.Fatalf("cleanup requests = %#v, want child cleanup then parent cleanup", client.cleanupRequests)
+	}
+	req := client.cleanupRequests[0]
+	if !reflect.DeepEqual(req.PaneIDs, []string{"child"}) || req.TaskID != "" || req.Role != "" {
+		t.Fatalf("cleanup request = %#v, want child pane cleanup before parent exits", req)
+	}
+	if !reflect.DeepEqual(client.cleanupRequests[1].PaneIDs, []string{"parent"}) {
+		t.Fatalf("parent cleanup request = %#v, want parent pane cleanup last", client.cleanupRequests[1])
+	}
+}
+
+func TestBrowserShutdownSupervisorEndpointFallbackCleansAfterFailures(t *testing.T) {
+	t.Setenv("ZELLIJ_PANE_ID", "99")
+	client := &fakePaneClient{runtime: transport.InspectRuntimeResponse{Panes: []transport.Pane{
+		{ID: "parent", TaskID: "chrome-task", Role: "tab-network", ZellijPaneID: "terminal_99"},
+		{ID: "child", TaskID: "chrome-task", Role: "tab-network", ZellijPaneID: "terminal_100"},
+	}}}
+	events := make(chan any, 1)
+	supervisor := newBrowserShutdownSupervisor(trackerConfig{
+		Session:       "chrome-task",
+		SpawnOnNewTab: true,
+	}, client, events, io.Discard)
+	checks := 0
+	checkDebug := func(context.Context) error {
+		checks++
+		return errors.New("debug endpoint down")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	supervisor.watchDebugEndpoint(ctx, checkDebug, time.Millisecond, 2)
+
+	msg := waitForTrackerEvent(t, events)
+	if _, ok := msg.(collectorDone); !ok {
+		t.Fatalf("event = %#v, want collectorDone", msg)
+	}
+	if checks < 2 {
+		t.Fatalf("checks = %d, want at least 2 failures before cleanup", checks)
+	}
+	if len(client.cleanupRequests) != 2 || !reflect.DeepEqual(client.cleanupRequests[0].PaneIDs, []string{"child"}) || !reflect.DeepEqual(client.cleanupRequests[1].PaneIDs, []string{"parent"}) {
+		t.Fatalf("cleanup requests = %#v, want child cleanup then parent cleanup", client.cleanupRequests)
+	}
+}
+
+func TestBrowserShutdownSupervisorStillCleansParentWhenChildCleanupErrors(t *testing.T) {
+	t.Setenv("ZELLIJ_PANE_ID", "99")
+	client := &fakePaneClient{
+		runtime: transport.InspectRuntimeResponse{Panes: []transport.Pane{
+			{ID: "parent", TaskID: "chrome-task", Role: "tab-network", ZellijPaneID: "terminal_99"},
+			{ID: "child", TaskID: "chrome-task", Role: "tab-network", ZellijPaneID: "terminal_100"},
+		}},
+		cleanupErr: errors.New("transport failed"),
+	}
+	events := make(chan any, 1)
+	supervisor := newBrowserShutdownSupervisor(trackerConfig{
+		Session:       "chrome-task",
+		SpawnOnNewTab: true,
+	}, client, events, io.Discard)
+
+	supervisor.handleBrowserClosed(context.Background())
+
+	msg := waitForTrackerEvent(t, events)
+	if _, ok := msg.(collectorDone); !ok {
+		t.Fatalf("event = %#v, want collectorDone", msg)
+	}
+	if len(client.cleanupRequests) != 2 || !reflect.DeepEqual(client.cleanupRequests[1].PaneIDs, []string{"parent"}) {
+		t.Fatalf("cleanup requests = %#v, want parent cleanup attempted after child error", client.cleanupRequests)
+	}
+}
+
 func TestSelectTargetUsesExplicitTargetID(t *testing.T) {
 	targets := []PageTarget{
 		{ID: "other", Type: "page", URL: "https://example.com/other"},
@@ -248,6 +340,17 @@ func TestSelectTargetUsesExplicitTargetID(t *testing.T) {
 
 func intPtr(v int) *int {
 	return &v
+}
+
+func waitForTrackerEvent(t *testing.T, events <-chan any) any {
+	t.Helper()
+	select {
+	case msg := <-events:
+		return msg
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tracker event")
+		return nil
+	}
 }
 
 type fakePaneClient struct {

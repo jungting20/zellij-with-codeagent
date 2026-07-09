@@ -142,13 +142,13 @@ func runTracker(ctx context.Context, opts trackerConfig, stdin io.Reader, stdout
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var launched *exec.Cmd
+	var launched *launchedChrome
 	if opts.LaunchChrome {
-		cmd, err := launchChrome(ctx, opts.ChromePath, opts.Port, opts.UserDataDir)
+		chrome, err := launchChrome(ctx, opts.ChromePath, opts.Port, opts.UserDataDir)
 		if err != nil {
 			return err
 		}
-		launched = cmd
+		launched = chrome
 	}
 	if err := waitForDebugPort(ctx, opts.Port, 10*time.Second); err != nil {
 		return err
@@ -191,14 +191,15 @@ func runTracker(ctx context.Context, opts trackerConfig, stdin io.Reader, stdout
 
 	events := make(chan any, 128)
 	go collectTarget(ctx, opts.Port, allocatorCtx, target, opts.Filter, events, stderr)
+	startBrowserShutdownWatcher(ctx, opts, launched, events, stderr)
 	if opts.SpawnOnNewTab {
 		startTargetPaneSpawner(ctx, opts, stdout, stderr)
 	}
 
 	model := newTrackerModel(opts)
 	model.events = events
-	if launched != nil && launched.Process != nil {
-		model.chromePID = launched.Process.Pid
+	if launched != nil && launched.cmd != nil && launched.cmd.Process != nil {
+		model.chromePID = launched.cmd.Process.Pid
 	}
 
 	program := tea.NewProgram(model, tea.WithInput(stdin), tea.WithOutput(stdout), tea.WithAltScreen())
@@ -382,6 +383,155 @@ type paneClient interface {
 	InspectRuntime(context.Context) (transport.InspectRuntimeResponse, error)
 	CreatePane(context.Context, transport.CreatePaneRequest) (transport.CreatePaneResponse, error)
 	Cleanup(context.Context, transport.CleanupRequest) (transport.CleanupResponse, error)
+}
+
+type workflowCleanupClient interface {
+	InspectRuntime(context.Context) (transport.InspectRuntimeResponse, error)
+	Cleanup(context.Context, transport.CleanupRequest) (transport.CleanupResponse, error)
+}
+
+type browserShutdownSupervisor struct {
+	config trackerConfig
+	client workflowCleanupClient
+	events chan<- any
+	stderr io.Writer
+	once   sync.Once
+}
+
+func newBrowserShutdownSupervisor(config trackerConfig, client workflowCleanupClient, events chan<- any, stderr io.Writer) *browserShutdownSupervisor {
+	return &browserShutdownSupervisor{
+		config: config,
+		client: client,
+		events: events,
+		stderr: stderr,
+	}
+}
+
+func startBrowserShutdownWatcher(ctx context.Context, opts trackerConfig, launched *launchedChrome, events chan<- any, stderr io.Writer) {
+	client := transport.NewClient(transport.ClientOptions{SocketPath: opts.SocketPath, Timeout: 10 * time.Second})
+	supervisor := newBrowserShutdownSupervisor(opts, client, events, stderr)
+	if launched != nil {
+		supervisor.watchLaunchedChrome(ctx, launched.done)
+		return
+	}
+	supervisor.watchDebugEndpoint(ctx, func(ctx context.Context) error {
+		return checkDebugEndpoint(ctx, opts.Port)
+	}, time.Second, 3)
+}
+
+func (s *browserShutdownSupervisor) watchLaunchedChrome(ctx context.Context, done <-chan error) {
+	if done == nil {
+		return
+	}
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case err := <-done:
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
+				fmt.Fprintf(s.stderr, "Chrome process exited: %v\n", err)
+			}
+			s.handleBrowserClosed(ctx)
+		}
+	}()
+}
+
+func (s *browserShutdownSupervisor) watchDebugEndpoint(ctx context.Context, check func(context.Context) error, interval time.Duration, failureThreshold int) {
+	if check == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = time.Second
+	}
+	if failureThreshold <= 0 {
+		failureThreshold = 3
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		failures := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := check(ctx); err != nil {
+					failures++
+					if failures >= failureThreshold {
+						s.handleBrowserClosed(ctx)
+						return
+					}
+					continue
+				}
+				failures = 0
+			}
+		}
+	}()
+}
+
+func (s *browserShutdownSupervisor) handleBrowserClosed(ctx context.Context) {
+	s.once.Do(func() {
+		if s.config.SpawnOnNewTab && s.client != nil {
+			if err := s.cleanupWorkflowChildren(ctx); err != nil {
+				fmt.Fprintf(s.stderr, "browser shutdown cleanup failed: %v\n", err)
+			}
+		}
+		sendTrackerMsg(ctx, s.events, collectorDone{})
+	})
+}
+
+func (s *browserShutdownSupervisor) cleanupWorkflowChildren(ctx context.Context) error {
+	childPaneIDs, ownPaneID, ok, err := s.workflowPaneIDs(ctx)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		_, err := s.client.Cleanup(ctx, transport.CleanupRequest{TaskID: s.config.Session, Role: "tab-network"})
+		return err
+	}
+	var firstErr error
+	if len(childPaneIDs) > 0 {
+		if _, err := s.client.Cleanup(ctx, transport.CleanupRequest{PaneIDs: childPaneIDs}); err != nil {
+			firstErr = err
+		}
+	}
+	if ownPaneID != "" {
+		selfCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, _ = s.client.Cleanup(selfCtx, transport.CleanupRequest{PaneIDs: []string{ownPaneID}})
+	}
+	return firstErr
+}
+
+func (s *browserShutdownSupervisor) workflowPaneIDs(ctx context.Context) ([]string, string, bool, error) {
+	ownZellijPaneID := normalizeZellijPaneID(os.Getenv("ZELLIJ_PANE_ID"))
+	if ownZellijPaneID == "" {
+		return nil, "", false, nil
+	}
+	response, err := s.client.InspectRuntime(ctx)
+	if err != nil {
+		return nil, "", false, err
+	}
+	paneIDs := make([]string, 0)
+	ownPaneID := ""
+	for _, pane := range response.Panes {
+		if pane.TaskID != s.config.Session || pane.Role != "tab-network" {
+			continue
+		}
+		if pane.ZellijPaneID == ownZellijPaneID {
+			ownPaneID = pane.ID
+			continue
+		}
+		switch pane.Status {
+		case "closed", "exited", "lost":
+			continue
+		}
+		paneIDs = append(paneIDs, pane.ID)
+	}
+	return paneIDs, ownPaneID, true, nil
 }
 
 type targetPaneSpawner struct {
@@ -640,7 +790,12 @@ func sendTrackerMsg(ctx context.Context, out chan<- any, msg any) {
 	}
 }
 
-func launchChrome(ctx context.Context, chromePath string, port int, userDataDir string) (*exec.Cmd, error) {
+type launchedChrome struct {
+	cmd  *exec.Cmd
+	done <-chan error
+}
+
+func launchChrome(ctx context.Context, chromePath string, port int, userDataDir string) (*launchedChrome, error) {
 	path, err := resolveChromePath(chromePath)
 	if err != nil {
 		return nil, err
@@ -652,10 +807,12 @@ func launchChrome(ctx context.Context, chromePath string, port int, userDataDir 
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	done := make(chan error, 1)
 	go func() {
-		_ = cmd.Wait()
+		done <- cmd.Wait()
+		close(done)
 	}()
-	return cmd, nil
+	return &launchedChrome{cmd: cmd, done: done}, nil
 }
 
 func resolveChromePath(chromePath string) (string, error) {
@@ -724,6 +881,24 @@ func waitForDebugPort(ctx context.Context, port int, timeout time.Duration) erro
 		case <-ticker.C:
 		}
 	}
+}
+
+func checkDebugEndpoint(ctx context.Context, port int) error {
+	url := fmt.Sprintf("http://127.0.0.1:%d/json/version", port)
+	client := http.Client{Timeout: 500 * time.Millisecond}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("Chrome debug endpoint returned %s", resp.Status)
+	}
+	return nil
 }
 
 func attachAndTrackTarget(ctx context.Context, allocatorCtx context.Context, target PageTarget, filter RequestFilter, out chan<- any) {
