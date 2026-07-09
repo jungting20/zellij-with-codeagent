@@ -184,6 +184,53 @@ func TestTargetPaneSpawnerBaselinesAndCreatesOnlyNewPageTargets(t *testing.T) {
 	}
 }
 
+func TestTargetPaneSpawnerCleansUpPaneWhenTargetCloses(t *testing.T) {
+	client := &fakePaneClient{}
+	spawner := newTargetPaneSpawner(trackerConfig{
+		Port:    9333,
+		RoleBin: "/tmp/bin/zellij-agent",
+		Session: "chrome-task",
+	}, client, 9, "/repo", io.Discard, io.Discard)
+
+	spawner.MarkBaseline([]PageTarget{{ID: "existing", Type: "page"}})
+	spawner.ProcessTargets(context.Background(), []PageTarget{
+		{ID: "existing", Type: "page"},
+		{ID: "closing-target-123456", Type: "page"},
+	})
+	spawner.ProcessTargets(context.Background(), []PageTarget{{ID: "existing", Type: "page"}})
+
+	if len(client.cleanupRequests) != 1 {
+		t.Fatalf("cleanup requests = %#v, want exactly one pane cleanup", client.cleanupRequests)
+	}
+	wantPaneID := "chrome-tab-network-closing-targ"
+	if !reflect.DeepEqual(client.cleanupRequests[0].PaneIDs, []string{wantPaneID}) {
+		t.Fatalf("cleanup PaneIDs = %#v, want %q", client.cleanupRequests[0].PaneIDs, wantPaneID)
+	}
+	if len(client.createRequests) != 1 || client.createRequests[0].ID != wantPaneID {
+		t.Fatalf("create requests = %#v, want child pane %q before cleanup", client.createRequests, wantPaneID)
+	}
+}
+
+func TestTargetPaneSpawnerForgetsClosedTargetWhenPaneAlreadyDisappeared(t *testing.T) {
+	client := &fakePaneClient{cleanupErr: errors.New("transport failed")}
+	spawner := newTargetPaneSpawner(trackerConfig{
+		Port:    9333,
+		RoleBin: "/tmp/bin/zellij-agent",
+		Session: "chrome-task",
+	}, client, 9, "/repo", io.Discard, io.Discard)
+
+	spawner.ProcessTargets(context.Background(), []PageTarget{{ID: "closing-target-123456", Type: "page"}})
+	spawner.ProcessTargets(context.Background(), nil)
+	spawner.ProcessTargets(context.Background(), nil)
+
+	if len(client.cleanupRequests) != 1 {
+		t.Fatalf("cleanup requests = %#v, want one cleanup attempt for disappeared pane", client.cleanupRequests)
+	}
+	if len(spawner.active) != 0 {
+		t.Fatalf("active = %#v, want disappeared pane forgotten", spawner.active)
+	}
+}
+
 func TestSelectTargetUsesExplicitTargetID(t *testing.T) {
 	targets := []PageTarget{
 		{ID: "other", Type: "page", URL: "https://example.com/other"},
@@ -209,6 +256,8 @@ type fakePaneClient struct {
 	inspectCalls     int
 	createRequests   []transport.CreatePaneRequest
 	createErr        error
+	cleanupRequests  []transport.CleanupRequest
+	cleanupErr       error
 }
 
 func (f *fakePaneClient) InspectRuntime(context.Context) (transport.InspectRuntimeResponse, error) {
@@ -227,6 +276,14 @@ func (f *fakePaneClient) CreatePane(_ context.Context, req transport.CreatePaneR
 		return transport.CreatePaneResponse{}, f.createErr
 	}
 	return transport.CreatePaneResponse{Pane: transport.Pane{ID: req.ID}}, nil
+}
+
+func (f *fakePaneClient) Cleanup(_ context.Context, req transport.CleanupRequest) (transport.CleanupResponse, error) {
+	f.cleanupRequests = append(f.cleanupRequests, req)
+	if f.cleanupErr != nil {
+		return transport.CleanupResponse{}, f.cleanupErr
+	}
+	return transport.CleanupResponse{}, nil
 }
 
 func TestSelectTargetRejectsMissingExplicitTargetID(t *testing.T) {

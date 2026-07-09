@@ -381,6 +381,7 @@ func collectTarget(ctx context.Context, port int, allocatorCtx context.Context, 
 type paneClient interface {
 	InspectRuntime(context.Context) (transport.InspectRuntimeResponse, error)
 	CreatePane(context.Context, transport.CreatePaneRequest) (transport.CreatePaneResponse, error)
+	Cleanup(context.Context, transport.CleanupRequest) (transport.CleanupResponse, error)
 }
 
 type targetPaneSpawner struct {
@@ -391,6 +392,7 @@ type targetPaneSpawner struct {
 	stdout io.Writer
 	stderr io.Writer
 	seen   map[string]struct{}
+	active map[string]string
 }
 
 func newTargetPaneSpawner(config trackerConfig, client paneClient, tabID int, cwd string, stdout, stderr io.Writer) *targetPaneSpawner {
@@ -402,6 +404,7 @@ func newTargetPaneSpawner(config trackerConfig, client paneClient, tabID int, cw
 		stdout: stdout,
 		stderr: stderr,
 		seen:   map[string]struct{}{},
+		active: map[string]string{},
 	}
 }
 
@@ -418,10 +421,12 @@ func (s *targetPaneSpawner) MarkBaseline(targets []PageTarget) {
 }
 
 func (s *targetPaneSpawner) ProcessTargets(ctx context.Context, targets []PageTarget) {
+	current := map[string]struct{}{}
 	for _, target := range targets {
 		if target.Type != "page" || strings.TrimSpace(target.ID) == "" {
 			continue
 		}
+		current[target.ID] = struct{}{}
 		if _, ok := s.seen[target.ID]; ok {
 			continue
 		}
@@ -431,8 +436,48 @@ func (s *targetPaneSpawner) ProcessTargets(ctx context.Context, targets []PageTa
 			fmt.Fprintf(s.stderr, "spawn target=%s failed: %v\n", target.ID, err)
 			continue
 		}
+		s.active[target.ID] = req.ID
 		fmt.Fprintf(s.stdout, "spawned target=%s pane=%s\n", target.ID, req.ID)
 	}
+	s.cleanupClosedTargets(ctx, current)
+}
+
+func (s *targetPaneSpawner) cleanupClosedTargets(ctx context.Context, current map[string]struct{}) {
+	for targetID, paneID := range s.active {
+		if _, ok := current[targetID]; ok {
+			continue
+		}
+		if _, err := s.client.Cleanup(ctx, transport.CleanupRequest{PaneIDs: []string{paneID}}); err != nil {
+			if s.paneGone(ctx, paneID) {
+				delete(s.active, targetID)
+				fmt.Fprintf(s.stdout, "forgot target=%s pane=%s\n", targetID, paneID)
+				continue
+			}
+			fmt.Fprintf(s.stderr, "cleanup target=%s pane=%s failed: %v\n", targetID, paneID, err)
+			continue
+		}
+		delete(s.active, targetID)
+		fmt.Fprintf(s.stdout, "cleaned target=%s pane=%s\n", targetID, paneID)
+	}
+}
+
+func (s *targetPaneSpawner) paneGone(ctx context.Context, paneID string) bool {
+	response, err := s.client.InspectRuntime(ctx)
+	if err != nil {
+		return false
+	}
+	for _, pane := range response.Panes {
+		if pane.ID != paneID {
+			continue
+		}
+		switch pane.Status {
+		case "closed", "exited", "lost":
+			return true
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func startTargetPaneSpawner(ctx context.Context, opts trackerConfig, stdout, stderr io.Writer) {
