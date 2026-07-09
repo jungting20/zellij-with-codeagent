@@ -163,6 +163,70 @@ func TestTargetTrackerLogsSubmitFailureAndDoesNotRetrySameTarget(t *testing.T) {
 	}
 }
 
+func TestChromeArgsUseRemoteDebuggingAndProfile(t *testing.T) {
+	got := chromeArgs(9333, "/tmp/profile")
+	want := []string{
+		"--remote-debugging-port=9333",
+		"--user-data-dir=/tmp/profile",
+		"--no-first-run",
+		"--no-default-browser-check",
+		"about:blank",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("chromeArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestRunWatcherBaselinesThenSubmitsLaterTargets(t *testing.T) {
+	source := &fakeTargetSource{
+		batches: [][]PageTarget{
+			{{ID: "existing", Type: "page"}},
+			{{ID: "existing", Type: "page"}, {ID: "new-page", Type: "page"}},
+		},
+	}
+	submitter := &fakeSubmitter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	source.afterBatch = func(batch int) {
+		if batch == 1 {
+			cancel()
+		}
+	}
+
+	err := runWatcher(ctx, watcherConfig{
+		Port:         9222,
+		Session:      "chrome-tabs",
+		RoleBin:      "zellij-agent",
+		PollInterval: time.Millisecond,
+	}, io.Discard, io.Discard, submitter, source)
+	if err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("runWatcher() error = %v, want nil or context canceled", err)
+	}
+	if len(submitter.requests) != 1 {
+		t.Fatalf("submitted %d requests, want new target only", len(submitter.requests))
+	}
+	if submitter.requests[0].payload.Tabs[0].Panes[0].Command[7] != "new-page" {
+		t.Fatalf("payload = %#v, want target-id new-page", submitter.requests[0].payload)
+	}
+}
+
+type fakeTargetSource struct {
+	batches    [][]PageTarget
+	calls      int
+	afterBatch func(int)
+}
+
+func (f *fakeTargetSource) Targets(context.Context) ([]PageTarget, error) {
+	idx := f.calls
+	if idx >= len(f.batches) {
+		idx = len(f.batches) - 1
+	}
+	f.calls++
+	if f.afterBatch != nil {
+		f.afterBatch(idx)
+	}
+	return f.batches[idx], nil
+}
+
 type submittedRequest struct {
 	requestID string
 	payload   transport.ExecutionPlanPayload

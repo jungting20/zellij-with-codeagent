@@ -6,11 +6,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+
+	"github.com/chromedp/chromedp"
 
 	"zellij-with-codeagent/internal/cli"
 	"zellij-with-codeagent/internal/transport"
@@ -54,8 +60,42 @@ func runWithIO(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}
-	_ = opts
-	fmt.Fprintln(stdout, "tab-watcher runtime not started")
+	if opts.CWD == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(stderr, "Error: resolve cwd: %v\n", err)
+			return 1
+		}
+		opts.CWD = cwd
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if opts.LaunchChrome {
+		if _, err := launchChrome(ctx, opts.ChromePath, opts.Port, opts.UserDataDir); err != nil {
+			fmt.Fprintf(stderr, "Error: %v\n", err)
+			return 1
+		}
+	}
+	if err := waitForDebugPort(ctx, opts.Port, 10*time.Second); err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	allocatorURL := fmt.Sprintf("http://127.0.0.1:%d", opts.Port)
+	allocatorCtx, cancelAllocator := chromedp.NewRemoteAllocator(ctx, allocatorURL)
+	defer cancelAllocator()
+	browserCtx, cancelBrowser := chromedp.NewContext(allocatorCtx)
+	defer cancelBrowser()
+
+	client := transport.NewClient(transport.ClientOptions{
+		SocketPath: opts.SocketPath,
+		Timeout:    10 * time.Second,
+	})
+	if err := runWatcher(ctx, opts, stdout, stderr, client, chromedpTargetSource{ctx: browserCtx}); err != nil && !errors.Is(err, context.Canceled) {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
 	return 0
 }
 
@@ -181,6 +221,149 @@ func (t *targetTracker) ProcessTargets(ctx context.Context, targets []PageTarget
 			continue
 		}
 		fmt.Fprintf(t.stdout, "submitted target=%s request=%s\n", target.ID, requestID)
+	}
+}
+
+type targetSource interface {
+	Targets(context.Context) ([]PageTarget, error)
+}
+
+type chromedpTargetSource struct {
+	ctx context.Context
+}
+
+func (s chromedpTargetSource) Targets(ctx context.Context) ([]PageTarget, error) {
+	_ = ctx
+	infos, err := chromedp.Targets(s.ctx)
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]PageTarget, 0, len(infos))
+	for _, info := range infos {
+		targets = append(targets, PageTarget{
+			ID:    string(info.TargetID),
+			Type:  info.Type,
+			Title: info.Title,
+			URL:   info.URL,
+		})
+	}
+	return targets, nil
+}
+
+func runWatcher(ctx context.Context, cfg watcherConfig, stdout, stderr io.Writer, submitter planSubmitter, source targetSource) error {
+	if cfg.PollInterval <= 0 {
+		cfg.PollInterval = 500 * time.Millisecond
+	}
+	fmt.Fprintf(stdout, "tab-watcher port=%d socket=%s cwd=%s\n", cfg.Port, cfg.SocketPath, cfg.CWD)
+	initial, err := source.Targets(ctx)
+	if err != nil {
+		return err
+	}
+	tracker := newTargetTracker(cfg, submitter, stdout, stderr)
+	tracker.MarkBaseline(initial)
+
+	ticker := time.NewTicker(cfg.PollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			targets, err := source.Targets(ctx)
+			if err != nil {
+				if ctx.Err() == nil {
+					fmt.Fprintf(stderr, "target poll failed: %v\n", err)
+				}
+				continue
+			}
+			tracker.ProcessTargets(ctx, targets)
+		}
+	}
+}
+
+func chromeArgs(port int, userDataDir string) []string {
+	return []string{
+		fmt.Sprintf("--remote-debugging-port=%d", port),
+		fmt.Sprintf("--user-data-dir=%s", userDataDir),
+		"--no-first-run",
+		"--no-default-browser-check",
+		"about:blank",
+	}
+}
+
+func resolveChromePath(chromePath string) (string, error) {
+	if chromePath != "" {
+		return chromePath, nil
+	}
+	if envPath := os.Getenv("CHROME_PATH"); envPath != "" {
+		return envPath, nil
+	}
+	candidates := []string{
+		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		"/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+		"google-chrome",
+		"chromium",
+		"chromium-browser",
+	}
+	for _, candidate := range candidates {
+		if strings.Contains(candidate, "/") {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			}
+			continue
+		}
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path, nil
+		}
+	}
+	return "", errors.New("Chrome executable not found; pass --chrome-path or set CHROME_PATH")
+}
+
+func launchChrome(ctx context.Context, chromePath string, port int, userDataDir string) (*exec.Cmd, error) {
+	path, err := resolveChromePath(chromePath)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(userDataDir, 0o755); err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, path, chromeArgs(port, userDataDir)...)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	go func() {
+		_ = cmd.Wait()
+	}()
+	return cmd, nil
+}
+
+func waitForDebugPort(ctx context.Context, port int, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/json/version", port)
+	client := http.Client{Timeout: 500 * time.Millisecond}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				return nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("Chrome debug port %d did not become ready: %w", port, ctx.Err())
+		case <-ticker.C:
+		}
 	}
 }
 
