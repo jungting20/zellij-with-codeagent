@@ -50,7 +50,15 @@ func TestRunDryRunPrintsChromeExecutionPlanEnvelope(t *testing.T) {
 		t.Fatalf("payload = %#v, want chrome-debug single chrome tab", payload)
 	}
 	gotCommand := payload.Tabs[0].Panes[0].Command
-	wantCommand := []string{"/tmp/bin/zellij-agent", "role", "tab-network", "--port", "9333", "--no-launch"}
+	wantCommand := []string{
+		"/tmp/bin/zellij-agent", "role", "tab-watcher",
+		"--socket", "/tmp/agentd.sock",
+		"--cwd", cwd,
+		"--session", "chrome-debug",
+		"--role-bin", "/tmp/bin/zellij-agent",
+		"--port", "9333",
+		"--no-launch",
+	}
 	if strings.Join(gotCommand, "\x00") != strings.Join(wantCommand, "\x00") {
 		t.Fatalf("command = %#v, want %#v", gotCommand, wantCommand)
 	}
@@ -81,15 +89,49 @@ func TestRunSubmitsGeneratedPlan(t *testing.T) {
 		t.Fatalf("client socket=%q timeout=%s request=%q, want custom socket timeout request", client.socketPath, client.timeout, client.requestID)
 	}
 	if client.payload.Session != "chrome-debug" || len(client.payload.Tabs) != 1 || len(client.payload.Tabs[0].Panes) != 1 {
-		t.Fatalf("payload = %#v, want one chrome tab-network pane", client.payload)
+		t.Fatalf("payload = %#v, want one chrome tab-watcher pane", client.payload)
 	}
 	firstLine, _, _ := strings.Cut(stdout.String(), "\n")
 	if !strings.Contains(firstLine, "request=req_chrome-debug session=chrome-debug") ||
 		!strings.Contains(firstLine, "layout=single-tab") ||
 		!strings.Contains(firstLine, "tabs=1") ||
 		!strings.Contains(firstLine, "panes=1") ||
-		!strings.Contains(stdout.String(), "- chrome-tab-network-20260708-123456-123456789 role=tab-network") {
+		!strings.Contains(stdout.String(), "- chrome-tab-watcher-20260708-123456-123456789 role=tab-watcher") {
 		t.Fatalf("stdout = %q, want chrome summary", stdout.String())
+	}
+}
+
+func TestRunNoWatchDryRunPrintsTabNetworkPlan(t *testing.T) {
+	cwd := t.TempDir()
+	client := &fakeAgentClient{}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"--cwd", cwd,
+		"--session", "chrome-debug",
+		"--dry-run",
+		"--no-watch",
+		"--", "--port", "9333", "--no-launch",
+	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client), Config{
+		DefaultRoleCommand: []string{"/tmp/bin/zellij-agent", "role"},
+		Now:                fixedNow,
+	})
+
+	if code != 0 {
+		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	var envelope transport.RequestEnvelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatalf("dry-run JSON decode error = %v; output=%q", err, stdout.String())
+	}
+	var payload transport.ExecutionPlanPayload
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		t.Fatalf("payload decode error = %v", err)
+	}
+	pane := payload.Tabs[0].Panes[0]
+	wantCommand := []string{"/tmp/bin/zellij-agent", "role", "tab-network", "--port", "9333", "--no-launch"}
+	if strings.Join(pane.Command, "\x00") != strings.Join(wantCommand, "\x00") || pane.Role != "tab-network" {
+		t.Fatalf("pane = %#v, want no-watch tab-network command", pane)
 	}
 }
 
@@ -106,7 +148,8 @@ func TestRunHelpPrintsUsageToStdout(t *testing.T) {
 			if !strings.Contains(stdout.String(), "Usage: zellij-agent chrome") ||
 				!strings.Contains(stdout.String(), "--socket") ||
 				!strings.Contains(stdout.String(), "--dry-run") ||
-				!strings.Contains(stdout.String(), "-- tab-network options") {
+				!strings.Contains(stdout.String(), "--no-watch") ||
+				!strings.Contains(stdout.String(), "-- Chrome watcher options") {
 				t.Fatalf("stdout = %q, want chrome usage with common options", stdout.String())
 			}
 			if stderr.Len() != 0 {

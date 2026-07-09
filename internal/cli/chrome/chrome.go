@@ -43,6 +43,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 	cwdFlag := fs.String("cwd", "", "working directory for the tab-network pane")
 	session := fs.String("session", "", "execution session/task id override")
 	dryRun := fs.Bool("dry-run", false, "print the /v1/requests envelope without submitting it")
+	noWatch := fs.Bool("no-watch", false, "start one tab-network pane instead of watching new Chrome tabs")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -56,8 +57,10 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 	payload, err := chrome.BuildPlan(chrome.PlanRequest{
 		CWD:            cwd,
 		Session:        *session,
+		SocketPath:     *socketPath,
 		RoleCommand:    cfg.DefaultRoleCommand,
 		TabNetworkArgs: fs.Args(),
+		NoWatch:        *noWatch,
 		Now:            cfg.Now,
 	})
 	if err != nil {
@@ -103,7 +106,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: zellij-agent chrome [options] [-- tab-network options]")
+	fmt.Fprintln(w, "Usage: zellij-agent chrome [options] [-- Chrome watcher options]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Options:")
 	fmt.Fprintf(w, "  --socket string\n    \tagentd Unix socket path (default %q)\n", cli.DefaultSocketPath)
@@ -115,10 +118,13 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "    \texecution session/task id override")
 	fmt.Fprintln(w, "  --dry-run")
 	fmt.Fprintln(w, "    \tprint the /v1/requests envelope without submitting it")
+	fmt.Fprintln(w, "  --no-watch")
+	fmt.Fprintln(w, "    \tstart one tab-network pane instead of watching new Chrome tabs")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Examples:")
 	fmt.Fprintln(w, "  zellij-agent chrome")
 	fmt.Fprintln(w, "  zellij-agent chrome -- --port 9333 --no-launch")
+	fmt.Fprintln(w, "  zellij-agent chrome --no-watch -- --port 9333 --no-launch")
 }
 
 func resolveCWD(value string) (string, error) {

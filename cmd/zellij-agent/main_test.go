@@ -56,8 +56,11 @@ func TestRunDispatchesChromeDryRun(t *testing.T) {
 		t.Fatalf("payload = %#v, want chrome-debug single chrome tab", payload)
 	}
 	pane := payload.Tabs[0].Panes[0]
-	if pane.Role != "tab-network" || len(pane.Command) != 5 || pane.Command[1] != "role" || pane.Command[2] != "tab-network" || pane.Command[3] != "--port" || pane.Command[4] != "9333" {
-		t.Fatalf("pane = %#v, want tab-network command with passthrough port", pane)
+	if pane.Role != "tab-watcher" || len(pane.Command) < 4 || pane.Command[1] != "role" || pane.Command[2] != "tab-watcher" {
+		t.Fatalf("pane = %#v, want tab-watcher command", pane)
+	}
+	if !containsAdjacent(pane.Command, "--port", "9333") {
+		t.Fatalf("command = %#v, want passthrough port", pane.Command)
 	}
 	if _, err := os.Stat(pane.Command[0]); err != nil {
 		t.Fatalf("chrome command executable = %q is not stat-able: %v", pane.Command[0], err)
@@ -184,6 +187,15 @@ func TestRunRejectsUnknownGroup(t *testing.T) {
 	if !strings.Contains(stderr.String(), "unknown command group: unknown") {
 		t.Fatalf("stderr = %q, want unknown group", stderr.String())
 	}
+}
+
+func containsAdjacent(values []string, key, value string) bool {
+	for i := 0; i+1 < len(values); i++ {
+		if values[i] == key && values[i+1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 type zellijAgentBackgroundRunner struct {
