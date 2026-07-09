@@ -61,3 +61,9 @@ func TestRunDispatchesTabNetworkValidation(t *testing.T) {
 		t.Fatalf("Run(tab-network --port 0) = %d, want non-zero", code)
 	}
 }
+
+func TestRunDispatchesTabWatcherValidation(t *testing.T) {
+	if code := Run([]string{"tab-watcher", "--port", "0"}); code == 0 {
+		t.Fatalf("Run(tab-watcher --port 0) = %d, want non-zero", code)
+	}
+}

@@ -20,6 +20,7 @@ const (
 	RoleNetworkTracker    = "network-tracker"
 	RoleConsoleTracker    = "console-tracker"
 	RoleTabNetwork        = "tab-network"
+	RoleTabWatcher        = "tab-watcher"
 	RoleCodingAgent       = "coding-agent"
 	RoleDebateCoordinator = "debate-coordinator"
 )
@@ -78,6 +79,22 @@ var specs = []RoleSpec{
 			{Name: "--filter-url", Required: false, Description: "Show only requests whose URL contains this text."},
 			{Name: "--method", Required: false, Description: "Show only requests with this HTTP method."},
 			{Name: "--list", Required: false, Description: "List attachable page targets and exit."},
+		},
+	},
+	{
+		Name:        RoleTabWatcher,
+		Usage:       "tab-watcher [options]",
+		Description: "Watches Chrome tabs and starts tab-network panes for newly opened tabs.",
+		Arguments: []ArgumentSpec{
+			{Name: "--port", Required: false, Description: "Chrome remote debugging port. Defaults to 9222."},
+			{Name: "--socket", Required: false, Description: "agentd Unix socket path."},
+			{Name: "--cwd", Required: false, Description: "Working directory for generated tab-network panes."},
+			{Name: "--session", Required: false, Description: "Execution session/task id for generated tab panes."},
+			{Name: "--role-bin", Required: false, Description: "Executable used to run zellij-agent roles."},
+			{Name: "--chrome-path", Required: false, Description: "Chrome executable path."},
+			{Name: "--user-data-dir", Required: false, Description: "Chrome profile directory used when launching Chrome."},
+			{Name: "--no-launch", Required: false, Description: "Attach to an already running Chrome debug port."},
+			{Name: "--poll-interval", Required: false, Description: "Chrome target polling interval."},
 		},
 	},
 	{

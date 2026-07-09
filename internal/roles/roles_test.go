@@ -46,6 +46,34 @@ func TestLookupTabNetwork(t *testing.T) {
 	}
 }
 
+func TestLookupTabWatcher(t *testing.T) {
+	spec, ok := Lookup(RoleTabWatcher)
+	if !ok {
+		t.Fatal("Lookup(RoleTabWatcher) ok = false, want true")
+	}
+	if spec.Name != "tab-watcher" {
+		t.Fatalf("name = %q, want tab-watcher", spec.Name)
+	}
+	if spec.Usage != "tab-watcher [options]" {
+		t.Fatalf("usage = %q, want tab-watcher [options]", spec.Usage)
+	}
+	want := []string{"--port", "--socket", "--cwd", "--session", "--role-bin", "--chrome-path", "--user-data-dir", "--no-launch", "--poll-interval"}
+	for _, name := range want {
+		if !hasArgument(spec.Arguments, name) {
+			t.Fatalf("arguments = %#v, missing %s", spec.Arguments, name)
+		}
+	}
+}
+
+func hasArgument(args []ArgumentSpec, name string) bool {
+	for _, arg := range args {
+		if arg.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAllReturnsCopy(t *testing.T) {
 	first := All()
 	first[0].Name = "mutated"
