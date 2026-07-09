@@ -104,7 +104,7 @@ func TestSelectTargetRejectsNoPageTargets(t *testing.T) {
 
 func TestSelectOrCreateTargetCreatesAboutBlankWhenNoPageTargets(t *testing.T) {
 	var called bool
-	got, err := selectOrCreateTarget(context.Background(), []PageTarget{{ID: "worker", Type: "service_worker"}}, "", func(context.Context) (PageTarget, error) {
+	got, err := selectOrCreateTarget(context.Background(), []PageTarget{{ID: "worker", Type: "service_worker"}}, "", nil, func(context.Context) (PageTarget, error) {
 		called = true
 		return PageTarget{ID: "created", Type: "page", URL: "about:blank"}, nil
 	})
@@ -119,8 +119,36 @@ func TestSelectOrCreateTargetCreatesAboutBlankWhenNoPageTargets(t *testing.T) {
 	}
 }
 
+func TestSelectOrCreateTargetWaitsForLaunchPageBeforeCreating(t *testing.T) {
+	var createCalled bool
+	got, err := selectOrCreateTarget(
+		context.Background(),
+		[]PageTarget{{ID: "worker", Type: "service_worker"}},
+		"",
+		func(context.Context) (PageTarget, bool, error) {
+			return PageTarget{ID: "launch-page", Type: "page", URL: "about:blank"}, true, nil
+		},
+		func(context.Context) (PageTarget, error) {
+			createCalled = true
+			return PageTarget{ID: "created", Type: "page", URL: "about:blank"}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("selectOrCreateTarget() error = %v", err)
+	}
+	if createCalled {
+		t.Fatal("target creator was called, want launched page target to be reused")
+	}
+	if got.ID != "launch-page" {
+		t.Fatalf("selected target ID = %q, want launch-page", got.ID)
+	}
+}
+
 func TestSelectOrCreateTargetDoesNotCreateForExplicitMissingTarget(t *testing.T) {
-	_, err := selectOrCreateTarget(context.Background(), []PageTarget{{ID: "worker", Type: "service_worker"}}, "missing", func(context.Context) (PageTarget, error) {
+	_, err := selectOrCreateTarget(context.Background(), []PageTarget{{ID: "worker", Type: "service_worker"}}, "missing", func(context.Context) (PageTarget, bool, error) {
+		t.Fatal("target waiter should not be called for explicit target-id")
+		return PageTarget{}, false, nil
+	}, func(context.Context) (PageTarget, error) {
 		t.Fatal("target creator should not be called for explicit target-id")
 		return PageTarget{}, nil
 	})

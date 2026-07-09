@@ -154,9 +154,19 @@ func runTracker(ctx context.Context, opts trackerConfig, stdin io.Reader, stdout
 		return nil
 	}
 
-	target, err := selectOrCreateTarget(ctx, targets, opts.TargetID, func(ctx context.Context) (PageTarget, error) {
-		return createPageTarget(ctx, opts.Port)
-	})
+	target, err := selectOrCreateTarget(
+		ctx,
+		targets,
+		opts.TargetID,
+		func(ctx context.Context) (PageTarget, bool, error) {
+			return waitForFirstPageTarget(ctx, func(context.Context) ([]PageTarget, error) {
+				return pageTargets(browserCtx)
+			}, 2*time.Second, 100*time.Millisecond)
+		},
+		func(ctx context.Context) (PageTarget, error) {
+			return createPageTarget(ctx, opts.Port)
+		},
+	)
 	if err != nil {
 		return err
 	}
@@ -179,6 +189,7 @@ func runTracker(ctx context.Context, opts trackerConfig, stdin io.Reader, stdout
 }
 
 type pageTargetCreator func(context.Context) (PageTarget, error)
+type pageTargetWaiter func(context.Context) (PageTarget, bool, error)
 
 func selectTarget(targets []PageTarget, targetID string) (PageTarget, error) {
 	if targetID != "" {
@@ -198,12 +209,21 @@ func selectTarget(targets []PageTarget, targetID string) (PageTarget, error) {
 	return PageTarget{}, errors.New("no attachable Chrome page targets found")
 }
 
-func selectOrCreateTarget(ctx context.Context, targets []PageTarget, targetID string, create pageTargetCreator) (PageTarget, error) {
+func selectOrCreateTarget(ctx context.Context, targets []PageTarget, targetID string, wait pageTargetWaiter, create pageTargetCreator) (PageTarget, error) {
 	if targetID != "" {
 		return selectTarget(targets, targetID)
 	}
 	for _, target := range targets {
 		if target.Type == "page" {
+			return target, nil
+		}
+	}
+	if wait != nil {
+		target, ok, err := wait(ctx)
+		if err != nil {
+			return PageTarget{}, err
+		}
+		if ok {
 			return target, nil
 		}
 	}
@@ -224,6 +244,42 @@ func selectOrCreateTarget(ctx context.Context, targets []PageTarget, targetID st
 		target.URL = "about:blank"
 	}
 	return target, nil
+}
+
+func waitForFirstPageTarget(ctx context.Context, list func(context.Context) ([]PageTarget, error), timeout time.Duration, interval time.Duration) (PageTarget, bool, error) {
+	if list == nil {
+		return PageTarget{}, false, nil
+	}
+	if interval <= 0 {
+		interval = 100 * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	for {
+		targets, err := list(ctx)
+		if err != nil {
+			return PageTarget{}, false, err
+		}
+		for _, target := range targets {
+			if target.Type == "page" {
+				return target, true, nil
+			}
+		}
+
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return PageTarget{}, false, nil
+			}
+			return PageTarget{}, false, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func targetStillOpen(targets []PageTarget, targetID string) (PageTarget, bool) {
