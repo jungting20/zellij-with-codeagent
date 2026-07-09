@@ -106,7 +106,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: zellij-agent chrome [options] [-- Chrome watcher options]")
+	fmt.Fprintln(w, "Usage: zellij-agent chrome [options] [-- tab-network options]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Options:")
 	fmt.Fprintf(w, "  --socket string\n    \tagentd Unix socket path (default %q)\n", cli.DefaultSocketPath)

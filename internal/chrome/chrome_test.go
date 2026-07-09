@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestBuildPlanCreatesChromeTabWatcherPaneByDefault(t *testing.T) {
+func TestBuildPlanCreatesChromeTabNetworkSupervisorPaneByDefault(t *testing.T) {
 	now := time.Date(2026, 7, 8, 12, 34, 56, 123456789, time.UTC)
 
 	payload, err := BuildPlan(PlanRequest{
@@ -34,18 +34,18 @@ func TestBuildPlanCreatesChromeTabWatcherPaneByDefault(t *testing.T) {
 		t.Fatalf("len(Panes) = %d, want 1", len(tab.Panes))
 	}
 	pane := tab.Panes[0]
-	if pane.ID != "chrome-tab-watcher-20260708-123456-123456789" {
-		t.Fatalf("pane.ID = %q, want timestamped chrome tab-watcher id", pane.ID)
+	if pane.ID != "chrome-tab-network-20260708-123456-123456789" {
+		t.Fatalf("pane.ID = %q, want timestamped chrome tab-network id", pane.ID)
 	}
-	if pane.Role != "tab-watcher" || pane.CWD != "/repo" {
-		t.Fatalf("pane role/cwd = %q/%q, want tab-watcher /repo", pane.Role, pane.CWD)
+	if pane.Role != "tab-network" || pane.CWD != "/repo" {
+		t.Fatalf("pane role/cwd = %q/%q, want tab-network /repo", pane.Role, pane.CWD)
 	}
 	wantCommand := []string{
-		"/tmp/bin/zellij-agent", "role", "tab-watcher",
+		"/tmp/bin/zellij-agent", "role", "tab-network",
 		"--socket", "/tmp/agentd.sock",
-		"--cwd", "/repo",
 		"--session", "chrome-debug",
 		"--role-bin", "/tmp/bin/zellij-agent",
+		"--spawn-on-new-tab",
 	}
 	if !reflect.DeepEqual(pane.Command, wantCommand) {
 		t.Fatalf("pane.Command = %#v, want %#v", pane.Command, wantCommand)
@@ -81,7 +81,7 @@ func TestBuildPlanNoWatchCreatesChromeTabNetworkPane(t *testing.T) {
 	}
 }
 
-func TestBuildPlanPassesWatcherChromeArgs(t *testing.T) {
+func TestBuildPlanPassesSupervisorChromeArgs(t *testing.T) {
 	now := time.Date(2026, 7, 8, 12, 34, 56, 123456789, time.UTC)
 
 	payload, err := BuildPlan(PlanRequest{
@@ -98,11 +98,11 @@ func TestBuildPlanPassesWatcherChromeArgs(t *testing.T) {
 
 	got := payload.Tabs[0].Panes[0].Command
 	want := []string{
-		"zellij-agent", "role", "tab-watcher",
+		"zellij-agent", "role", "tab-network",
 		"--socket", "/tmp/agentd.sock",
-		"--cwd", "/repo",
 		"--session", "chrome-debug",
 		"--role-bin", "zellij-agent",
+		"--spawn-on-new-tab",
 		"--port", "9333",
 		"--no-launch",
 	}

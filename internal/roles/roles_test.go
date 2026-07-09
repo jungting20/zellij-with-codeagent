@@ -41,8 +41,11 @@ func TestLookupTabNetwork(t *testing.T) {
 	if spec.Usage != "tab-network [options]" {
 		t.Fatalf("usage = %q, want tab-network [options]", spec.Usage)
 	}
-	if len(spec.Arguments) == 0 {
-		t.Fatal("arguments is empty, want documented options")
+	want := []string{"--socket", "--role-bin", "--session", "--spawn-on-new-tab", "--no-spawn-on-new-tab"}
+	for _, name := range want {
+		if !hasArgument(spec.Arguments, name) {
+			t.Fatalf("arguments = %#v, missing %s", spec.Arguments, name)
+		}
 	}
 }
 

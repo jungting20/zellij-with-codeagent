@@ -56,11 +56,14 @@ func TestRunDispatchesChromeDryRun(t *testing.T) {
 		t.Fatalf("payload = %#v, want chrome-debug single chrome tab", payload)
 	}
 	pane := payload.Tabs[0].Panes[0]
-	if pane.Role != "tab-watcher" || len(pane.Command) < 4 || pane.Command[1] != "role" || pane.Command[2] != "tab-watcher" {
-		t.Fatalf("pane = %#v, want tab-watcher command", pane)
+	if pane.Role != "tab-network" || len(pane.Command) < 4 || pane.Command[1] != "role" || pane.Command[2] != "tab-network" {
+		t.Fatalf("pane = %#v, want tab-network command", pane)
 	}
 	if !containsAdjacent(pane.Command, "--port", "9333") {
 		t.Fatalf("command = %#v, want passthrough port", pane.Command)
+	}
+	if !containsValue(pane.Command, "--spawn-on-new-tab") {
+		t.Fatalf("command = %#v, want spawn-on-new-tab", pane.Command)
 	}
 	if _, err := os.Stat(pane.Command[0]); err != nil {
 		t.Fatalf("chrome command executable = %q is not stat-able: %v", pane.Command[0], err)
@@ -192,6 +195,15 @@ func TestRunRejectsUnknownGroup(t *testing.T) {
 func containsAdjacent(values []string, key, value string) bool {
 	for i := 0; i+1 < len(values); i++ {
 		if values[i] == key && values[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func containsValue(values []string, value string) bool {
+	for _, got := range values {
+		if got == value {
 			return true
 		}
 	}

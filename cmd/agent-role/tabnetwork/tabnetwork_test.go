@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -15,6 +16,8 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
+
+	"zellij-with-codeagent/internal/transport"
 )
 
 func TestParseOptionsDefaults(t *testing.T) {
@@ -51,6 +54,136 @@ func TestParseOptionsAcceptsFiltersAndNoLaunch(t *testing.T) {
 	}
 }
 
+func TestParseOptionsAcceptsSpawnOptions(t *testing.T) {
+	opts, err := parseOptions([]string{
+		"--port", "9333",
+		"--socket", "/tmp/custom.sock",
+		"--role-bin", "/tmp/bin/zellij-agent",
+		"--session", "chrome-task",
+		"--spawn-on-new-tab",
+	})
+	if err != nil {
+		t.Fatalf("parseOptions() error = %v", err)
+	}
+
+	if opts.SocketPath != "/tmp/custom.sock" || opts.RoleBin != "/tmp/bin/zellij-agent" || opts.Session != "chrome-task" || !opts.SpawnOnNewTab {
+		t.Fatalf("options = %#v, want spawn options", opts)
+	}
+
+	opts, err = parseOptions([]string{"--spawn-on-new-tab", "--no-spawn-on-new-tab"})
+	if err != nil {
+		t.Fatalf("parseOptions() second error = %v", err)
+	}
+	if opts.SpawnOnNewTab {
+		t.Fatalf("SpawnOnNewTab = true, want false after --no-spawn-on-new-tab")
+	}
+}
+
+func TestBuildChildPaneRequestTargetsParentZellijTab(t *testing.T) {
+	tabID := 7
+	cfg := trackerConfig{
+		Port:        9333,
+		RoleBin:     "/tmp/bin/zellij-agent",
+		Session:     "chrome-task",
+		UserDataDir: defaultUserDataDir,
+	}
+
+	req := buildChildPaneRequest(cfg, PageTarget{ID: "ABCDEF1234567890", Type: "page"}, tabID, "/repo")
+
+	if req.ID != "chrome-tab-network-ABCDEF123456" || req.Role != "tab-network" || req.TaskID != "chrome-task" || req.CWD != "/repo" {
+		t.Fatalf("request = %#v, want child tab-network pane request", req)
+	}
+	if req.ZellijTabID == nil || *req.ZellijTabID != tabID {
+		t.Fatalf("ZellijTabID = %v, want %d", req.ZellijTabID, tabID)
+	}
+	wantCommand := []string{"/tmp/bin/zellij-agent", "role", "tab-network", "--port", "9333", "--no-launch", "--target-id", "ABCDEF1234567890", "--no-spawn-on-new-tab"}
+	if !reflect.DeepEqual(req.Command, wantCommand) {
+		t.Fatalf("command = %#v, want %#v", req.Command, wantCommand)
+	}
+}
+
+func TestResolveOwnManagedPaneFindsZellijTab(t *testing.T) {
+	client := &fakePaneClient{runtime: transport.InspectRuntimeResponse{
+		Panes: []transport.Pane{
+			{ID: "other", ZellijPaneID: "terminal_1"},
+			{ID: "parent", ZellijPaneID: "terminal_42", ZellijTabID: intPtr(9), CWD: "/repo"},
+		},
+	}}
+
+	pane, err := resolveOwnManagedPane(context.Background(), client, "terminal_42")
+	if err != nil {
+		t.Fatalf("resolveOwnManagedPane() error = %v", err)
+	}
+	if pane.ID != "parent" || pane.ZellijTabID == nil || *pane.ZellijTabID != 9 || pane.CWD != "/repo" {
+		t.Fatalf("pane = %#v, want parent pane with tab metadata", pane)
+	}
+}
+
+func TestResolveOwnManagedPaneNormalizesNumericZellijPaneID(t *testing.T) {
+	client := &fakePaneClient{runtime: transport.InspectRuntimeResponse{
+		Panes: []transport.Pane{{ID: "parent", ZellijPaneID: "terminal_42", ZellijTabID: intPtr(9)}},
+	}}
+
+	pane, err := resolveOwnManagedPane(context.Background(), client, "42")
+	if err != nil {
+		t.Fatalf("resolveOwnManagedPane() error = %v", err)
+	}
+	if pane.ID != "parent" {
+		t.Fatalf("pane.ID = %q, want parent", pane.ID)
+	}
+}
+
+func TestResolveOwnManagedPaneRejectsMissingTabID(t *testing.T) {
+	client := &fakePaneClient{runtime: transport.InspectRuntimeResponse{
+		Panes: []transport.Pane{{ID: "parent", ZellijPaneID: "terminal_42"}},
+	}}
+
+	_, err := resolveOwnManagedPane(context.Background(), client, "terminal_42")
+	if err == nil || !strings.Contains(err.Error(), "missing zellij tab id") {
+		t.Fatalf("resolveOwnManagedPane() error = %v, want missing tab id", err)
+	}
+}
+
+func TestWaitForOwnManagedPaneRetriesUntilPaneIsRegistered(t *testing.T) {
+	client := &fakePaneClient{runtimeResponses: []transport.InspectRuntimeResponse{
+		{},
+		{Panes: []transport.Pane{{ID: "parent", ZellijPaneID: "terminal_42", ZellijTabID: intPtr(9)}}},
+	}}
+
+	pane, err := waitForOwnManagedPane(context.Background(), client, "42", time.Second, time.Millisecond)
+	if err != nil {
+		t.Fatalf("waitForOwnManagedPane() error = %v", err)
+	}
+	if pane.ID != "parent" || client.inspectCalls != 2 {
+		t.Fatalf("pane = %#v inspectCalls = %d, want parent after retry", pane, client.inspectCalls)
+	}
+}
+
+func TestTargetPaneSpawnerBaselinesAndCreatesOnlyNewPageTargets(t *testing.T) {
+	client := &fakePaneClient{}
+	spawner := newTargetPaneSpawner(trackerConfig{
+		Port:    9333,
+		RoleBin: "/tmp/bin/zellij-agent",
+		Session: "chrome-task",
+	}, client, 9, "/repo", io.Discard, io.Discard)
+
+	spawner.MarkBaseline([]PageTarget{{ID: "existing", Type: "page"}})
+	spawner.ProcessTargets(context.Background(), []PageTarget{
+		{ID: "existing", Type: "page"},
+		{ID: "worker", Type: "service_worker"},
+		{ID: "new-target-123456", Type: "page"},
+		{ID: "new-target-123456", Type: "page"},
+	})
+
+	if len(client.createRequests) != 1 {
+		t.Fatalf("create requests = %#v, want exactly one child pane", client.createRequests)
+	}
+	req := client.createRequests[0]
+	if req.ID != "chrome-tab-network-new-target-1" || req.ZellijTabID == nil || *req.ZellijTabID != 9 {
+		t.Fatalf("request = %#v, want new target in parent tab", req)
+	}
+}
+
 func TestSelectTargetUsesExplicitTargetID(t *testing.T) {
 	targets := []PageTarget{
 		{ID: "other", Type: "page", URL: "https://example.com/other"},
@@ -64,6 +197,36 @@ func TestSelectTargetUsesExplicitTargetID(t *testing.T) {
 	if got.ID != "wanted" {
 		t.Fatalf("selected target ID = %q, want wanted", got.ID)
 	}
+}
+
+func intPtr(v int) *int {
+	return &v
+}
+
+type fakePaneClient struct {
+	runtime          transport.InspectRuntimeResponse
+	runtimeResponses []transport.InspectRuntimeResponse
+	inspectCalls     int
+	createRequests   []transport.CreatePaneRequest
+	createErr        error
+}
+
+func (f *fakePaneClient) InspectRuntime(context.Context) (transport.InspectRuntimeResponse, error) {
+	f.inspectCalls++
+	if len(f.runtimeResponses) > 0 {
+		response := f.runtimeResponses[0]
+		f.runtimeResponses = f.runtimeResponses[1:]
+		return response, nil
+	}
+	return f.runtime, nil
+}
+
+func (f *fakePaneClient) CreatePane(_ context.Context, req transport.CreatePaneRequest) (transport.CreatePaneResponse, error) {
+	f.createRequests = append(f.createRequests, req)
+	if f.createErr != nil {
+		return transport.CreatePaneResponse{}, f.createErr
+	}
+	return transport.CreatePaneResponse{Pane: transport.Pane{ID: req.ID}}, nil
 }
 
 func TestSelectTargetRejectsMissingExplicitTargetID(t *testing.T) {
@@ -178,6 +341,34 @@ func TestCreatePageTargetSendsPutAndParsesResponse(t *testing.T) {
 	}
 	if got.ID != "created" || got.Type != "page" || got.URL != "about:blank" {
 		t.Fatalf("created target = %#v, want parsed page target", got)
+	}
+}
+
+func TestPageTargetsFromChromeJSONList(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("request method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/json/list" {
+			t.Fatalf("request path = %s, want /json/list", r.URL.Path)
+		}
+		fmt.Fprint(w, `[
+			{"id":"page-1","type":"page","title":"New Tab","url":"about:blank"},
+			{"id":"worker-1","type":"service_worker","title":"Worker","url":"chrome-extension://worker"}
+		]`)
+	}))
+	defer server.Close()
+
+	got, err := pageTargetsFrom(context.Background(), server.URL, server.Client())
+	if err != nil {
+		t.Fatalf("pageTargetsFrom() error = %v", err)
+	}
+	want := []PageTarget{
+		{ID: "page-1", Type: "page", Title: "New Tab", URL: "about:blank"},
+		{ID: "worker-1", Type: "service_worker", Title: "Worker", URL: "chrome-extension://worker"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("targets = %#v, want %#v", got, want)
 	}
 }
 

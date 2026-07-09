@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -25,6 +26,9 @@ import (
 	"github.com/chromedp/cdproto/page"
 	cdptarget "github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
+
+	"zellij-with-codeagent/internal/cli"
+	"zellij-with-codeagent/internal/transport"
 )
 
 const defaultUserDataDir = "/tmp/chrome-debug-network-tracker"
@@ -42,13 +46,17 @@ type RequestFilter struct {
 }
 
 type trackerConfig struct {
-	Port         int
-	ChromePath   string
-	UserDataDir  string
-	LaunchChrome bool
-	TargetID     string
-	Filter       RequestFilter
-	ListTargets  bool
+	Port          int
+	ChromePath    string
+	UserDataDir   string
+	LaunchChrome  bool
+	TargetID      string
+	Filter        RequestFilter
+	ListTargets   bool
+	SocketPath    string
+	RoleBin       string
+	Session       string
+	SpawnOnNewTab bool
 }
 
 type requestSnapshot struct {
@@ -92,6 +100,9 @@ func parseOptionsWithOutput(args []string, output io.Writer) (trackerConfig, err
 		Port:         9222,
 		UserDataDir:  defaultUserDataDir,
 		LaunchChrome: true,
+		SocketPath:   cli.DefaultSocketPath,
+		RoleBin:      "zellij-agent",
+		Session:      "chrome",
 	}
 	fs := flag.NewFlagSet("tab-network", flag.ContinueOnError)
 	fs.SetOutput(output)
@@ -103,6 +114,11 @@ func parseOptionsWithOutput(args []string, output io.Writer) (trackerConfig, err
 	fs.StringVar(&opts.Filter.URLContains, "filter-url", "", "show only requests/responses whose URL contains this text")
 	fs.StringVar(&opts.Filter.Method, "method", "", "show only requests with this HTTP method")
 	fs.BoolVar(&opts.ListTargets, "list", false, "list attachable page targets and exit")
+	fs.StringVar(&opts.SocketPath, "socket", opts.SocketPath, "agentd Unix socket path")
+	fs.StringVar(&opts.RoleBin, "role-bin", opts.RoleBin, "executable used to run zellij-agent roles")
+	fs.StringVar(&opts.Session, "session", opts.Session, "execution session/task id for generated tab panes")
+	fs.BoolVar(&opts.SpawnOnNewTab, "spawn-on-new-tab", false, "request a daemon pane in the same Zellij tab when a new Chrome tab opens")
+	noSpawn := fs.Bool("no-spawn-on-new-tab", false, "disable daemon pane requests for newly opened Chrome tabs")
 
 	if err := fs.Parse(args); err != nil {
 		return trackerConfig{}, err
@@ -114,6 +130,9 @@ func parseOptionsWithOutput(args []string, output io.Writer) (trackerConfig, err
 		return trackerConfig{}, fmt.Errorf("--port must be between 1 and 65535")
 	}
 	opts.LaunchChrome = !*noLaunch
+	if *noSpawn {
+		opts.SpawnOnNewTab = false
+	}
 	opts.TargetID = strings.TrimSpace(opts.TargetID)
 	opts.Filter.Method = strings.ToUpper(strings.TrimSpace(opts.Filter.Method))
 	return opts, nil
@@ -138,10 +157,8 @@ func runTracker(ctx context.Context, opts trackerConfig, stdin io.Reader, stdout
 	allocatorURL := fmt.Sprintf("http://127.0.0.1:%d", opts.Port)
 	allocatorCtx, cancelAllocator := chromedp.NewRemoteAllocator(ctx, allocatorURL)
 	defer cancelAllocator()
-	browserCtx, cancelBrowser := chromedp.NewContext(allocatorCtx)
-	defer cancelBrowser()
 
-	targets, err := pageTargets(browserCtx)
+	targets, err := pageTargets(ctx, opts.Port)
 	if err != nil {
 		return err
 	}
@@ -160,7 +177,7 @@ func runTracker(ctx context.Context, opts trackerConfig, stdin io.Reader, stdout
 		opts.TargetID,
 		func(ctx context.Context) (PageTarget, bool, error) {
 			return waitForFirstPageTarget(ctx, func(context.Context) ([]PageTarget, error) {
-				return pageTargets(browserCtx)
+				return pageTargets(ctx, opts.Port)
 			}, 2*time.Second, 100*time.Millisecond)
 		},
 		func(ctx context.Context) (PageTarget, error) {
@@ -173,7 +190,10 @@ func runTracker(ctx context.Context, opts trackerConfig, stdin io.Reader, stdout
 	opts.TargetID = target.ID
 
 	events := make(chan any, 128)
-	go collectTarget(ctx, browserCtx, allocatorCtx, target, opts.Filter, events, stderr)
+	go collectTarget(ctx, opts.Port, allocatorCtx, target, opts.Filter, events, stderr)
+	if opts.SpawnOnNewTab {
+		startTargetPaneSpawner(ctx, opts, stdout, stderr)
+	}
 
 	model := newTrackerModel(opts)
 	model.events = events
@@ -322,7 +342,7 @@ func createPageTargetAt(ctx context.Context, baseURL string, targetURL string, c
 	return target, nil
 }
 
-func collectTarget(ctx context.Context, browserCtx context.Context, allocatorCtx context.Context, target PageTarget, filter RequestFilter, out chan<- any, stderr io.Writer) {
+func collectTarget(ctx context.Context, port int, allocatorCtx context.Context, target PageTarget, filter RequestFilter, out chan<- any, stderr io.Writer) {
 	trackCtx, cancelTrack := context.WithCancel(ctx)
 	defer cancelTrack()
 
@@ -336,7 +356,7 @@ func collectTarget(ctx context.Context, browserCtx context.Context, allocatorCtx
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			targets, err := pageTargets(browserCtx)
+			targets, err := pageTargets(ctx, port)
 			if err != nil {
 				if ctx.Err() == nil {
 					fmt.Fprintf(stderr, "target scan failed: %v\n", err)
@@ -356,6 +376,206 @@ func collectTarget(ctx context.Context, browserCtx context.Context, allocatorCtx
 			}
 		}
 	}
+}
+
+type paneClient interface {
+	InspectRuntime(context.Context) (transport.InspectRuntimeResponse, error)
+	CreatePane(context.Context, transport.CreatePaneRequest) (transport.CreatePaneResponse, error)
+}
+
+type targetPaneSpawner struct {
+	config trackerConfig
+	client paneClient
+	tabID  int
+	cwd    string
+	stdout io.Writer
+	stderr io.Writer
+	seen   map[string]struct{}
+}
+
+func newTargetPaneSpawner(config trackerConfig, client paneClient, tabID int, cwd string, stdout, stderr io.Writer) *targetPaneSpawner {
+	return &targetPaneSpawner{
+		config: config,
+		client: client,
+		tabID:  tabID,
+		cwd:    cwd,
+		stdout: stdout,
+		stderr: stderr,
+		seen:   map[string]struct{}{},
+	}
+}
+
+func (s *targetPaneSpawner) MarkBaseline(targets []PageTarget) {
+	count := 0
+	for _, target := range targets {
+		if target.Type != "page" || strings.TrimSpace(target.ID) == "" {
+			continue
+		}
+		s.seen[target.ID] = struct{}{}
+		count++
+	}
+	fmt.Fprintf(s.stdout, "spawn baseline page-targets=%d\n", count)
+}
+
+func (s *targetPaneSpawner) ProcessTargets(ctx context.Context, targets []PageTarget) {
+	for _, target := range targets {
+		if target.Type != "page" || strings.TrimSpace(target.ID) == "" {
+			continue
+		}
+		if _, ok := s.seen[target.ID]; ok {
+			continue
+		}
+		s.seen[target.ID] = struct{}{}
+		req := buildChildPaneRequest(s.config, target, s.tabID, s.cwd)
+		if _, err := s.client.CreatePane(ctx, req); err != nil {
+			fmt.Fprintf(s.stderr, "spawn target=%s failed: %v\n", target.ID, err)
+			continue
+		}
+		fmt.Fprintf(s.stdout, "spawned target=%s pane=%s\n", target.ID, req.ID)
+	}
+}
+
+func startTargetPaneSpawner(ctx context.Context, opts trackerConfig, stdout, stderr io.Writer) {
+	zellijPaneID := os.Getenv("ZELLIJ_PANE_ID")
+	if strings.TrimSpace(zellijPaneID) == "" {
+		fmt.Fprintln(stderr, "spawn-on-new-tab disabled: ZELLIJ_PANE_ID is not set")
+		return
+	}
+
+	client := transport.NewClient(transport.ClientOptions{SocketPath: opts.SocketPath, Timeout: 10 * time.Second})
+	parent, err := waitForOwnManagedPane(ctx, client, zellijPaneID, 5*time.Second, 100*time.Millisecond)
+	if err != nil {
+		fmt.Fprintf(stderr, "spawn-on-new-tab disabled: %v\n", err)
+		return
+	}
+	if parent.ZellijTabID == nil {
+		fmt.Fprintln(stderr, "spawn-on-new-tab disabled: parent pane missing zellij tab id")
+		return
+	}
+	cwd := parent.CWD
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	spawner := newTargetPaneSpawner(opts, client, *parent.ZellijTabID, cwd, stdout, stderr)
+	targets, err := pageTargets(ctx, opts.Port)
+	if err != nil {
+		fmt.Fprintf(stderr, "spawn-on-new-tab disabled: initial target scan failed: %v\n", err)
+		return
+	}
+	spawner.MarkBaseline(targets)
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				targets, err := pageTargets(ctx, opts.Port)
+				if err != nil {
+					if ctx.Err() == nil {
+						fmt.Fprintf(stderr, "spawn target scan failed: %v\n", err)
+					}
+					continue
+				}
+				spawner.ProcessTargets(ctx, targets)
+			}
+		}
+	}()
+}
+
+func resolveOwnManagedPane(ctx context.Context, client paneClient, zellijPaneID string) (transport.Pane, error) {
+	response, err := client.InspectRuntime(ctx)
+	if err != nil {
+		return transport.Pane{}, err
+	}
+	zellijPaneID = normalizeZellijPaneID(zellijPaneID)
+	for _, pane := range response.Panes {
+		if pane.ZellijPaneID != zellijPaneID {
+			continue
+		}
+		if pane.ZellijTabID == nil {
+			return transport.Pane{}, fmt.Errorf("managed pane %s missing zellij tab id", pane.ID)
+		}
+		return pane, nil
+	}
+	return transport.Pane{}, fmt.Errorf("managed pane with zellij pane id %s not found", zellijPaneID)
+}
+
+func waitForOwnManagedPane(ctx context.Context, client paneClient, zellijPaneID string, timeout, interval time.Duration) (transport.Pane, error) {
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	if interval <= 0 {
+		interval = 100 * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var lastErr error
+	for {
+		pane, err := resolveOwnManagedPane(ctx, client, zellijPaneID)
+		if err == nil {
+			return pane, nil
+		}
+		lastErr = err
+
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			if lastErr != nil {
+				return transport.Pane{}, lastErr
+			}
+			return transport.Pane{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func normalizeZellijPaneID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" || strings.HasPrefix(id, "terminal_") || strings.HasPrefix(id, "plugin_") {
+		return id
+	}
+	if _, err := strconv.Atoi(id); err == nil {
+		return "terminal_" + id
+	}
+	return id
+}
+
+func buildChildPaneRequest(config trackerConfig, target PageTarget, tabID int, cwd string) transport.CreatePaneRequest {
+	shortID := shortTargetID(target.ID)
+	paneID := "chrome-tab-network-" + shortID
+	return transport.CreatePaneRequest{
+		ID:          paneID,
+		TaskID:      config.Session,
+		Role:        "tab-network",
+		Name:        paneID,
+		ZellijTabID: &tabID,
+		CWD:         cwd,
+		Command: []string{
+			config.RoleBin,
+			"role",
+			"tab-network",
+			"--port",
+			strconv.Itoa(config.Port),
+			"--no-launch",
+			"--target-id",
+			target.ID,
+			"--no-spawn-on-new-tab",
+		},
+	}
+}
+
+func shortTargetID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:12]
 }
 
 func (f RequestFilter) Include(method, url string) bool {
@@ -605,19 +825,33 @@ func headersToStrings(headers network.Headers) map[string]string {
 	return out
 }
 
-func pageTargets(ctx context.Context) ([]PageTarget, error) {
-	infos, err := chromedp.Targets(ctx)
+func pageTargets(ctx context.Context, port int) ([]PageTarget, error) {
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	client := &http.Client{Timeout: 2 * time.Second}
+	return pageTargetsFrom(ctx, baseURL, client)
+}
+
+func pageTargetsFrom(ctx context.Context, baseURL string, client *http.Client) ([]PageTarget, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	endpoint := strings.TrimRight(baseURL, "/") + "/json/list"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
-	targets := make([]PageTarget, 0, len(infos))
-	for _, info := range infos {
-		targets = append(targets, PageTarget{
-			ID:    string(info.TargetID),
-			Type:  info.Type,
-			Title: info.Title,
-			URL:   info.URL,
-		})
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("Chrome target list returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var targets []PageTarget
+	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
+		return nil, err
 	}
 	return targets, nil
 }

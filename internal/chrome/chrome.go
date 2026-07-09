@@ -37,22 +37,20 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 	}
 
 	roleCommand := normalizeRoleCommand(req.RoleCommand)
-	role := "tab-watcher"
-	idPrefix := "chrome-tab-watcher"
-	command := append(append([]string{}, roleCommand...), "tab-watcher")
-	if req.SocketPath != "" {
-		command = append(command, "--socket", req.SocketPath)
-	}
-	command = append(command,
-		"--cwd", cwd,
-		"--session", session,
-		"--role-bin", roleCommand[0],
-	)
-	command = append(command, req.TabNetworkArgs...)
+	role := "tab-network"
+	idPrefix := "chrome-tab-network"
+	command := append(append([]string{}, roleCommand...), "tab-network")
 	if req.NoWatch {
-		role = "tab-network"
-		idPrefix = "chrome-tab-network"
-		command = append(append([]string{}, roleCommand...), "tab-network")
+		command = append(command, req.TabNetworkArgs...)
+	} else {
+		if req.SocketPath != "" {
+			command = append(command, "--socket", req.SocketPath)
+		}
+		command = append(command,
+			"--session", session,
+			"--role-bin", roleCommand[0],
+			"--spawn-on-new-tab",
+		)
 		command = append(command, req.TabNetworkArgs...)
 	}
 
