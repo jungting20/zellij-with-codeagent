@@ -60,7 +60,11 @@ func (m Model) View() string {
 	} else {
 		lines = append(lines, m.statusView(width), truncate(m.footerText(), width))
 	}
-	return fitScreen(strings.Join(lines, "\n"), m.width, m.height)
+	base := fitScreen(strings.Join(lines, "\n"), m.width, m.height)
+	if overlay := m.overlayView(); overlay != "" {
+		return m.renderOverlay(base, overlay, width)
+	}
+	return base
 }
 
 func (m Model) headerView(width int) string {
@@ -266,6 +270,85 @@ func (m Model) footerText() string {
 		return "j/k scroll  h/l tab  pgup/pgdn page  g/G ends  tab focus  i input  ? help  q quit"
 	}
 	return "j/k move  enter toggle  tab focus  s snapshot  i input  x cleanup  ? help  q quit"
+}
+
+func (m Model) overlayView() string {
+	switch m.mode {
+	case "input":
+		return fmt.Sprintf("INPUT -> %s\n\n> %s\n\nEnter send  Esc cancel", m.inputPane, string(m.input))
+	case "confirm-cleanup":
+		return fmt.Sprintf(
+			"CLEAN UP TASK %s\n\nThis closes %d managed pane(s) in this task.\nOther tasks and unmanaged panes are not touched.\n\ny confirm  n/Esc cancel",
+			m.confirmTask,
+			m.taskPaneCount(m.confirmTask),
+		)
+	case "help":
+		return "DASHBOARD HELP\n\nTab focus panels\nj/k move or scroll\nh/l switch Output and Events\nPgUp/PgDn page  g/G ends\nEnter expand/collapse\ns snapshot  i input\nr reconcile  x cleanup  R refresh\n\n? / q / Esc close"
+	default:
+		return ""
+	}
+}
+
+func (m Model) renderOverlay(base, content string, width int) string {
+	height := m.height
+	if width < 8 || height < 5 {
+		return fitScreen(content, m.width, m.height)
+	}
+	modalWidth := width - 4
+	if modalWidth > 70 {
+		modalWidth = 70
+	}
+	innerWidth := modalWidth - 2
+	innerHeight := height - 4
+	if innerHeight < 1 {
+		innerHeight = 1
+	}
+	content = fitScreen(content, innerWidth, innerHeight)
+	color := lipgloss.Color("42")
+	if m.mode == "confirm-cleanup" {
+		color = lipgloss.Color("196")
+	}
+	modal := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(color).
+		Width(innerWidth).
+		Render(content)
+	return composeOverlay(base, modal, width, height)
+}
+
+func composeOverlay(base, modal string, width, height int) string {
+	baseLines := strings.Split(fitScreen(base, width, height), "\n")
+	for len(baseLines) < height {
+		baseLines = append(baseLines, "")
+	}
+	modalLines := strings.Split(modal, "\n")
+	modalWidth := 0
+	for _, line := range modalLines {
+		if lineWidth := ansi.StringWidth(line); lineWidth > modalWidth {
+			modalWidth = lineWidth
+		}
+	}
+	startY := maxInt(0, (height-len(modalLines))/2)
+	startX := maxInt(0, (width-modalWidth)/2)
+	for i, modalLine := range modalLines {
+		y := startY + i
+		if y >= height {
+			break
+		}
+		baseLine := padLine(baseLines[y], width)
+		left := ansi.Cut(baseLine, 0, startX)
+		right := ansi.Cut(baseLine, startX+modalWidth, width)
+		baseLines[y] = left + padLine(modalLine, modalWidth) + right
+	}
+	return strings.Join(baseLines[:height], "\n")
+}
+
+func padLine(line string, width int) string {
+	line = truncate(line, width)
+	if padding := width - ansi.StringWidth(line); padding > 0 {
+		line += strings.Repeat(" ", padding)
+	}
+	return line
 }
 
 func truncate(value string, width int) string {

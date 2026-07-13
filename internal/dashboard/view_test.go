@@ -123,3 +123,27 @@ func TestViewDistinguishesLoadingFromEmptyRuntime(t *testing.T) {
 		t.Fatalf("empty view = %q", view)
 	}
 }
+
+func TestViewRendersInputCleanupAndHelpOverlays(t *testing.T) {
+	_, m := modelWithSelectedPane(t, transport.Pane{ID: "coder", TaskID: "task-1", Status: "running"})
+	m.width, m.height = 100, 24
+	cases := []struct {
+		mode string
+		want []string
+	}{
+		{mode: "input", want: []string{"INPUT -> coder", "Enter send", "Esc cancel"}},
+		{mode: "confirm-cleanup", want: []string{"CLEAN UP TASK task-1", "1 managed pane", "Other tasks and unmanaged panes are not touched"}},
+		{mode: "help", want: []string{"DASHBOARD HELP", "Tab focus panels", "r reconcile"}},
+	}
+	for _, tc := range cases {
+		m.mode = tc.mode
+		m.inputPane = "coder"
+		m.confirmTask = "task-1"
+		view := m.View()
+		for _, want := range tc.want {
+			if !strings.Contains(view, want) {
+				t.Fatalf("mode %s view missing %q: %q", tc.mode, want, view)
+			}
+		}
+	}
+}

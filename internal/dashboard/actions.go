@@ -21,6 +21,12 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateInputKey(msg)
 	case "confirm-cleanup":
 		return m.updateCleanupKey(msg)
+	case "help":
+		if msg.Type == tea.KeyEsc || msg.String() == "?" || msg.String() == "q" {
+			m.mode = "normal"
+			m.statusText = "help closed"
+		}
+		return m, nil
 	default:
 		return m.updateActionOrNormalKey(msg)
 	}
@@ -28,6 +34,13 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateActionOrNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "?":
+		if m.actionInFlight {
+			return m, nil
+		}
+		m.mode = "help"
+		m.statusText = "keyboard help"
+		return m, nil
 	case "i":
 		pane := m.selectedPane()
 		if pane == nil {

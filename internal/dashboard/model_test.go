@@ -416,6 +416,23 @@ func TestModelRefreshPreservesPresentationState(t *testing.T) {
 	}
 }
 
+func TestModelHelpModeOnlyClosesOnQuestionMarkOrEscape(t *testing.T) {
+	m := NewModel(context.Background(), &fakeClient{}, Options{})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = next.(Model)
+	if m.mode != "help" {
+		t.Fatalf("mode = %q", m.mode)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if next.(Model).mode != "help" {
+		t.Fatal("ordinary key closed help")
+	}
+	next, _ = next.(Model).Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if next.(Model).mode != "normal" {
+		t.Fatalf("mode = %q", next.(Model).mode)
+	}
+}
+
 func modelWithSelectedPane(t *testing.T, pane transport.Pane) (*fakeClient, Model) {
 	t.Helper()
 	client := &fakeClient{}
