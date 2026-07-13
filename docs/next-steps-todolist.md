@@ -84,6 +84,7 @@ cp bin/zellij-agent ~/.config/custom-cli
 
 ### Phase A: Project-Adaptive Launcher
 
+- [x] Allow a successfully cleaned `work` task to reuse its logical pane IDs through the same daemon.
 - [x] Deliver the supplied goal to the interactive coder pane as its initial prompt. The goal is prefilled without Enter so the user reviews and submits it.
 - [ ] Detect common project types such as Go, Node, and Rust.
 - [ ] Select useful default test/build commands from detected project files.

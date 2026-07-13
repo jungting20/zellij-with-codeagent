@@ -386,6 +386,41 @@ func TestSnapshotOutputUpdatesPaneOutput(t *testing.T) {
 	}
 }
 
+func TestSnapshotOutputDoesNotMutateReusedPaneGeneration(t *testing.T) {
+	backend := &fakeBackend{
+		createID:   "terminal_old",
+		dumpOutput: "stale output\n",
+	}
+	service := newTestService(backend)
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "coder", TaskID: "old-task"}); err != nil {
+		t.Fatalf("CreatePane(old) error = %v", err)
+	}
+
+	backend.beforeDumpScreen = func(context.Context, zellij.DumpScreenRequest) error {
+		if _, err := service.registry.RemovePane("coder"); err != nil {
+			return err
+		}
+		_, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+			ID:           "coder",
+			TaskID:       "new-task",
+			ZellijPaneID: "terminal_new",
+		})
+		return err
+	}
+
+	_, err := service.SnapshotOutput(context.Background(), SnapshotOutputRequest{PaneID: "coder"})
+	if !errors.Is(err, registry.ErrStaleRecord) {
+		t.Fatalf("SnapshotOutput() error = %v, want %v", err, registry.ErrStaleRecord)
+	}
+	current, err := service.registry.GetPane("coder")
+	if err != nil {
+		t.Fatalf("GetPane(new) error = %v", err)
+	}
+	if current.TaskID != "new-task" || current.ZellijPaneID != "terminal_new" || current.LastOutput != "" {
+		t.Fatalf("current pane = %#v, want untouched new generation", current)
+	}
+}
+
 func TestClosePaneMarksRecordClosed(t *testing.T) {
 	backend := &fakeBackend{createID: "terminal_5"}
 	service := newTestService(backend)
@@ -567,6 +602,8 @@ type fakeBackend struct {
 	listCalls         []struct{}
 
 	beforeCreatePane func(context.Context, zellij.CreatePaneRequest, int) error
+	beforeClosePane  func(context.Context, zellij.ClosePaneRequest) error
+	beforeDumpScreen func(context.Context, zellij.DumpScreenRequest) error
 }
 
 func (b *fakeBackend) Session() string {
@@ -646,13 +683,24 @@ func (b *fakeBackend) CreatePane(ctx context.Context, req zellij.CreatePaneReque
 
 func (b *fakeBackend) ClosePane(ctx context.Context, req zellij.ClosePaneRequest) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.closeRequests = append(b.closeRequests, req)
 	b.closeContextErrs = append(b.closeContextErrs, ctx.Err())
-	if err := b.closeErrByPane[req.PaneID]; err != nil {
-		return err
+	hook := b.beforeClosePane
+	mappedErr := b.closeErrByPane[req.PaneID]
+	closeErr := b.closeErr
+	b.mu.Unlock()
+	if hook != nil {
+		if err := hook(ctx, req); err != nil {
+			return err
+		}
 	}
-	return b.closeErr
+	if mappedErr != nil {
+		return mappedErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return nil
 }
 
 func (b *fakeBackend) SendInput(_ context.Context, req zellij.SendInputRequest) error {
@@ -675,10 +723,10 @@ func (b *fakeBackend) ListPanes(context.Context) ([]zellij.Pane, error) {
 	return panes, nil
 }
 
-func (b *fakeBackend) DumpScreen(_ context.Context, req zellij.DumpScreenRequest) (string, error) {
+func (b *fakeBackend) DumpScreen(ctx context.Context, req zellij.DumpScreenRequest) (string, error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.dumpRequests = append(b.dumpRequests, req)
+	hook := b.beforeDumpScreen
 	output := b.dumpOutput
 	if len(b.dumpOutputs) > 0 {
 		output = b.dumpOutputs[0]
@@ -688,6 +736,12 @@ func (b *fakeBackend) DumpScreen(_ context.Context, req zellij.DumpScreenRequest
 	if len(b.dumpErrors) > 0 {
 		err = b.dumpErrors[0]
 		b.dumpErrors = b.dumpErrors[1:]
+	}
+	b.mu.Unlock()
+	if hook != nil {
+		if hookErr := hook(ctx, req); hookErr != nil {
+			return "", hookErr
+		}
 	}
 	return output, err
 }

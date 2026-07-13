@@ -53,9 +53,14 @@ type ApplyExecutionPlanResponse struct {
 }
 
 type executionPlanPaneResult struct {
-	index int
-	pane  Pane
-	err   error
+	index   int
+	created createdExecutionPlanPane
+	err     error
+}
+
+type createdExecutionPlanPane struct {
+	pane   Pane
+	record registry.PaneRecord
 }
 
 func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlanRequest) (ApplyExecutionPlanResponse, error) {
@@ -64,7 +69,7 @@ func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlan
 	}
 
 	taskID := TaskID(req.Session)
-	createdAll := make([]Pane, 0)
+	createdAll := make([]createdExecutionPlanPane, 0)
 	tabResults := make([]ExecutionPlanTabResult, 0, len(req.Tabs))
 
 	for _, tabSpec := range req.Tabs {
@@ -93,9 +98,10 @@ func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlan
 			return ApplyExecutionPlanResponse{}, err
 		}
 		tabID = response.Pane.ZellijTabID
+		createdFirst := createdExecutionPlanPane{pane: response.Pane, record: response.record}
 		createdTabPanes = append(createdTabPanes, response.Pane)
-		createdAll = append(createdAll, response.Pane)
-		if err := s.sendExecutionPlanInitialInput(ctx, response.Pane, firstSpec.InitialInput, firstSpec.InitialInputReadyText); err != nil {
+		createdAll = append(createdAll, createdFirst)
+		if err := s.sendExecutionPlanInitialInput(ctx, createdFirst, firstSpec.InitialInput, firstSpec.InitialInputReadyText); err != nil {
 			_ = s.rollbackExecutionPlan(ctx, createdAll)
 			return ApplyExecutionPlanResponse{}, err
 		}
@@ -110,7 +116,9 @@ func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlan
 				_ = s.rollbackExecutionPlan(ctx, append(createdAll, remaining...))
 				return ApplyExecutionPlanResponse{}, err
 			}
-			createdTabPanes = append(createdTabPanes, remaining...)
+			for _, created := range remaining {
+				createdTabPanes = append(createdTabPanes, created.pane)
+			}
 			createdAll = append(createdAll, remaining...)
 		}
 
@@ -128,7 +136,7 @@ func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlan
 	}, nil
 }
 
-func (s *Service) createRemainingExecutionPlanTabPanes(ctx context.Context, taskID TaskID, tabName string, tabID ZellijTabID, specs []ExecutionPlanPaneSpec) ([]Pane, error) {
+func (s *Service) createRemainingExecutionPlanTabPanes(ctx context.Context, taskID TaskID, tabName string, tabID ZellijTabID, specs []ExecutionPlanPaneSpec) ([]createdExecutionPlanPane, error) {
 	if len(specs) == 0 {
 		return nil, nil
 	}
@@ -159,25 +167,26 @@ func (s *Service) createRemainingExecutionPlanTabPanes(ctx context.Context, task
 				results <- executionPlanPaneResult{index: i, err: err}
 				return
 			}
-			if err := s.sendExecutionPlanInitialInput(ctx, response.Pane, spec.InitialInput, spec.InitialInputReadyText); err != nil {
+			created := createdExecutionPlanPane{pane: response.Pane, record: response.record}
+			if err := s.sendExecutionPlanInitialInput(ctx, created, spec.InitialInput, spec.InitialInputReadyText); err != nil {
 				cancel()
-				results <- executionPlanPaneResult{index: i, pane: response.Pane, err: err}
+				results <- executionPlanPaneResult{index: i, created: created, err: err}
 				return
 			}
-			results <- executionPlanPaneResult{index: i, pane: response.Pane}
+			results <- executionPlanPaneResult{index: i, created: created}
 		}()
 	}
 
 	wg.Wait()
 	close(results)
 
-	panes := make([]Pane, len(specs))
-	created := make([]Pane, 0, len(specs))
+	panes := make([]createdExecutionPlanPane, len(specs))
+	created := make([]createdExecutionPlanPane, 0, len(specs))
 	var firstErr error
 	for result := range results {
-		if result.pane.ID != "" {
-			panes[result.index] = result.pane
-			created = append(created, result.pane)
+		if result.created.pane.ID != "" {
+			panes[result.index] = result.created
+			created = append(created, result.created)
 		}
 		if result.err != nil && firstErr == nil {
 			firstErr = result.err
@@ -189,23 +198,31 @@ func (s *Service) createRemainingExecutionPlanTabPanes(ctx context.Context, task
 	return panes, nil
 }
 
-func (s *Service) sendExecutionPlanInitialInput(ctx context.Context, pane Pane, initialInput, readyText string) error {
+func (s *Service) sendExecutionPlanInitialInput(ctx context.Context, created createdExecutionPlanPane, initialInput, readyText string) error {
 	if initialInput == "" {
 		return nil
 	}
-	if err := s.waitForExecutionPlanInitialInputReady(ctx, pane, readyText); err != nil {
+	if err := s.waitForExecutionPlanInitialInputReady(ctx, created, readyText); err != nil {
 		return err
 	}
-	if err := s.SendInput(ctx, SendInputRequest{
-		PaneID: pane.ID,
+	current, err := s.registry.GetPane(created.record.ID)
+	if err != nil {
+		return fmt.Errorf("send initial input to pane %q: %w", created.pane.ID, err)
+	}
+	if current.Generation != created.record.Generation {
+		return fmt.Errorf("send initial input to pane %q: %w", created.pane.ID, registry.ErrStaleRecord)
+	}
+	if err := s.backend.SendInput(ctx, zellij.SendInputRequest{
+		PaneID: zellij.PaneID(created.record.ZellijPaneID),
 		Text:   initialInput,
 	}); err != nil {
-		return fmt.Errorf("send initial input to pane %q: %w", pane.ID, err)
+		_, _ = s.registry.UpdatePaneStatusGeneration(created.record.ID, created.record.Generation, registry.PaneStatusError, err.Error())
+		return fmt.Errorf("send initial input to pane %q: %w", created.pane.ID, err)
 	}
 	return nil
 }
 
-func (s *Service) waitForExecutionPlanInitialInputReady(ctx context.Context, pane Pane, readyText string) error {
+func (s *Service) waitForExecutionPlanInitialInputReady(ctx context.Context, created createdExecutionPlanPane, readyText string) error {
 	if readyText == "" {
 		return nil
 	}
@@ -215,7 +232,7 @@ func (s *Service) waitForExecutionPlanInitialInputReady(ctx context.Context, pan
 	var lastErr error
 	for {
 		output, err := s.backend.DumpScreen(ctx, zellij.DumpScreenRequest{
-			PaneID: zellij.PaneID(pane.ZellijPaneID),
+			PaneID: zellij.PaneID(created.record.ZellijPaneID),
 		})
 		if err == nil && strings.Contains(output, readyText) {
 			return nil
@@ -230,7 +247,7 @@ func (s *Service) waitForExecutionPlanInitialInputReady(ctx context.Context, pan
 			if lastErr != nil {
 				cause = errors.Join(cause, lastErr)
 			}
-			return fmt.Errorf("wait for initial input readiness in pane %q: %w", pane.ID, cause)
+			return fmt.Errorf("wait for initial input readiness in pane %q: %w", created.pane.ID, cause)
 		case <-ticker.C:
 		}
 	}
@@ -277,16 +294,19 @@ exec sh`, paneID)
 	return []string{"sh", "-lc", script}
 }
 
-func (s *Service) rollbackExecutionPlan(ctx context.Context, created []Pane) error {
+func (s *Service) rollbackExecutionPlan(ctx context.Context, created []createdExecutionPlanPane) error {
 	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 
 	var rollbackErr error
-	for _, pane := range created {
-		if _, err := s.ClosePane(rollbackCtx, ClosePaneRequest{PaneID: pane.ID}); err != nil {
+	for _, createdPane := range created {
+		if err := s.backend.ClosePane(rollbackCtx, zellij.ClosePaneRequest{PaneID: zellij.PaneID(createdPane.record.ZellijPaneID)}); err != nil {
 			rollbackErr = errors.Join(rollbackErr, err)
 		}
-		if _, err := s.registry.RemovePane(registry.PaneID(pane.ID)); err != nil && !errors.Is(err, registry.ErrNotFound) {
+		if s.subs != nil {
+			s.subs.StopPaneGeneration(createdPane.record.ID, createdPane.record.Generation)
+		}
+		if _, err := s.registry.RemovePaneGeneration(createdPane.record.ID, createdPane.record.Generation); err != nil && !errors.Is(err, registry.ErrNotFound) && !errors.Is(err, registry.ErrStaleRecord) {
 			rollbackErr = errors.Join(rollbackErr, err)
 		}
 	}

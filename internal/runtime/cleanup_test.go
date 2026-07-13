@@ -32,7 +32,7 @@ func TestCleanupClosesOnlyMatchingManagedPanes(t *testing.T) {
 		t.Fatalf("backend ClosePane requests = %#v, want %#v", backend.closeRequests, wantClose)
 	}
 	assertPaneStatus(t, service, "pane-coder", PaneStatusStarting)
-	assertPaneStatus(t, service, "pane-test", PaneStatusClosed)
+	assertPaneMissing(t, service, "pane-test")
 	assertPaneStatus(t, service, "pane-log", PaneStatusStarting)
 }
 
@@ -64,7 +64,7 @@ func TestCleanupContinuesAfterPartialFailure(t *testing.T) {
 		t.Fatalf("Cleanup() closed = %#v, want pane-good", response.Closed)
 	}
 	assertPaneStatus(t, service, "pane-bad", PaneStatusError)
-	assertPaneStatus(t, service, "pane-good", PaneStatusClosed)
+	assertPaneMissing(t, service, "pane-good")
 }
 
 func TestCleanupReportsUnknownRequestedPane(t *testing.T) {
@@ -86,5 +86,50 @@ func TestCleanupReportsUnknownRequestedPane(t *testing.T) {
 	if !reflect.DeepEqual(backend.closeRequests, []zellij.ClosePaneRequest{{PaneID: "terminal_5"}}) {
 		t.Fatalf("backend ClosePane requests = %#v, want only requested pane", backend.closeRequests)
 	}
+	assertPaneMissing(t, service, "pane-1")
 	assertPaneStatus(t, service, "pane-2", PaneStatusStarting)
+}
+
+func TestCleanupReleasesMatchingTerminalRecord(t *testing.T) {
+	backend := &fakeBackend{createID: "terminal_5"}
+	service := newTestService(backend)
+	mustCreatePane(t, service, CreatePaneRequest{ID: "coder", TaskID: "task-1"})
+
+	if _, err := service.ClosePane(context.Background(), ClosePaneRequest{PaneID: "coder"}); err != nil {
+		t.Fatalf("ClosePane() error = %v", err)
+	}
+
+	response, err := service.Cleanup(context.Background(), CleanupRequest{TaskID: "task-1"})
+	if err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	if len(response.Skipped) != 1 || response.Skipped[0].ID != "coder" {
+		t.Fatalf("Cleanup() skipped = %#v, want terminal coder", response.Skipped)
+	}
+	assertPaneMissing(t, service, "coder")
+}
+
+func TestCleanupTreatsSubscriptionFirstRemovalAsSkipped(t *testing.T) {
+	var service *Service
+	backendErr := errors.New("pane already closed")
+	backend := &fakeBackend{
+		createID: "terminal_5",
+		beforeClosePane: func(context.Context, zellij.ClosePaneRequest) error {
+			if _, err := service.registry.RemovePane("coder"); err != nil {
+				t.Fatalf("subscription RemovePane() error = %v", err)
+			}
+			return backendErr
+		},
+	}
+	service = newTestService(backend)
+	mustCreatePane(t, service, CreatePaneRequest{ID: "coder", TaskID: "task-1"})
+
+	response, err := service.Cleanup(context.Background(), CleanupRequest{TaskID: "task-1"})
+	if err != nil {
+		t.Fatalf("Cleanup() error = %v, want subscription-first close treated as success", err)
+	}
+	if len(response.Skipped) != 1 || response.Skipped[0].ID != "coder" || len(response.Failed) != 0 {
+		t.Fatalf("Cleanup() = %#v, want coder skipped without failures", response)
+	}
+	assertPaneMissing(t, service, "coder")
 }

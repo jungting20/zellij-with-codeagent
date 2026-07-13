@@ -113,7 +113,8 @@ type CreatePaneRequest struct {
 }
 
 type CreatePaneResponse struct {
-	Pane Pane
+	Pane   Pane
+	record registry.PaneRecord
 }
 
 type SendInputRequest struct {

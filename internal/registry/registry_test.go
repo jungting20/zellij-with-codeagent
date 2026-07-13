@@ -65,6 +65,48 @@ func TestRegisterPaneRejectsDuplicateLogicalID(t *testing.T) {
 	}
 }
 
+func TestReusedLogicalIDRejectsStaleGenerationMutations(t *testing.T) {
+	registry := newTestRegistry()
+	first, err := registry.RegisterPane(RegisterPaneRequest{
+		ID:           "pane-1",
+		ZellijPaneID: "terminal_old",
+	})
+	if err != nil {
+		t.Fatalf("first RegisterPane() error = %v", err)
+	}
+	if _, err := registry.RemovePane("pane-1"); err != nil {
+		t.Fatalf("RemovePane(first) error = %v", err)
+	}
+	second, err := registry.RegisterPane(RegisterPaneRequest{
+		ID:           "pane-1",
+		ZellijPaneID: "terminal_new",
+	})
+	if err != nil {
+		t.Fatalf("second RegisterPane() error = %v", err)
+	}
+	if first.Generation == 0 || second.Generation == 0 || first.Generation == second.Generation {
+		t.Fatalf("generations = %d/%d, want distinct non-zero values", first.Generation, second.Generation)
+	}
+
+	if _, err := registry.UpdatePaneStatusGeneration("pane-1", first.Generation, PaneStatusError, "stale"); !errors.Is(err, ErrStaleRecord) {
+		t.Fatalf("UpdatePaneStatusGeneration(stale) error = %v, want %v", err, ErrStaleRecord)
+	}
+	if _, err := registry.UpdatePaneOutputGeneration("pane-1", first.Generation, "stale output"); !errors.Is(err, ErrStaleRecord) {
+		t.Fatalf("UpdatePaneOutputGeneration(stale) error = %v, want %v", err, ErrStaleRecord)
+	}
+	if _, err := registry.RemovePaneGeneration("pane-1", first.Generation); !errors.Is(err, ErrStaleRecord) {
+		t.Fatalf("RemovePaneGeneration(stale) error = %v, want %v", err, ErrStaleRecord)
+	}
+
+	current, err := registry.GetPane("pane-1")
+	if err != nil {
+		t.Fatalf("GetPane(current) error = %v", err)
+	}
+	if current.Generation != second.Generation || current.ZellijPaneID != "terminal_new" || current.Status == PaneStatusError || current.LastOutput != "" {
+		t.Fatalf("current pane = %#v, want untouched second generation", current)
+	}
+}
+
 func TestRegisterPaneValidation(t *testing.T) {
 	registry := newTestRegistry()
 

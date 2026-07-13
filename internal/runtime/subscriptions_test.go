@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +33,16 @@ func (r *scriptedSubscriptionRunner) Start(ctx context.Context, spec zellij.Comm
 			return nil
 		},
 	}, nil
+}
+
+type blockingStartSubscriptionRunner struct {
+	started chan struct{}
+}
+
+func (r *blockingStartSubscriptionRunner) Start(ctx context.Context, _ zellij.CommandSpec) (*SubscriptionStream, error) {
+	close(r.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func TestSubscriptionManagerPublishesRawOutputAndUpdatesRegistry(t *testing.T) {
@@ -209,6 +220,289 @@ func TestSubscriptionManagerRemovesPaneOnPaneClosed(t *testing.T) {
 
 	if _, err := reg.GetPane("pane-1"); !errors.Is(err, registry.ErrNotFound) {
 		t.Fatalf("GetPane() error = %v, want %v", err, registry.ErrNotFound)
+	}
+}
+
+func TestSubscriptionManagerIgnoresPaneClosedAfterCleanupRemovedRecord(t *testing.T) {
+	bus := eventbus.New()
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{
+		Registry: registry.New(),
+		Bus:      bus,
+	})
+
+	mgr.handlePaneClosed(registry.PaneRecord{ID: "coder", Generation: 1})
+
+	if events := bus.Recent(0); len(events) != 0 {
+		t.Fatalf("events = %#v, want no subscribe_error for already removed pane", events)
+	}
+}
+
+func TestSubscriptionManagerStaleGenerationCannotMutateReusedPane(t *testing.T) {
+	reg := registry.New()
+	oldRecord, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		TaskID:       "old-task",
+		ZellijPaneID: "terminal_old",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(old) error = %v", err)
+	}
+	if _, err := reg.RemovePane("coder"); err != nil {
+		t.Fatalf("RemovePane(old) error = %v", err)
+	}
+	newRecord, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		TaskID:       "new-task",
+		ZellijPaneID: "terminal_new",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(new) error = %v", err)
+	}
+
+	bus := eventbus.New()
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{Registry: reg, Bus: bus})
+	mgr.handlePaneUpdate(oldRecord, "stale output")
+	mgr.handlePaneClosed(oldRecord)
+
+	current, err := reg.GetPane("coder")
+	if err != nil {
+		t.Fatalf("GetPane(new) error = %v", err)
+	}
+	if current.Generation != newRecord.Generation || current.LastOutput != "" || current.TaskID != "new-task" {
+		t.Fatalf("current pane = %#v, want untouched new generation", current)
+	}
+	if events := bus.Recent(0); len(events) != 0 {
+		t.Fatalf("events = %#v, want stale generation ignored", events)
+	}
+}
+
+func TestSubscriptionManagerOldRunDoesNotClearReusedPaneSubscription(t *testing.T) {
+	reg := registry.New()
+	if _, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		ZellijPaneID: "terminal_old",
+	}); err != nil {
+		t.Fatalf("RegisterPane(old) error = %v", err)
+	}
+
+	oldStarted := make(chan struct{})
+	newStarted := make(chan struct{})
+	releaseOld := make(chan struct{})
+	oldWriterDone := make(chan struct{})
+	var calls atomic.Int32
+	runner := &scriptedSubscriptionRunner{fn: func(ctx context.Context, _ zellij.CommandSpec, pw *io.PipeWriter) {
+		switch calls.Add(1) {
+		case 1:
+			close(oldStarted)
+			<-releaseOld
+			_, _ = io.WriteString(pw, `{"name":"pane_closed","pane_id":"terminal_old"}`+"\n")
+			close(oldWriterDone)
+		default:
+			close(newStarted)
+			<-ctx.Done()
+		}
+	}}
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{
+		Registry: reg,
+		Backend:  zellij.NewBackend(zellij.Options{}),
+		Bus:      eventbus.New(),
+		Runner:   runner,
+	})
+
+	mgr.StartPane("coder")
+	<-oldStarted
+	mgr.StopPane("coder")
+	if _, err := reg.RemovePane("coder"); err != nil {
+		t.Fatalf("RemovePane(old) error = %v", err)
+	}
+	newRecord, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		ZellijPaneID: "terminal_new",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(new) error = %v", err)
+	}
+	mgr.StartPane("coder")
+	<-newStarted
+
+	close(releaseOld)
+	<-oldWriterDone
+	time.Sleep(20 * time.Millisecond)
+
+	mgr.mu.Lock()
+	_, subscribed := mgr.cancelByPaneID["coder"]
+	mgr.mu.Unlock()
+	if !subscribed {
+		t.Fatal("old subscription teardown removed the new subscription")
+	}
+	current, err := reg.GetPane("coder")
+	if err != nil {
+		t.Fatalf("GetPane(new) error = %v", err)
+	}
+	if current.Generation != newRecord.Generation || current.ZellijPaneID != "terminal_new" {
+		t.Fatalf("current pane = %#v, want new generation", current)
+	}
+	mgr.StopPane("coder")
+}
+
+func TestSubscriptionManagerCanceledOldStartDoesNotPublishErrorsForReusedPane(t *testing.T) {
+	reg := registry.New()
+	if _, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		TaskID:       "old-task",
+		ZellijPaneID: "terminal_old",
+	}); err != nil {
+		t.Fatalf("RegisterPane(old) error = %v", err)
+	}
+
+	bus := eventbus.New()
+	runner := &blockingStartSubscriptionRunner{started: make(chan struct{})}
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{
+		Registry: reg,
+		Backend:  zellij.NewBackend(zellij.Options{}),
+		Bus:      bus,
+		Runner:   runner,
+	})
+
+	mgr.StartPane("coder")
+	<-runner.started
+	mgr.mu.Lock()
+	oldSubscription := mgr.cancelByPaneID["coder"]
+	mgr.mu.Unlock()
+	if oldSubscription == nil {
+		t.Fatal("old subscription was not installed")
+	}
+	mgr.StopPane("coder")
+	if _, err := reg.RemovePane("coder"); err != nil {
+		t.Fatalf("RemovePane(old) error = %v", err)
+	}
+	if _, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		TaskID:       "new-task",
+		ZellijPaneID: "terminal_new",
+	}); err != nil {
+		t.Fatalf("RegisterPane(new) error = %v", err)
+	}
+
+	select {
+	case <-oldSubscription.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for canceled old subscription to exit")
+	}
+
+	if events := bus.Recent(0); len(events) != 0 {
+		t.Fatalf("events = %#v, want canceled old subscription to stay silent", events)
+	}
+}
+
+func TestSubscriptionManagerRetriesWhenRecordChangesBeforeSubscriptionInstall(t *testing.T) {
+	reg := registry.New()
+	oldRecord, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		ZellijPaneID: "terminal_old",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(old) error = %v", err)
+	}
+	if _, err := reg.RemovePane("coder"); err != nil {
+		t.Fatalf("RemovePane(old) error = %v", err)
+	}
+	newRecord, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		ZellijPaneID: "terminal_new",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(new) error = %v", err)
+	}
+
+	started := make(chan struct{})
+	runner := &scriptedSubscriptionRunner{fn: func(ctx context.Context, _ zellij.CommandSpec, _ *io.PipeWriter) {
+		close(started)
+		<-ctx.Done()
+	}}
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{
+		Registry: reg,
+		Backend:  zellij.NewBackend(zellij.Options{}),
+		Bus:      eventbus.New(),
+		Runner:   runner,
+	})
+
+	if retry := mgr.startRecord(oldRecord); !retry {
+		t.Fatal("startRecord(stale generation) retry = false, want true")
+	}
+	mgr.StartPane("coder")
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for new-generation subscription")
+	}
+
+	mgr.mu.Lock()
+	subscription := mgr.cancelByPaneID["coder"]
+	mgr.mu.Unlock()
+	if subscription == nil || subscription.key.generation != newRecord.Generation {
+		t.Fatalf("subscription = %#v, want generation %d", subscription, newRecord.Generation)
+	}
+	mgr.StopPane("coder")
+}
+
+func TestSubscriptionManagerOldGenerationStopDoesNotCancelReusedPane(t *testing.T) {
+	reg := registry.New()
+	oldRecord, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		ZellijPaneID: "terminal_old",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(old) error = %v", err)
+	}
+	if _, err := reg.RemovePane("coder"); err != nil {
+		t.Fatalf("RemovePane(old) error = %v", err)
+	}
+	newRecord, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		ZellijPaneID: "terminal_new",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(new) error = %v", err)
+	}
+
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{Registry: reg})
+	ctx, cancel := context.WithCancel(context.Background())
+	newSubscription := &paneSubscription{
+		cancel: cancel,
+		ctx:    ctx,
+		done:   make(chan struct{}),
+		key: subscriptionKey{
+			paneID:     "coder",
+			generation: newRecord.Generation,
+		},
+	}
+	mgr.cancelByPaneID["coder"] = newSubscription
+
+	mgr.StopPaneGeneration("coder", oldRecord.Generation)
+
+	mgr.mu.Lock()
+	current := mgr.cancelByPaneID["coder"]
+	mgr.mu.Unlock()
+	if current != newSubscription || ctx.Err() != nil {
+		t.Fatalf("subscription = %#v, context error = %v; want new generation still active", current, ctx.Err())
+	}
+	mgr.StopPane("coder")
+}
+
+func TestSubscriptionManagerMissingRecordStartStaysSilent(t *testing.T) {
+	bus := eventbus.New()
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{
+		Registry: registry.New(),
+		Backend:  zellij.NewBackend(zellij.Options{}),
+		Bus:      bus,
+		Runner:   &scriptedSubscriptionRunner{},
+	})
+
+	mgr.StartPane("coder")
+
+	if events := bus.Recent(0); len(events) != 0 {
+		t.Fatalf("events = %#v, want detached missing pane start to stay silent", events)
 	}
 }
 

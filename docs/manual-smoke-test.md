@@ -159,3 +159,23 @@ Clean up the managed workspace:
 zellij-agent ctl cleanup --task goal-prefill-smoke
 zellij-agent ctl cleanup --task hyphen-goal-smoke
 ```
+
+### Cleanup and Reuse the Same Work IDs
+
+Use one daemon for both submissions:
+
+```bash
+zellij-agent work --socket /tmp/agentd.sock --session work-reuse-smoke "inspect this project"
+zellij-agent dashboard --socket /tmp/agentd.sock
+```
+
+In the dashboard, select a pane in task `work-reuse-smoke`, press `x`, confirm
+with `y`, and wait until the task disappears. Quit the dashboard with `q`, then
+submit the same command again without restarting the daemon:
+
+```bash
+zellij-agent work --socket /tmp/agentd.sock --session work-reuse-smoke "inspect this project"
+```
+
+Confirm the second submission creates all work panes and does not report
+`registry record already exists`.

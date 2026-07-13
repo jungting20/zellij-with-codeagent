@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"zellij-with-codeagent/internal/registry"
 	"zellij-with-codeagent/internal/zellij"
 )
 
@@ -75,6 +76,55 @@ func TestApplyExecutionPlanCreatesPanesInOneTab(t *testing.T) {
 	}
 	if !reflect.DeepEqual(backend.createRequests[0], wantSecond) {
 		t.Fatalf("second CreatePane = %#v, want %#v", backend.createRequests[0], wantSecond)
+	}
+}
+
+func TestApplyExecutionPlanReusesLogicalIDsAfterCleanup(t *testing.T) {
+	tabID := ZellijTabID(31)
+	backend := &fakeBackend{
+		createTabID: zellij.TabID(tabID),
+		listPanes: []zellij.Pane{{
+			ID:      "terminal_31",
+			TabID:   int(tabID),
+			TabName: "repeat-work",
+		}},
+	}
+	service := newTestService(backend)
+	request := ApplyExecutionPlanRequest{
+		RequestID: "req_repeat-work",
+		Session:   "repeat-work",
+		Layout:    "triple-horizontal",
+		Tabs: []ExecutionPlanTabSpec{{
+			Name:  "repeat-work",
+			Panes: []ExecutionPlanPaneSpec{{ID: "coder", Role: "coding-agent"}},
+		}},
+	}
+
+	first, err := service.ApplyExecutionPlan(context.Background(), request)
+	if err != nil {
+		t.Fatalf("first ApplyExecutionPlan() error = %v", err)
+	}
+	if len(first.Tabs) != 1 || len(first.Tabs[0].Panes) != 1 {
+		t.Fatalf("first ApplyExecutionPlan() = %#v, want one pane", first)
+	}
+
+	cleanup, err := service.Cleanup(context.Background(), CleanupRequest{TaskID: "repeat-work"})
+	if err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	if len(cleanup.Closed) != 1 || cleanup.Closed[0].ID != "coder" {
+		t.Fatalf("Cleanup() closed = %#v, want coder", cleanup.Closed)
+	}
+
+	second, err := service.ApplyExecutionPlan(context.Background(), request)
+	if err != nil {
+		t.Fatalf("second ApplyExecutionPlan() error = %v", err)
+	}
+	if len(second.Tabs) != 1 || len(second.Tabs[0].Panes) != 1 || second.Tabs[0].Panes[0].ID != "coder" {
+		t.Fatalf("second ApplyExecutionPlan() = %#v, want reused coder ID", second)
+	}
+	if len(backend.createTabRequests) != 2 {
+		t.Fatalf("CreateTab calls = %d, want 2", len(backend.createTabRequests))
 	}
 }
 
@@ -489,5 +539,81 @@ func TestApplyExecutionPlanReadinessTimeoutRollsBackWithFreshContext(t *testing.
 	}
 	if len(list.Panes) != 0 {
 		t.Fatalf("ListPanes() = %#v, want empty registry after timeout rollback", list.Panes)
+	}
+}
+
+func TestRollbackExecutionPlanDoesNotCloseOrRemoveReusedPane(t *testing.T) {
+	backend := &fakeBackend{}
+	service := newTestService(backend)
+	oldRecord, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		TaskID:       "old-task",
+		ZellijPaneID: "terminal_old",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(old) error = %v", err)
+	}
+	if _, err := service.registry.RemovePane("coder"); err != nil {
+		t.Fatalf("RemovePane(old) error = %v", err)
+	}
+	newRecord, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		TaskID:       "new-task",
+		ZellijPaneID: "terminal_new",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(new) error = %v", err)
+	}
+
+	err = service.rollbackExecutionPlan(context.Background(), []createdExecutionPlanPane{{
+		pane:   paneFromRecord(oldRecord),
+		record: oldRecord,
+	}})
+	if err != nil {
+		t.Fatalf("rollbackExecutionPlan(old) error = %v", err)
+	}
+	if got := backend.closeRequests; len(got) != 1 || got[0].PaneID != "terminal_old" {
+		t.Fatalf("ClosePane requests = %#v, want only terminal_old", got)
+	}
+	current, err := service.registry.GetPane("coder")
+	if err != nil {
+		t.Fatalf("GetPane(new) error = %v", err)
+	}
+	if current.Generation != newRecord.Generation || current.ZellijPaneID != "terminal_new" {
+		t.Fatalf("current pane = %#v, want untouched replacement", current)
+	}
+}
+
+func TestExecutionPlanInitialInputDoesNotReachReusedPane(t *testing.T) {
+	backend := &fakeBackend{}
+	service := newTestService(backend)
+	oldRecord, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		TaskID:       "old-task",
+		ZellijPaneID: "terminal_old",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(old) error = %v", err)
+	}
+	if _, err := service.registry.RemovePane("coder"); err != nil {
+		t.Fatalf("RemovePane(old) error = %v", err)
+	}
+	if _, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		TaskID:       "new-task",
+		ZellijPaneID: "terminal_new",
+	}); err != nil {
+		t.Fatalf("RegisterPane(new) error = %v", err)
+	}
+
+	err = service.sendExecutionPlanInitialInput(context.Background(), createdExecutionPlanPane{
+		pane:   paneFromRecord(oldRecord),
+		record: oldRecord,
+	}, "old goal", "")
+	if !errors.Is(err, registry.ErrStaleRecord) {
+		t.Fatalf("sendExecutionPlanInitialInput(old) error = %v, want %v", err, registry.ErrStaleRecord)
+	}
+	if len(backend.sendRequests) != 0 {
+		t.Fatalf("SendInput requests = %#v, want no old input sent", backend.sendRequests)
 	}
 }

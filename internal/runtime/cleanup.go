@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"zellij-with-codeagent/internal/registry"
@@ -21,12 +22,29 @@ func (s *Service) Cleanup(ctx context.Context, req CleanupRequest) (CleanupRespo
 		delete(requested, PaneID(record.ID))
 
 		if isTerminalStatus(record.Status) {
-			response.Skipped = append(response.Skipped, paneFromRecord(record))
+			if s.subs != nil {
+				s.subs.StopPaneGeneration(record.ID, record.Generation)
+			}
+			released, err := s.releaseCleanupRecord(record)
+			if err != nil {
+				response.Failed = append(response.Failed, CleanupFailure{
+					Pane:  paneFromRecord(record),
+					Error: err.Error(),
+				})
+				continue
+			}
+			response.Skipped = append(response.Skipped, paneFromRecord(released))
 			continue
 		}
 
 		if err := s.backend.ClosePane(ctx, zellij.ClosePaneRequest{PaneID: zellij.PaneID(record.ZellijPaneID)}); err != nil {
-			updated, updateErr := s.registry.UpdatePaneStatus(record.ID, registry.PaneStatusError, err.Error())
+			updated, updateErr := s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusError, err.Error())
+			if errors.Is(updateErr, registry.ErrNotFound) || errors.Is(updateErr, registry.ErrStaleRecord) {
+				record.Status = registry.PaneStatusClosed
+				record.StatusMessage = "closed before runtime cleanup"
+				response.Skipped = append(response.Skipped, paneFromRecord(record))
+				continue
+			}
 			if updateErr != nil {
 				response.Failed = append(response.Failed, CleanupFailure{
 					Pane:  paneFromRecord(record),
@@ -41,7 +59,10 @@ func (s *Service) Cleanup(ctx context.Context, req CleanupRequest) (CleanupRespo
 			continue
 		}
 
-		updated, err := s.registry.UpdatePaneStatus(record.ID, registry.PaneStatusClosed, "closed by runtime cleanup")
+		if s.subs != nil {
+			s.subs.StopPaneGeneration(record.ID, record.Generation)
+		}
+		released, err := s.releaseCleanupRecord(record)
 		if err != nil {
 			response.Failed = append(response.Failed, CleanupFailure{
 				Pane:  paneFromRecord(record),
@@ -49,10 +70,9 @@ func (s *Service) Cleanup(ctx context.Context, req CleanupRequest) (CleanupRespo
 			})
 			continue
 		}
-		if s.subs != nil {
-			s.subs.StopPane(record.ID)
-		}
-		response.Closed = append(response.Closed, paneFromRecord(updated))
+		released.Status = registry.PaneStatusClosed
+		released.StatusMessage = "closed by runtime cleanup"
+		response.Closed = append(response.Closed, paneFromRecord(released))
 	}
 
 	if requestedOnly {
@@ -68,6 +88,17 @@ func (s *Service) Cleanup(ctx context.Context, req CleanupRequest) (CleanupRespo
 		return response, fmt.Errorf("%w: %d pane(s) failed", ErrCleanupPartial, len(response.Failed))
 	}
 	return response, nil
+}
+
+func (s *Service) releaseCleanupRecord(record registry.PaneRecord) (registry.PaneRecord, error) {
+	removed, err := s.registry.RemovePaneGeneration(record.ID, record.Generation)
+	if errors.Is(err, registry.ErrNotFound) || errors.Is(err, registry.ErrStaleRecord) {
+		return record, nil
+	}
+	if err != nil {
+		return registry.PaneRecord{}, err
+	}
+	return removed, nil
 }
 
 func requestedPaneIDs(ids []PaneID) map[PaneID]bool {

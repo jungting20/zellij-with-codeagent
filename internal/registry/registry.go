@@ -11,6 +11,7 @@ import (
 var (
 	ErrAlreadyExists = errors.New("registry record already exists")
 	ErrNotFound      = errors.New("registry record not found")
+	ErrStaleRecord   = errors.New("registry record generation mismatch")
 )
 
 type paneLocation struct {
@@ -24,6 +25,7 @@ type Registry struct {
 	sessions       map[SessionID]SessionRecord
 	paneToLocation map[PaneID]paneLocation
 	latestByZellij map[ZellijPaneID]PaneID
+	nextGeneration uint64
 }
 
 func New() *Registry {
@@ -56,10 +58,12 @@ func (r *Registry) RegisterPane(req RegisterPaneRequest) (PaneRecord, error) {
 	}
 
 	req = applyRegisterPaneDefaults(req)
+	r.nextGeneration++
 
 	now := r.now()
 	record := PaneRecord{
 		ID:           req.ID,
+		Generation:   r.nextGeneration,
 		SessionID:    req.SessionID,
 		TabID:        req.TabID,
 		TaskID:       req.TaskID,
@@ -168,12 +172,23 @@ func (r *Registry) ListPanes() []PaneRecord {
 }
 
 func (r *Registry) UpdatePaneStatus(id PaneID, status PaneStatus, message string) (PaneRecord, error) {
+	return r.updatePaneStatusGeneration(id, 0, status, message)
+}
+
+func (r *Registry) UpdatePaneStatusGeneration(id PaneID, generation uint64, status PaneStatus, message string) (PaneRecord, error) {
+	return r.updatePaneStatusGeneration(id, generation, status, message)
+}
+
+func (r *Registry) updatePaneStatusGeneration(id PaneID, generation uint64, status PaneStatus, message string) (PaneRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	loc, session, tab, pane, err := r.resolvePanePathLocked(id)
 	if err != nil {
 		return PaneRecord{}, err
+	}
+	if generation != 0 && pane.Generation != generation {
+		return PaneRecord{}, ErrStaleRecord
 	}
 
 	now := r.now()
@@ -190,12 +205,23 @@ func (r *Registry) UpdatePaneStatus(id PaneID, status PaneStatus, message string
 }
 
 func (r *Registry) UpdatePaneOutput(id PaneID, output string) (PaneRecord, error) {
+	return r.updatePaneOutputGeneration(id, 0, output)
+}
+
+func (r *Registry) UpdatePaneOutputGeneration(id PaneID, generation uint64, output string) (PaneRecord, error) {
+	return r.updatePaneOutputGeneration(id, generation, output)
+}
+
+func (r *Registry) updatePaneOutputGeneration(id PaneID, generation uint64, output string) (PaneRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	loc, session, tab, pane, err := r.resolvePanePathLocked(id)
 	if err != nil {
 		return PaneRecord{}, err
+	}
+	if generation != 0 && pane.Generation != generation {
+		return PaneRecord{}, ErrStaleRecord
 	}
 
 	now := r.now()
@@ -211,12 +237,23 @@ func (r *Registry) UpdatePaneOutput(id PaneID, output string) (PaneRecord, error
 }
 
 func (r *Registry) RemovePane(id PaneID) (PaneRecord, error) {
+	return r.removePaneGeneration(id, 0)
+}
+
+func (r *Registry) RemovePaneGeneration(id PaneID, generation uint64) (PaneRecord, error) {
+	return r.removePaneGeneration(id, generation)
+}
+
+func (r *Registry) removePaneGeneration(id PaneID, generation uint64) (PaneRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	loc, session, tab, pane, err := r.resolvePanePathLocked(id)
 	if err != nil {
 		return PaneRecord{}, err
+	}
+	if generation != 0 && pane.Generation != generation {
+		return PaneRecord{}, ErrStaleRecord
 	}
 
 	delete(tab.Panes, id)

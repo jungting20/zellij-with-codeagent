@@ -114,7 +114,7 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 		s.subs.StartPane(registry.PaneID(id))
 	}
 
-	return CreatePaneResponse{Pane: paneFromRecord(record)}, nil
+	return CreatePaneResponse{Pane: paneFromRecord(record), record: record}, nil
 }
 
 // SubscribeEvents exposes in-process runtime observations published by the daemon.
@@ -194,7 +194,7 @@ func (s *Service) SendInput(ctx context.Context, req SendInputRequest) error {
 		Text:   req.Text,
 	})
 	if err != nil {
-		_, _ = s.registry.UpdatePaneStatus(registry.PaneID(req.PaneID), registry.PaneStatusError, err.Error())
+		_, _ = s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusError, err.Error())
 		return err
 	}
 	return nil
@@ -230,7 +230,7 @@ func (s *Service) SendMessage(ctx context.Context, req SendMessageRequest) (Send
 		PaneID: zellij.PaneID(toRecord.ZellijPaneID),
 		Text:   deliveredText,
 	}); err != nil {
-		_, _ = s.registry.UpdatePaneStatus(registry.PaneID(req.ToPaneID), registry.PaneStatusError, err.Error())
+		_, _ = s.registry.UpdatePaneStatusGeneration(toRecord.ID, toRecord.Generation, registry.PaneStatusError, err.Error())
 		return SendMessageResponse{}, err
 	}
 
@@ -285,11 +285,11 @@ func (s *Service) SnapshotOutput(ctx context.Context, req SnapshotOutputRequest)
 		ANSI:   req.ANSI,
 	})
 	if err != nil {
-		_, _ = s.registry.UpdatePaneStatus(registry.PaneID(req.PaneID), registry.PaneStatusError, err.Error())
+		_, _ = s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusError, err.Error())
 		return SnapshotOutputResponse{}, err
 	}
 
-	record, err = s.registry.UpdatePaneOutput(registry.PaneID(req.PaneID), output)
+	record, err = s.registry.UpdatePaneOutputGeneration(record.ID, record.Generation, output)
 	if err != nil {
 		return SnapshotOutputResponse{}, err
 	}
@@ -310,20 +310,20 @@ func (s *Service) ClosePane(ctx context.Context, req ClosePaneRequest) (ClosePan
 		PaneID: zellij.PaneID(record.ZellijPaneID),
 	})
 	if err != nil {
-		updated, updateErr := s.registry.UpdatePaneStatus(registry.PaneID(req.PaneID), registry.PaneStatusError, err.Error())
+		updated, updateErr := s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusError, err.Error())
 		if updateErr != nil {
 			return ClosePaneResponse{}, errors.Join(err, updateErr)
 		}
 		return ClosePaneResponse{Pane: paneFromRecord(updated)}, err
 	}
 
-	updated, err := s.registry.UpdatePaneStatus(registry.PaneID(req.PaneID), registry.PaneStatusClosed, "closed by runtime service")
+	updated, err := s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusClosed, "closed by runtime service")
 	if err != nil {
 		return ClosePaneResponse{}, err
 	}
 
 	if s.subs != nil {
-		s.subs.StopPane(registry.PaneID(req.PaneID))
+		s.subs.StopPaneGeneration(record.ID, record.Generation)
 	}
 
 	return ClosePaneResponse{Pane: paneFromRecord(updated)}, nil

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"zellij-with-codeagent/internal/eventbus"
+	"zellij-with-codeagent/internal/registry"
 	"zellij-with-codeagent/internal/zellij"
 )
 
@@ -79,6 +80,71 @@ func TestReconcileListFailureLeavesRegistryIntactAndPublishesHealth(t *testing.T
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for reconcile health event")
+	}
+}
+
+func TestReconcileRecordDoesNotMutateReusedPaneGeneration(t *testing.T) {
+	service := newTestService(&fakeBackend{})
+	oldRecord, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		TaskID:       "old-task",
+		ZellijPaneID: "terminal_old",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(old) error = %v", err)
+	}
+	if _, err := service.registry.RemovePane("coder"); err != nil {
+		t.Fatalf("RemovePane(old) error = %v", err)
+	}
+	newRecord, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		TaskID:       "new-task",
+		ZellijPaneID: "terminal_new",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(new) error = %v", err)
+	}
+
+	_, err = service.reconcileRecord(oldRecord, map[registry.ZellijPaneID]zellij.Pane{})
+	if !errors.Is(err, registry.ErrStaleRecord) {
+		t.Fatalf("reconcileRecord(old) error = %v, want %v", err, registry.ErrStaleRecord)
+	}
+	current, err := service.registry.GetPane("coder")
+	if err != nil {
+		t.Fatalf("GetPane(new) error = %v", err)
+	}
+	if current.Generation != newRecord.Generation || current.Status != registry.PaneStatusStarting || current.TaskID != "new-task" {
+		t.Fatalf("current pane = %#v, want untouched new generation", current)
+	}
+}
+
+func TestReconcileRecordDoesNotReturnReusedPaneFromNoMutationBranch(t *testing.T) {
+	service := newTestService(&fakeBackend{})
+	oldRecord, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		TaskID:       "old-task",
+		ZellijPaneID: "terminal_old",
+		Status:       registry.PaneStatusRunning,
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(old) error = %v", err)
+	}
+	if _, err := service.registry.RemovePane("coder"); err != nil {
+		t.Fatalf("RemovePane(old) error = %v", err)
+	}
+	if _, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "coder",
+		TaskID:       "new-task",
+		ZellijPaneID: "terminal_new",
+	}); err != nil {
+		t.Fatalf("RegisterPane(new) error = %v", err)
+	}
+
+	_, err = service.reconcileRecord(oldRecord, map[registry.ZellijPaneID]zellij.Pane{
+		"terminal_old": {ID: "terminal_old"},
+	})
+	if !errors.Is(err, registry.ErrStaleRecord) {
+		t.Fatalf("reconcileRecord(old running) error = %v, want %v", err, registry.ErrStaleRecord)
 	}
 }
 

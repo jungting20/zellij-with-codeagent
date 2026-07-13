@@ -31,6 +31,7 @@ const (
 
 type PaneRecord struct {
 	ID            PaneID
+	Generation    uint64
 	SessionID     SessionID
 	TabID         TabID
 	TaskID        TaskID
