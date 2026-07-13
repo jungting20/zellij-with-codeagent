@@ -95,3 +95,35 @@ scripts/smoke-agentctl.sh
 ```
 
 Run it inside a Zellij session or set `ZELLIJ_SESSION_NAME` before invoking the script.
+
+## Runtime Dashboard Smoke
+
+Build the unified binary and immediately register the rebuilt binary on the
+custom-cli PATH:
+
+```bash
+go build -o bin/zellij-agent ./cmd/zellij-agent
+cp bin/zellij-agent ~/.config/custom-cli
+```
+
+Start a managed workspace in a real Zellij session, then launch the dashboard:
+
+```bash
+zellij-agent work --session dashboard-smoke --auto-test "verify the runtime dashboard"
+zellij-agent dashboard --socket /tmp/agentd.sock
+```
+
+In the dashboard:
+
+1. Use `j`/`k` or the arrow keys to select the `coder` pane.
+2. Press `s` and verify that the selected pane output refreshes.
+3. Press `i`, type `echo dashboard-smoke-ok`, and press Enter. Press `s` again
+   and verify that the output contains `dashboard-smoke-ok`.
+4. Press `r` and verify that the status line reports reconciled active/lost
+   counts.
+5. Press `x`, verify that the prompt names task `dashboard-smoke`, then press
+   `y` and confirm that only panes for that task are cleaned up.
+
+Unmanaged panes in the same Zellij session must remain open. If the event
+stream closes, the dashboard must show `connection=degraded`; periodic polling,
+manual refresh, and runtime actions remain available.

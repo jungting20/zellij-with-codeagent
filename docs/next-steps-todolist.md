@@ -54,13 +54,13 @@ Turn the existing runtime introspection and event data into a live supervisor TU
 
 ### Initial Scope
 
-- [ ] Add a `zellij-agent dashboard` command backed by the existing transport boundary.
-- [ ] Show a session/task → tab → pane hierarchy with lifecycle status badges.
-- [ ] Show the selected pane's latest output and recent semantic events.
-- [ ] Support refresh/watch behavior without blocking event publishers.
-- [ ] Provide keyboard actions for snapshot, input, reconcile, and task cleanup.
-- [ ] Reuse the Bubble Tea and Lip Gloss interaction patterns already used by `tab-network`.
-- [ ] Keep the first version local-only and avoid adding LLM behavior or persistence.
+- [x] Add a `zellij-agent dashboard` command backed by the existing transport boundary.
+- [x] Show a session/task → tab → pane hierarchy with lifecycle status badges.
+- [x] Show the selected pane's latest output and recent semantic events.
+- [x] Support refresh/watch behavior without blocking event publishers.
+- [x] Provide keyboard actions for snapshot, input, reconcile, and task cleanup.
+- [x] Reuse the Bubble Tea and Lip Gloss interaction patterns already used by `tab-network`.
+- [x] Keep the first version local-only and avoid adding LLM behavior or persistence.
 
 ### Success Criteria
 
@@ -68,6 +68,17 @@ Turn the existing runtime introspection and event data into a live supervisor TU
 - A user can inspect and intervene in a managed pane without leaving the dashboard.
 - Dashboard actions continue to use the transport or `RuntimeService`; they never call Zellij directly.
 - Model/update/view logic has unit tests, and a real-Zellij manual smoke flow is documented.
+
+### Verification
+
+```bash
+go test ./internal/dashboard ./internal/cli/dashboard ./cmd/zellij-agent -count=1
+go test ./... -count=1
+./scripts/test-race-core.sh
+git diff --check
+go build -o bin/zellij-agent ./cmd/zellij-agent
+cp bin/zellij-agent ~/.config/custom-cli
+```
 
 ## P2. Make `work` Goal-Aware
 
