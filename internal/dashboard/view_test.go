@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -13,11 +14,12 @@ import (
 
 func TestViewHandlesEmptyAndTinyWindows(t *testing.T) {
 	m := NewModel(context.Background(), &fakeClient{}, Options{})
+	m.loaded = true
 	for _, size := range []tea.WindowSizeMsg{{Width: 0, Height: 0}, {Width: 20, Height: 4}, {Width: 100, Height: 30}} {
 		next, _ := m.Update(size)
 		m = next.(Model)
 		view := m.View()
-		if !strings.Contains(view, "RUNTIME DASHBOARD") || !strings.Contains(view, "no managed panes") {
+		if !strings.Contains(view, "RUNTIME DASHBOARD") || !strings.Contains(view, "No managed panes") {
 			t.Fatalf("size=%#v view=%q", size, view)
 		}
 	}
@@ -56,6 +58,14 @@ func TestViewShowsLifecycleBadgesAndFiltersRawOutput(t *testing.T) {
 		}},
 	})
 	m = next.(Model)
+	m.detailTab = tabEvents
+	for i, row := range m.rows {
+		if row.node.pane != nil {
+			m.selected = i
+			m.selectedKey = row.node.key
+			break
+		}
+	}
 	view := m.View()
 	for _, want := range []string{"coder", "role=coding-agent", "[running]", "test_passed", "visible-event"} {
 		if !strings.Contains(view, want) {
@@ -64,5 +74,52 @@ func TestViewShowsLifecycleBadgesAndFiltersRawOutput(t *testing.T) {
 	}
 	if strings.Contains(view, "hidden-raw") {
 		t.Fatalf("view contains raw output event: %q", view)
+	}
+}
+
+func TestViewShowsHealthSummaryFocusTabsAndSymbols(t *testing.T) {
+	m := NewModel(context.Background(), &fakeClient{}, Options{})
+	m.width, m.height, m.connection, m.loaded = 120, 24, "live", true
+	m.refreshing = true
+	next, _ := m.Update(refreshResultMsg{
+		status: transport.InspectRuntimeResponse{Panes: []transport.Pane{
+			{ID: "coder", SessionID: "s", TaskID: "t", TabID: "tab", Role: "coding-agent", Status: "running"},
+			{ID: "tester", SessionID: "s", TaskID: "t", TabID: "tab", Role: "tester", Status: "error"},
+		}},
+		at: time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC),
+	})
+	m = next.(Model)
+	view := m.View()
+	for _, want := range []string{"LIVE", "2 panes", "active=1", "problem=1", "RUNTIME [FOCUSED]", "[Output]", "Events", "* coder", "! tester"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q: %q", want, view)
+		}
+	}
+}
+
+func TestViewNarrowLayoutShowsOnlyFocusedPanel(t *testing.T) {
+	m := NewModel(context.Background(), &fakeClient{}, Options{})
+	m.width, m.height, m.loaded = 60, 18, true
+	m = applyRefresh(t, m, transport.InspectRuntimeResponse{Panes: []transport.Pane{{ID: "coder", SessionID: "s", TaskID: "t", TabID: "tab", Status: "running"}}})
+	treeView := m.View()
+	if !strings.Contains(treeView, "RUNTIME [FOCUSED]") || strings.Contains(treeView, "DETAIL [FOCUSED]") {
+		t.Fatalf("tree-focused narrow view = %q", treeView)
+	}
+	m.focus = focusDetail
+	detailView := m.View()
+	if !strings.Contains(detailView, "DETAIL [FOCUSED]") || strings.Contains(detailView, "RUNTIME [FOCUSED]") {
+		t.Fatalf("detail-focused narrow view = %q", detailView)
+	}
+}
+
+func TestViewDistinguishesLoadingFromEmptyRuntime(t *testing.T) {
+	m := NewModel(context.Background(), &fakeClient{}, Options{})
+	m.width, m.height = 80, 16
+	if view := m.View(); !strings.Contains(view, "Loading runtime") {
+		t.Fatalf("loading view = %q", view)
+	}
+	m.loaded = true
+	if view := m.View(); !strings.Contains(view, "No managed panes") || !strings.Contains(view, "Start a managed workspace") {
+		t.Fatalf("empty view = %q", view)
 	}
 }
