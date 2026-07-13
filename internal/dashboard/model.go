@@ -17,6 +17,16 @@ const (
 	defaultEventLimit      = 100
 )
 
+type panelFocus string
+type detailTab string
+
+const (
+	focusTree   panelFocus = "tree"
+	focusDetail panelFocus = "detail"
+	tabOutput   detailTab  = "output"
+	tabEvents   detailTab  = "events"
+)
+
 type Client interface {
 	InspectRuntime(context.Context) (transport.InspectRuntimeResponse, error)
 	RecentEvents(context.Context, int, ...string) (transport.RecentEventsResponse, error)
@@ -35,6 +45,7 @@ type Options struct {
 type refreshResultMsg struct {
 	status transport.InspectRuntimeResponse
 	events transport.RecentEventsResponse
+	at     time.Time
 	err    error
 }
 
@@ -58,15 +69,23 @@ type Model struct {
 	client Client
 	opts   Options
 
-	width, height int
-	tree          []*treeNode
-	rows          []treeRow
-	expanded      map[string]bool
-	selected      int
-	selectedKey   string
-	events        []transport.Event
-	snapshots     map[string]string
-	snapshotNext  string
+	width, height  int
+	tree           []*treeNode
+	rows           []treeRow
+	expanded       map[string]bool
+	selected       int
+	selectedKey    string
+	events         []transport.Event
+	panes          []transport.Pane
+	snapshots      map[string]string
+	snapshotNext   string
+	focus          panelFocus
+	detailTab      detailTab
+	treeViewport   viewport
+	outputViewport viewport
+	eventViewport  viewport
+	loaded         bool
+	lastRefresh    time.Time
 
 	refreshing, refreshDirty, snapshotting bool
 	stream                                 *transport.EventStream
@@ -89,15 +108,19 @@ func NewModel(ctx context.Context, client Client, opts Options) Model {
 		opts.EventLimit = defaultEventLimit
 	}
 	return Model{
-		ctx:        ctx,
-		client:     client,
-		opts:       opts,
-		expanded:   make(map[string]bool),
-		snapshots:  make(map[string]string),
-		refreshing: true,
-		connection: "connecting",
-		statusText: "loading runtime",
-		mode:       "normal",
+		ctx:            ctx,
+		client:         client,
+		opts:           opts,
+		expanded:       make(map[string]bool),
+		snapshots:      make(map[string]string),
+		refreshing:     true,
+		connection:     "connecting",
+		statusText:     "loading runtime",
+		mode:           "normal",
+		focus:          focusTree,
+		detailTab:      tabOutput,
+		outputViewport: newViewport(),
+		eventViewport:  newViewport(),
 	}
 }
 
@@ -120,6 +143,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusText = "snapshot failed: " + msg.err.Error()
 		} else {
 			m.snapshots[msg.paneID] = msg.output
+			if pane := m.selectedPane(); pane != nil && pane.ID == msg.paneID {
+				m.outputViewport.setContent(len(m.outputLines()), m.panelBodyHeight())
+			}
 			m.statusText = "snapshot refreshed for " + msg.paneID
 		}
 		if next := m.snapshotNext; next != "" {
@@ -165,7 +191,7 @@ func (m Model) refreshCmd() tea.Cmd {
 	return func() tea.Msg {
 		status, statusErr := m.client.InspectRuntime(m.ctx)
 		events, eventsErr := m.client.RecentEvents(m.ctx, m.opts.EventLimit)
-		return refreshResultMsg{status: status, events: events, err: errors.Join(statusErr, eventsErr)}
+		return refreshResultMsg{status: status, events: events, at: time.Now(), err: errors.Join(statusErr, eventsErr)}
 	}
 }
 
@@ -220,7 +246,14 @@ func (m Model) handleRefreshResult(msg refreshResultMsg) (tea.Model, tea.Cmd) {
 			oldPaneID = pane.ID
 		}
 		m.rebuildRows(msg.status.Panes, oldSelected)
+		m.panes = append([]transport.Pane(nil), msg.status.Panes...)
 		m.events = filterSemanticEvents(msg.events.Events)
+		m.loaded = true
+		m.lastRefresh = msg.at
+		if m.lastRefresh.IsZero() {
+			m.lastRefresh = time.Now()
+		}
+		m.eventViewport.setContent(len(m.eventLines()), m.panelBodyHeight())
 		m.statusText = fmt.Sprintf("runtime refreshed: panes=%d events=%d", len(msg.status.Panes), len(m.events))
 		if pane := m.selectedPane(); pane != nil && (pane.ID != oldPaneID || !hasSnapshot(m.snapshots, pane.ID)) {
 			cmds = append(cmds, m.requestSnapshot(pane.ID))
@@ -234,6 +267,10 @@ func (m Model) handleRefreshResult(msg refreshResultMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) rebuildRows(panes []transport.Pane, oldSelected int) {
+	defer func() {
+		m.treeViewport.setContent(len(m.rows), m.panelBodyHeight())
+		m.treeViewport.ensureVisible(m.selected, len(m.rows), m.panelBodyHeight())
+	}()
 	newTree := buildTree(panes)
 	allExpanded := defaultExpanded(newTree)
 	if len(m.tree) > 0 {
@@ -281,18 +318,72 @@ func (m Model) updateNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		m.closeStream()
 		return m, tea.Quit
+	case "tab":
+		if m.focus == focusTree {
+			m.focus = focusDetail
+		} else {
+			m.focus = focusTree
+		}
+		return m, nil
 	case "up", "k":
+		if m.focus == focusDetail {
+			return m.scrollDetail(-1), nil
+		}
 		return m.moveSelection(-1)
 	case "down", "j":
+		if m.focus == focusDetail {
+			return m.scrollDetail(1), nil
+		}
 		return m.moveSelection(1)
+	case "left", "h":
+		if m.focus == focusDetail {
+			m.detailTab = tabOutput
+		}
+		return m, nil
+	case "right", "l":
+		if m.focus == focusDetail {
+			m.detailTab = tabEvents
+		}
+		return m, nil
+	case "pgup":
+		if m.focus == focusDetail {
+			return m.scrollDetail(-maxInt(1, m.panelBodyHeight()-1)), nil
+		}
+		return m, nil
+	case "pgdown":
+		if m.focus == focusDetail {
+			return m.scrollDetail(maxInt(1, m.panelBodyHeight()-1)), nil
+		}
+		return m, nil
+	case "g":
+		if m.focus == focusDetail {
+			if m.detailTab == tabEvents {
+				m.eventViewport.top()
+			} else {
+				m.outputViewport.top()
+			}
+		}
+		return m, nil
+	case "G":
+		if m.focus == focusDetail {
+			height := m.panelBodyHeight()
+			if m.detailTab == tabEvents {
+				m.eventViewport.bottom(len(m.eventLines()), height)
+			} else {
+				m.outputViewport.bottom(len(m.outputLines()), height)
+			}
+		}
+		return m, nil
 	case "enter":
-		if len(m.rows) == 0 || m.rows[m.selected].node.kind == "pane" {
+		if m.focus != focusTree || len(m.rows) == 0 || m.rows[m.selected].node.kind == "pane" {
 			return m, nil
 		}
 		key := m.rows[m.selected].node.key
 		m.expanded[key] = !m.expanded[key]
 		m.rows = flattenTree(m.tree, m.expanded)
 		m.restoreSelection()
+		m.treeViewport.setContent(len(m.rows), m.panelBodyHeight())
+		m.treeViewport.ensureVisible(m.selected, len(m.rows), m.panelBodyHeight())
 		return m, nil
 	case "s":
 		if pane := m.selectedPane(); pane != nil {
@@ -322,10 +413,60 @@ func (m Model) moveSelection(delta int) (tea.Model, tea.Cmd) {
 		m.selected = len(m.rows) - 1
 	}
 	m.selectedKey = m.rows[m.selected].node.key
+	m.treeViewport.ensureVisible(m.selected, len(m.rows), m.panelBodyHeight())
 	if pane := m.selectedPane(); pane != nil && pane.ID != oldPaneID {
+		m.outputViewport = newViewport()
 		return m, m.requestSnapshot(pane.ID)
 	}
 	return m, nil
+}
+
+func (m Model) panelBodyHeight() int {
+	height := m.height - 7
+	if height < 1 {
+		return 1
+	}
+	return height
+}
+
+func (m Model) outputLines() []string {
+	pane := m.selectedPane()
+	if pane == nil {
+		return []string{"Select a pane to inspect output"}
+	}
+	output := m.snapshots[pane.ID]
+	if output == "" {
+		return []string{"No snapshot output"}
+	}
+	return strings.Split(strings.TrimSuffix(output, "\n"), "\n")
+}
+
+func (m Model) eventLines() []string {
+	if len(m.events) == 0 {
+		return []string{"No semantic events"}
+	}
+	lines := make([]string, 0, len(m.events))
+	for _, event := range m.events {
+		line := event.Type
+		if event.PaneID != "" {
+			line += " pane=" + event.PaneID
+		}
+		if event.Message != "" {
+			line += " " + event.Message
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func (m Model) scrollDetail(delta int) Model {
+	height := m.panelBodyHeight()
+	if m.detailTab == tabEvents {
+		m.eventViewport.scroll(delta, len(m.eventLines()), height)
+	} else {
+		m.outputViewport.scroll(delta, len(m.outputLines()), height)
+	}
+	return m
 }
 
 func (m *Model) requestSnapshot(paneID string) tea.Cmd {

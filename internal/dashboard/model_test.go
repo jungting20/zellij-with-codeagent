@@ -346,6 +346,76 @@ func TestModelSuppressesDuplicateAction(t *testing.T) {
 	}
 }
 
+func TestModelFocusControlsNavigationAndDetailTab(t *testing.T) {
+	_, m := modelWithSelectedPane(t, transport.Pane{ID: "coder", Status: "running"})
+	selected := m.selected
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+	if m.focus != focusDetail || m.selected != selected {
+		t.Fatalf("tab model = %#v", m)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = next.(Model)
+	if m.detailTab != tabEvents {
+		t.Fatalf("detail tab = %q, want events", m.detailTab)
+	}
+	m.events = []transport.Event{{Type: "one"}, {Type: "two"}, {Type: "three"}}
+	m.height = 8
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if next.(Model).eventViewport.followBottom {
+		t.Fatal("scrolling up must leave follow-bottom mode")
+	}
+}
+
+func TestModelTreeKeysDoNotMoveSelectionWhenDetailFocused(t *testing.T) {
+	m := NewModel(context.Background(), &fakeClient{}, Options{})
+	m = applyRefresh(t, m, transport.InspectRuntimeResponse{Panes: []transport.Pane{
+		{ID: "a", SessionID: "s", TaskID: "t", TabID: "tab", Status: "running"},
+		{ID: "b", SessionID: "s", TaskID: "t", TabID: "tab", Status: "running"},
+	}})
+	before := m.selected
+	m.focus = focusDetail
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if next.(Model).selected != before {
+		t.Fatalf("selection moved from %d to %d", before, next.(Model).selected)
+	}
+}
+
+func TestModelTreeSelectionStaysInsideViewport(t *testing.T) {
+	m := NewModel(context.Background(), &fakeClient{}, Options{})
+	m.height = 9
+	var panes []transport.Pane
+	for _, id := range []string{"a", "b", "c", "d", "e", "f"} {
+		panes = append(panes, transport.Pane{ID: id, SessionID: "s", TaskID: "t", TabID: "tab", Status: "running"})
+	}
+	m = applyRefresh(t, m, transport.InspectRuntimeResponse{Panes: panes})
+	for i := 0; i < len(m.rows); i++ {
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = next.(Model)
+	}
+	height := m.panelBodyHeight()
+	if m.selected < m.treeViewport.offset || m.selected >= m.treeViewport.offset+height {
+		t.Fatalf("selected=%d viewport=%#v height=%d", m.selected, m.treeViewport, height)
+	}
+}
+
+func TestModelRefreshPreservesPresentationState(t *testing.T) {
+	m := NewModel(context.Background(), &fakeClient{}, Options{})
+	m.focus, m.detailTab = focusDetail, tabEvents
+	m.eventViewport = viewport{offset: 1, followBottom: false}
+	m.refreshing = true
+	at := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	next, _ := m.Update(refreshResultMsg{
+		status: transport.InspectRuntimeResponse{Panes: []transport.Pane{{ID: "a", SessionID: "s", TaskID: "t", TabID: "tab", Status: "running"}}},
+		events: transport.RecentEventsResponse{Events: []transport.Event{{Type: "one"}, {Type: "two"}, {Type: "three"}}},
+		at:     at,
+	})
+	got := next.(Model)
+	if got.focus != focusDetail || got.detailTab != tabEvents || got.lastRefresh != at || !got.loaded {
+		t.Fatalf("presentation state = %#v", got)
+	}
+}
+
 func modelWithSelectedPane(t *testing.T, pane transport.Pane) (*fakeClient, Model) {
 	t.Helper()
 	client := &fakeClient{}
