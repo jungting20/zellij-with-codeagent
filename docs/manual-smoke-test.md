@@ -115,15 +115,24 @@ zellij-agent dashboard --socket /tmp/agentd.sock
 
 In the dashboard:
 
-1. Use `j`/`k` or the arrow keys to select the `coder` pane.
-2. Press `s` and verify that the selected pane output refreshes.
-3. Press `i`, type `echo dashboard-smoke-ok`, and press Enter. Press `s` again
-   and verify that the output contains `dashboard-smoke-ok`.
-4. Press `r` and verify that the status line reports reconciled active/lost
-   counts.
-5. Press `x`, verify that the prompt names task `dashboard-smoke`, then press
-   `y` and confirm that only panes for that task are cleaned up.
+1. Confirm the header reports `LIVE`, the managed pane count, and active/problem
+   lifecycle totals without relying on color.
+2. Use `j`/`k` in the focused Runtime panel, then press `Tab` and verify focus
+   moves to Detail without changing the selected pane.
+3. In Detail, use `h`/`l` to switch Output and Events. Use `j`/`k`,
+   `PageUp`/`PageDown`, and `g`/`G` to verify independent scrolling.
+4. Resize below 90 columns and verify only the focused panel is visible; press
+   `Tab` to switch the visible panel. Resize back and verify the selection, tab,
+   and scroll position remain stable.
+5. Press `?` and verify the help overlay. Close it with `Esc`.
+6. Select `coder`, press `i`, verify the overlay names `coder`, enter
+   `echo dashboard-smoke-ok`, and press Enter. Refresh the snapshot and confirm
+   the output contains `dashboard-smoke-ok`.
+7. Press `r` and verify the footer reports reconciled active/lost counts.
+8. Press `x`, verify the cleanup overlay names task `dashboard-smoke`, shows its
+   managed pane count and task-only scope, then press `y`. Confirm only that
+   task's managed panes are cleaned up.
+9. If the event stream closes, confirm the header reports `DEGRADED` while
+   periodic polling, manual refresh, and runtime actions remain available.
 
-Unmanaged panes in the same Zellij session must remain open. If the event
-stream closes, the dashboard must show `connection=degraded`; periodic polling,
-manual refresh, and runtime actions remain available.
+Unmanaged panes in the same Zellij session must remain open.
