@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -234,5 +235,259 @@ func TestApplyExecutionPlanRollsBackOnSecondPaneFailure(t *testing.T) {
 	}
 	if len(backend.closeRequests) != 1 || backend.closeRequests[0].PaneID != "terminal_3" {
 		t.Fatalf("ClosePane requests = %#v, want rollback close of first pane", backend.closeRequests)
+	}
+}
+
+func TestApplyExecutionPlanSendsInitialInputForFirstAndRemainingPanes(t *testing.T) {
+	tabID := ZellijTabID(31)
+	backend := &fakeBackend{
+		createTabID: zellij.TabID(tabID),
+		listPanes: []zellij.Pane{
+			{ID: "terminal_31a", TabID: int(tabID), TabName: "goal-prefill"},
+			{ID: "terminal_31b", TabID: int(tabID), TabName: "goal-prefill"},
+		},
+		createIDs: []zellij.PaneID{"terminal_31b"},
+	}
+	service := newTestService(backend)
+
+	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
+		Session: "goal-prefill",
+		Tabs: []ExecutionPlanTabSpec{{
+			Name: "goal-prefill",
+			Panes: []ExecutionPlanPaneSpec{
+				{ID: "coder", InitialInput: "fix the parser"},
+				{ID: "notes", InitialInput: "review these notes"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ApplyExecutionPlan() error = %v", err)
+	}
+
+	got := append([]zellij.SendInputRequest(nil), backend.sendRequests...)
+	sort.Slice(got, func(i, j int) bool { return got[i].PaneID < got[j].PaneID })
+	want := []zellij.SendInputRequest{
+		{PaneID: "terminal_31a", Text: "fix the parser"},
+		{PaneID: "terminal_31b", Text: "review these notes"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SendInput requests = %#v, want %#v", got, want)
+	}
+}
+
+func TestApplyExecutionPlanSkipsEmptyInitialInput(t *testing.T) {
+	tabID := ZellijTabID(32)
+	backend := &fakeBackend{
+		createTabID: zellij.TabID(tabID),
+		listPanes: []zellij.Pane{
+			{ID: "terminal_32a", TabID: int(tabID), TabName: "empty-prefill"},
+		},
+	}
+	service := newTestService(backend)
+
+	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
+		Session: "empty-prefill",
+		Tabs: []ExecutionPlanTabSpec{{
+			Name:  "empty-prefill",
+			Panes: []ExecutionPlanPaneSpec{{ID: "coder"}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ApplyExecutionPlan() error = %v", err)
+	}
+	if len(backend.sendRequests) != 0 {
+		t.Fatalf("SendInput requests = %#v, want none", backend.sendRequests)
+	}
+}
+
+func TestApplyExecutionPlanRollsBackOnInitialInputFailure(t *testing.T) {
+	tabID := ZellijTabID(33)
+	backend := &fakeBackend{
+		createTabID: zellij.TabID(tabID),
+		listPanes: []zellij.Pane{
+			{ID: "terminal_33a", TabID: int(tabID), TabName: "failed-prefill"},
+		},
+		sendErr: errors.New("paste failed"),
+	}
+	service := newTestService(backend)
+
+	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
+		Session: "failed-prefill",
+		Tabs: []ExecutionPlanTabSpec{{
+			Name: "failed-prefill",
+			Panes: []ExecutionPlanPaneSpec{{
+				ID:           "coder",
+				InitialInput: "fix the parser",
+			}},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), `send initial input to pane "coder"`) {
+		t.Fatalf("ApplyExecutionPlan() error = %v, want pane-specific error", err)
+	}
+
+	list, listErr := service.ListPanes(context.Background())
+	if listErr != nil {
+		t.Fatalf("ListPanes() error = %v", listErr)
+	}
+	if len(list.Panes) != 0 {
+		t.Fatalf("ListPanes() = %#v, want empty registry", list.Panes)
+	}
+	if len(backend.closeRequests) != 1 || backend.closeRequests[0].PaneID != "terminal_33a" {
+		t.Fatalf("ClosePane requests = %#v, want created pane rollback", backend.closeRequests)
+	}
+}
+
+func TestApplyExecutionPlanRollsBackAllPanesOnRemainingInitialInputFailure(t *testing.T) {
+	tabID := ZellijTabID(34)
+	backend := &fakeBackend{
+		createTabID: zellij.TabID(tabID),
+		listPanes: []zellij.Pane{
+			{ID: "terminal_34a", TabID: int(tabID), TabName: "failed-remaining-prefill"},
+			{ID: "terminal_34b", TabID: int(tabID), TabName: "failed-remaining-prefill"},
+			{ID: "terminal_34c", TabID: int(tabID), TabName: "failed-remaining-prefill"},
+		},
+		createIDs: []zellij.PaneID{"terminal_34b", "terminal_34c"},
+		sendErr:   errors.New("paste failed"),
+	}
+	service := newTestService(backend)
+
+	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
+		Session: "failed-remaining-prefill",
+		Tabs: []ExecutionPlanTabSpec{{
+			Name: "failed-remaining-prefill",
+			Panes: []ExecutionPlanPaneSpec{
+				{ID: "coder"},
+				{ID: "review", InitialInput: "review the parser"},
+				{ID: "notes"},
+			},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), `send initial input to pane "review"`) {
+		t.Fatalf("ApplyExecutionPlan() error = %v, want remaining pane input error", err)
+	}
+
+	list, listErr := service.ListPanes(context.Background())
+	if listErr != nil {
+		t.Fatalf("ListPanes() error = %v", listErr)
+	}
+	if len(list.Panes) != 0 {
+		t.Fatalf("ListPanes() = %#v, want empty registry", list.Panes)
+	}
+
+	gotClosed := make([]string, 0, len(backend.closeRequests))
+	for _, req := range backend.closeRequests {
+		gotClosed = append(gotClosed, string(req.PaneID))
+	}
+	sort.Strings(gotClosed)
+	wantClosed := []string{"terminal_34a", "terminal_34b", "terminal_34c"}
+	if !reflect.DeepEqual(gotClosed, wantClosed) {
+		t.Fatalf("closed panes = %#v, want all created panes %#v", gotClosed, wantClosed)
+	}
+}
+
+func TestApplyExecutionPlanWaitsForInitialInputReadyText(t *testing.T) {
+	tabID := ZellijTabID(35)
+	backend := &fakeBackend{
+		createTabID: zellij.TabID(tabID),
+		listPanes: []zellij.Pane{
+			{ID: "terminal_35a", TabID: int(tabID), TabName: "ready-prefill"},
+		},
+		dumpOutputs: []string{"starting", "OpenAI Codex\n›"},
+	}
+	service := newTestService(backend)
+
+	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
+		Session: "ready-prefill",
+		Tabs: []ExecutionPlanTabSpec{{
+			Name: "ready-prefill",
+			Panes: []ExecutionPlanPaneSpec{{
+				ID:                    "coder",
+				InitialInput:          "fix the parser",
+				InitialInputReadyText: "›",
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ApplyExecutionPlan() error = %v", err)
+	}
+	if len(backend.dumpRequests) != 2 {
+		t.Fatalf("DumpScreen requests = %d, want poll until second snapshot", len(backend.dumpRequests))
+	}
+	wantSend := []zellij.SendInputRequest{{PaneID: "terminal_35a", Text: "fix the parser"}}
+	if !reflect.DeepEqual(backend.sendRequests, wantSend) {
+		t.Fatalf("SendInput requests = %#v, want %#v after readiness", backend.sendRequests, wantSend)
+	}
+}
+
+func TestApplyExecutionPlanRetriesSnapshotErrorsUntilInitialInputReady(t *testing.T) {
+	tabID := ZellijTabID(36)
+	backend := &fakeBackend{
+		createTabID: zellij.TabID(tabID),
+		listPanes: []zellij.Pane{
+			{ID: "terminal_36a", TabID: int(tabID), TabName: "retry-ready-prefill"},
+		},
+		dumpOutputs: []string{"", "OpenAI Codex\n›"},
+		dumpErrors:  []error{errors.New("screen not ready"), nil},
+	}
+	service := newTestService(backend)
+
+	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
+		Session: "retry-ready-prefill",
+		Tabs: []ExecutionPlanTabSpec{{
+			Name: "retry-ready-prefill",
+			Panes: []ExecutionPlanPaneSpec{{
+				ID:                    "coder",
+				InitialInput:          "fix the parser",
+				InitialInputReadyText: "›",
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ApplyExecutionPlan() error = %v", err)
+	}
+	if len(backend.dumpRequests) != 2 || len(backend.sendRequests) != 1 {
+		t.Fatalf("dump/send requests = %d/%d, want retry then one send", len(backend.dumpRequests), len(backend.sendRequests))
+	}
+}
+
+func TestApplyExecutionPlanReadinessTimeoutRollsBackWithFreshContext(t *testing.T) {
+	tabID := ZellijTabID(37)
+	backend := &fakeBackend{
+		createTabID: zellij.TabID(tabID),
+		listPanes: []zellij.Pane{
+			{ID: "terminal_37a", TabID: int(tabID), TabName: "timeout-prefill"},
+		},
+		dumpOutput: "starting",
+	}
+	service := newTestService(backend)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	_, err := service.ApplyExecutionPlan(ctx, ApplyExecutionPlanRequest{
+		Session: "timeout-prefill",
+		Tabs: []ExecutionPlanTabSpec{{
+			Name: "timeout-prefill",
+			Panes: []ExecutionPlanPaneSpec{{
+				ID:                    "coder",
+				InitialInput:          "fix the parser",
+				InitialInputReadyText: "›",
+			}},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), `wait for initial input readiness in pane "coder"`) {
+		t.Fatalf("ApplyExecutionPlan() error = %v, want readiness timeout", err)
+	}
+	if len(backend.closeRequests) != 1 {
+		t.Fatalf("ClosePane requests = %#v, want timeout rollback", backend.closeRequests)
+	}
+	if len(backend.closeContextErrs) != 1 || backend.closeContextErrs[0] != nil {
+		t.Fatalf("ClosePane context errors = %#v, want fresh rollback context", backend.closeContextErrs)
+	}
+	list, listErr := service.ListPanes(context.Background())
+	if listErr != nil {
+		t.Fatalf("ListPanes() error = %v", listErr)
+	}
+	if len(list.Panes) != 0 {
+		t.Fatalf("ListPanes() = %#v, want empty registry after timeout rollback", list.Panes)
 	}
 }

@@ -344,7 +344,7 @@ func TestSendInputPreservesPasteThenEnterOrdering(t *testing.T) {
 	want := []CommandSpec{
 		{
 			Name: "zellij",
-			Args: []string{"action", "paste", "--pane-id", "terminal_5", "go test ./..."},
+			Args: []string{"action", "paste", "--pane-id", "terminal_5", "--", "go test ./..."},
 		},
 		{
 			Name: "zellij",
@@ -353,6 +353,29 @@ func TestSendInputPreservesPasteThenEnterOrdering(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
 		t.Fatalf("commands = %#v, want %#v", runner.commands, want)
+	}
+}
+
+func TestSendInputTreatsLeadingHyphenAsPasteText(t *testing.T) {
+	runner := &fakeRunner{
+		results: []fakeResult{{result: CommandResult{}}},
+	}
+	backend := NewBackend(Options{Runner: runner})
+
+	err := backend.SendInput(context.Background(), SendInputRequest{
+		PaneID: "terminal_5",
+		Text:   "--help",
+	})
+	if err != nil {
+		t.Fatalf("SendInput() error = %v", err)
+	}
+
+	want := []CommandSpec{{
+		Name: "zellij",
+		Args: []string{"action", "paste", "--pane-id", "terminal_5", "--", "--help"},
+	}}
+	if !reflect.DeepEqual(runner.commands, want) {
+		t.Fatalf("commands = %#v, want leading-hyphen text after -- delimiter %#v", runner.commands, want)
 	}
 }
 

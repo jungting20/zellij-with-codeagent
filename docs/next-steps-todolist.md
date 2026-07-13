@@ -84,7 +84,7 @@ cp bin/zellij-agent ~/.config/custom-cli
 
 ### Phase A: Project-Adaptive Launcher
 
-- [ ] Deliver the supplied goal to the interactive coder pane as its initial prompt.
+- [x] Deliver the supplied goal to the interactive coder pane as its initial prompt. The goal is prefilled without Enter so the user reviews and submits it.
 - [ ] Detect common project types such as Go, Node, and Rust.
 - [ ] Select useful default test/build commands from detected project files.
 - [ ] Add explicit overrides such as `--profile`, `--test-command`, `--no-review`, and `--no-lazygit` only where they solve a real workflow need.

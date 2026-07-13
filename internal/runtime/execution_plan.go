@@ -4,21 +4,28 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"zellij-with-codeagent/internal/registry"
+	"zellij-with-codeagent/internal/zellij"
 )
 
 var (
 	ErrInvalidExecutionPlan = errors.New("runtime: invalid execution plan")
 )
 
+const executionPlanInitialInputPollInterval = 50 * time.Millisecond
+
 type ExecutionPlanPaneSpec struct {
-	ID      PaneID
-	Role    string
-	AgentID AgentID
-	Command []string
-	CWD     string
+	ID                    PaneID
+	Role                  string
+	AgentID               AgentID
+	Command               []string
+	CWD                   string
+	InitialInput          string
+	InitialInputReadyText string
 }
 
 type ExecutionPlanTabSpec struct {
@@ -88,6 +95,10 @@ func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlan
 		tabID = response.Pane.ZellijTabID
 		createdTabPanes = append(createdTabPanes, response.Pane)
 		createdAll = append(createdAll, response.Pane)
+		if err := s.sendExecutionPlanInitialInput(ctx, response.Pane, firstSpec.InitialInput, firstSpec.InitialInputReadyText); err != nil {
+			_ = s.rollbackExecutionPlan(ctx, createdAll)
+			return ApplyExecutionPlanResponse{}, err
+		}
 
 		if len(tabSpec.Panes) > 1 {
 			if tabID == nil {
@@ -148,6 +159,11 @@ func (s *Service) createRemainingExecutionPlanTabPanes(ctx context.Context, task
 				results <- executionPlanPaneResult{index: i, err: err}
 				return
 			}
+			if err := s.sendExecutionPlanInitialInput(ctx, response.Pane, spec.InitialInput, spec.InitialInputReadyText); err != nil {
+				cancel()
+				results <- executionPlanPaneResult{index: i, pane: response.Pane, err: err}
+				return
+			}
 			results <- executionPlanPaneResult{index: i, pane: response.Pane}
 		}()
 	}
@@ -159,19 +175,65 @@ func (s *Service) createRemainingExecutionPlanTabPanes(ctx context.Context, task
 	created := make([]Pane, 0, len(specs))
 	var firstErr error
 	for result := range results {
-		if result.err != nil {
-			if firstErr == nil {
-				firstErr = result.err
-			}
-			continue
+		if result.pane.ID != "" {
+			panes[result.index] = result.pane
+			created = append(created, result.pane)
 		}
-		panes[result.index] = result.pane
-		created = append(created, result.pane)
+		if result.err != nil && firstErr == nil {
+			firstErr = result.err
+		}
 	}
 	if firstErr != nil {
 		return created, firstErr
 	}
 	return panes, nil
+}
+
+func (s *Service) sendExecutionPlanInitialInput(ctx context.Context, pane Pane, initialInput, readyText string) error {
+	if initialInput == "" {
+		return nil
+	}
+	if err := s.waitForExecutionPlanInitialInputReady(ctx, pane, readyText); err != nil {
+		return err
+	}
+	if err := s.SendInput(ctx, SendInputRequest{
+		PaneID: pane.ID,
+		Text:   initialInput,
+	}); err != nil {
+		return fmt.Errorf("send initial input to pane %q: %w", pane.ID, err)
+	}
+	return nil
+}
+
+func (s *Service) waitForExecutionPlanInitialInputReady(ctx context.Context, pane Pane, readyText string) error {
+	if readyText == "" {
+		return nil
+	}
+	ticker := time.NewTicker(executionPlanInitialInputPollInterval)
+	defer ticker.Stop()
+
+	var lastErr error
+	for {
+		output, err := s.backend.DumpScreen(ctx, zellij.DumpScreenRequest{
+			PaneID: zellij.PaneID(pane.ZellijPaneID),
+		})
+		if err == nil && strings.Contains(output, readyText) {
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+
+		select {
+		case <-ctx.Done():
+			cause := ctx.Err()
+			if lastErr != nil {
+				cause = errors.Join(cause, lastErr)
+			}
+			return fmt.Errorf("wait for initial input readiness in pane %q: %w", pane.ID, cause)
+		case <-ticker.C:
+		}
+	}
 }
 
 func validateExecutionPlan(req ApplyExecutionPlanRequest) error {
@@ -216,9 +278,12 @@ exec sh`, paneID)
 }
 
 func (s *Service) rollbackExecutionPlan(ctx context.Context, created []Pane) error {
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
 	var rollbackErr error
 	for _, pane := range created {
-		if _, err := s.ClosePane(ctx, ClosePaneRequest{PaneID: pane.ID}); err != nil {
+		if _, err := s.ClosePane(rollbackCtx, ClosePaneRequest{PaneID: pane.ID}); err != nil {
 			rollbackErr = errors.Join(rollbackErr, err)
 		}
 		if _, err := s.registry.RemovePane(registry.PaneID(pane.ID)); err != nil && !errors.Is(err, registry.ErrNotFound) {

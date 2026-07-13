@@ -136,3 +136,26 @@ In the dashboard:
    periodic polling, manual refresh, and runtime actions remain available.
 
 Unmanaged panes in the same Zellij session must remain open.
+
+## Work Goal Prefill Smoke
+
+Build and register the unified binary as described above, then run these commands inside a real Zellij session with the daemon serving `/tmp/agentd.sock`:
+
+```bash
+zellij-agent work --dry-run --session goal-prefill-smoke "fix the parser"
+zellij-agent work --session goal-prefill-smoke "fix the parser"
+zellij-agent work --session hyphen-goal-smoke -- --help
+```
+
+In the dry-run JSON, confirm the `coder` pane contains `"initial_input": "fix the parser"` and the other panes omit `initial_input`.
+
+In the created coder pane, confirm `fix the parser` is visible in the Codex input field and no response begins automatically. Edit the text if desired, press Enter once, and confirm Codex begins only then.
+
+Repeat the coder-pane check for `hyphen-goal-smoke`: confirm `--help` is visible as input rather than being interpreted as a Zellij option, and confirm no response begins automatically.
+
+Clean up the managed workspace:
+
+```bash
+zellij-agent ctl cleanup --task goal-prefill-smoke
+zellij-agent ctl cleanup --task hyphen-goal-smoke
+```

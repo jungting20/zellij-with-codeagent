@@ -153,11 +153,13 @@ type ExecutionPlanTab struct {
 }
 
 type ExecutionPlanPane struct {
-	ID      string   `json:"id"`
-	Role    string   `json:"role,omitempty"`
-	AgentID string   `json:"agent_id,omitempty"`
-	Command []string `json:"command,omitempty"`
-	CWD     string   `json:"cwd,omitempty"`
+	ID                    string   `json:"id"`
+	Role                  string   `json:"role,omitempty"`
+	AgentID               string   `json:"agent_id,omitempty"`
+	Command               []string `json:"command,omitempty"`
+	CWD                   string   `json:"cwd,omitempty"`
+	InitialInput          string   `json:"initial_input,omitempty"`
+	InitialInputReadyText string   `json:"initial_input_ready_text,omitempty"`
 }
 
 type ExecutionPlanResponse struct {
@@ -443,11 +445,13 @@ func (tab ExecutionPlanTab) ToRuntime() rt.ExecutionPlanTabSpec {
 
 func (pane ExecutionPlanPane) ToRuntime() rt.ExecutionPlanPaneSpec {
 	return rt.ExecutionPlanPaneSpec{
-		ID:      rt.PaneID(pane.ID),
-		Role:    pane.Role,
-		AgentID: rt.AgentID(pane.AgentID),
-		Command: cloneStrings(pane.Command),
-		CWD:     pane.CWD,
+		ID:                    rt.PaneID(pane.ID),
+		Role:                  pane.Role,
+		AgentID:               rt.AgentID(pane.AgentID),
+		Command:               cloneStrings(pane.Command),
+		CWD:                   pane.CWD,
+		InitialInput:          pane.InitialInput,
+		InitialInputReadyText: pane.InitialInputReadyText,
 	}
 }
 

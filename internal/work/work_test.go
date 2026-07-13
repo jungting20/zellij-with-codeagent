@@ -117,3 +117,32 @@ func TestSessionFromGoalHandlesNonASCII(t *testing.T) {
 		t.Fatalf("SessionFromGoal() length = %d, want <= 64", len(got))
 	}
 }
+
+func TestBuildPlanPrefillsOnlyCoderWithTrimmedGoal(t *testing.T) {
+	payload, err := BuildPlan(PlanRequest{
+		Goal: "  fix the parser  ",
+		CWD:  "/tmp/app",
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+
+	panes := payload.Tabs[0].Panes
+	if got := panes[0].InitialInput; got != "fix the parser" {
+		t.Fatalf("coder InitialInput = %q, want exact trimmed goal", got)
+	}
+	if strings.HasSuffix(panes[0].InitialInput, "\n") {
+		t.Fatalf("coder InitialInput = %q, want no newline", panes[0].InitialInput)
+	}
+	if got := panes[0].InitialInputReadyText; got != "›" {
+		t.Fatalf("coder InitialInputReadyText = %q, want Codex prompt marker", got)
+	}
+	for _, pane := range panes[1:] {
+		if pane.InitialInput != "" {
+			t.Fatalf("pane %q InitialInput = %q, want coder-only prefill", pane.ID, pane.InitialInput)
+		}
+		if pane.InitialInputReadyText != "" {
+			t.Fatalf("pane %q InitialInputReadyText = %q, want coder-only readiness", pane.ID, pane.InitialInputReadyText)
+		}
+	}
+}

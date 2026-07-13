@@ -77,11 +77,13 @@ func TestExecutionPlanPayloadToRuntimePreservesNestedPayload(t *testing.T) {
 		Tabs: []ExecutionPlanTab{{
 			Name: "frontend",
 			Panes: []ExecutionPlanPane{{
-				ID:      "planner",
-				Role:    "planner",
-				AgentID: "agent-1",
-				Command: []string{"npm", "test"},
-				CWD:     "/tmp/app",
+				ID:                    "planner",
+				Role:                  "planner",
+				AgentID:               "agent-1",
+				Command:               []string{"npm", "test"},
+				CWD:                   "/tmp/app",
+				InitialInput:          "inspect the auth flow",
+				InitialInputReadyText: "›",
 			}},
 		}},
 	}
@@ -95,7 +97,12 @@ func TestExecutionPlanPayloadToRuntimePreservesNestedPayload(t *testing.T) {
 		t.Fatalf("ExecutionPlanPayload.ToRuntime() tabs = %#v, want nested tab and pane", converted.Tabs)
 	}
 	pane := converted.Tabs[0].Panes[0]
-	if pane.ID != "planner" || pane.Role != "planner" || pane.AgentID != "agent-1" || pane.CWD != "/tmp/app" {
+	if pane.ID != "planner" ||
+		pane.Role != "planner" ||
+		pane.AgentID != "agent-1" ||
+		pane.CWD != "/tmp/app" ||
+		pane.InitialInput != "inspect the auth flow" ||
+		pane.InitialInputReadyText != "›" {
 		t.Fatalf("ExecutionPlanPayload.ToRuntime() pane = %#v, want payload fields preserved", pane)
 	}
 	source.Tabs[0].Panes[0].Command[0] = "mutated"

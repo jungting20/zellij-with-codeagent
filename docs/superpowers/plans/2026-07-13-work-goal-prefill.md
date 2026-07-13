@@ -520,9 +520,251 @@ Expected: no uncommitted implementation files and separate commits for contract,
 
 ---
 
+### Task 5: Wait for the Codex Input Prompt Before Prefill
+
+**Files:**
+- Modify: internal/transport/types.go
+- Modify: internal/transport/types_test.go
+- Modify: internal/runtime/execution_plan.go
+- Modify: internal/runtime/execution_plan_test.go
+- Modify: internal/runtime/service_test.go
+- Modify: internal/work/work.go
+- Modify: internal/work/work_test.go
+- Modify: internal/cli/work/work.go
+- Modify: internal/cli/work/work_test.go
+- Modify: README.md
+- Modify: docs/manual-smoke-test.md
+
+**Interfaces:**
+- Consumes: ExecutionPlanPane.InitialInput, Backend.DumpScreen, Service.SendInput, and the request context created by work CLI.
+- Produces: ExecutionPlanPane.InitialInputReadyText string, ExecutionPlanPaneSpec.InitialInputReadyText string, readiness-gated initial input, and rollback that remains usable after request timeout.
+
+- [ ] **Step 1: Write the failing transport contract assertion**
+
+Add this field to the source pane in TestExecutionPlanPayloadToRuntimePreservesNestedPayload:
+
+    InitialInputReadyText: "›",
+
+Add this condition to the converted-pane assertion:
+
+    pane.InitialInputReadyText != "›"
+
+- [ ] **Step 2: Verify transport RED**
+
+    go test ./internal/transport -run '^TestExecutionPlanPayloadToRuntimePreservesNestedPayload$' -count=1
+
+Expected: build failure because transport and runtime pane specs do not define InitialInputReadyText.
+
+- [ ] **Step 3: Add and convert the readiness field**
+
+Add to transport.ExecutionPlanPane:
+
+    InitialInputReadyText string `json:"initial_input_ready_text,omitempty"`
+
+Add to runtime.ExecutionPlanPaneSpec:
+
+    InitialInputReadyText string
+
+Add to ExecutionPlanPane.ToRuntime:
+
+    InitialInputReadyText: pane.InitialInputReadyText,
+
+- [ ] **Step 4: Verify transport GREEN**
+
+    gofmt -w internal/transport/types.go internal/transport/types_test.go internal/runtime/execution_plan.go
+    go test ./internal/transport -run '^TestExecutionPlanPayloadToRuntimePreservesNestedPayload$' -count=1
+
+Expected: PASS.
+
+- [ ] **Step 5: Write failing work-plan and CLI timeout assertions**
+
+Extend TestBuildPlanPrefillsOnlyCoderWithTrimmedGoal:
+
+    if got := panes[0].InitialInputReadyText; got != "›" {
+        t.Fatalf("coder InitialInputReadyText = %q, want Codex prompt marker", got)
+    }
+    for _, pane := range panes[1:] {
+        if pane.InitialInputReadyText != "" {
+            t.Fatalf("pane %q InitialInputReadyText = %q, want coder-only readiness", pane.ID, pane.InitialInputReadyText)
+        }
+    }
+
+Extend TestRunDryRunPrintsExecutionPlanEnvelope:
+
+    if got := bytes.Count(stdout.Bytes(), []byte(`"initial_input_ready_text"`)); got != 1 {
+        t.Fatalf("dry-run initial_input_ready_text keys = %d, want coder-only JSON field", got)
+    }
+    if got := payload.Tabs[0].Panes[0].InitialInputReadyText; got != "›" {
+        t.Fatalf("coder InitialInputReadyText = %q, want Codex prompt marker", got)
+    }
+
+Extend TestRunHelpPrintsUsageToStdout to require the default timeout text:
+
+    !strings.Contains(stdout.String(), "default 15s")
+
+- [ ] **Step 6: Verify work/CLI RED**
+
+    go test ./internal/work -run '^TestBuildPlanPrefillsOnlyCoderWithTrimmedGoal$' -count=1
+    go test ./internal/cli/work -run 'TestRun(DryRunPrintsExecutionPlanEnvelope|HelpPrintsUsageToStdout)' -count=1
+
+Expected: tests FAIL because the marker is empty and help still reports 10 seconds.
+
+- [ ] **Step 7: Add the work marker and 15-second default**
+
+Add to the coder pane literal in internal/work/work.go:
+
+    InitialInputReadyText: "›",
+
+Change the work flag default and usage text in internal/cli/work/work.go:
+
+    timeout := fs.Duration("timeout", 15*time.Second, "request timeout")
+
+    fmt.Fprintln(w, "    \trequest timeout (default 15s)")
+
+- [ ] **Step 8: Verify work/CLI GREEN**
+
+    gofmt -w internal/work/work.go internal/work/work_test.go internal/cli/work/work.go internal/cli/work/work_test.go
+    go test ./internal/work -run '^TestBuildPlanPrefillsOnlyCoderWithTrimmedGoal$' -count=1
+    go test ./internal/cli/work -run 'TestRun(DryRunPrintsExecutionPlanEnvelope|HelpPrintsUsageToStdout)' -count=1
+
+Expected: PASS.
+
+- [ ] **Step 9: Extend the runtime fake backend for readiness sequences**
+
+Add these fields to fakeBackend in internal/runtime/service_test.go:
+
+    dumpOutputs      []string
+    dumpErrors       []error
+    closeContextErrs []error
+
+In DumpScreen, after recording the request, shift one configured output and error when present; otherwise retain dumpOutput and dumpErr:
+
+    output := b.dumpOutput
+    if len(b.dumpOutputs) > 0 {
+        output = b.dumpOutputs[0]
+        b.dumpOutputs = b.dumpOutputs[1:]
+    }
+    err := b.dumpErr
+    if len(b.dumpErrors) > 0 {
+        err = b.dumpErrors[0]
+        b.dumpErrors = b.dumpErrors[1:]
+    }
+    return output, err
+
+Change fakeBackend.ClosePane to record ctx.Err before returning:
+
+    b.closeContextErrs = append(b.closeContextErrs, ctx.Err())
+
+- [ ] **Step 10: Write failing readiness and timeout rollback tests**
+
+Add TestApplyExecutionPlanWaitsForInitialInputReadyText. Configure dumpOutputs as `[]string{"starting", "OpenAI Codex\n›"}`, apply a one-pane plan with input and marker, and assert two dump requests followed by one exact SendInput request.
+
+Add TestApplyExecutionPlanReadinessTimeoutRollsBackWithFreshContext. Use context.WithTimeout with 20 milliseconds, keep dumpOutput at `"starting"`, and assert:
+
+    err != nil && strings.Contains(err.Error(), `wait for initial input readiness in pane "coder"`)
+    len(backend.closeRequests) == 1
+    len(backend.closeContextErrs) == 1 && backend.closeContextErrs[0] == nil
+    len(service.ListPanes(...).Panes) == 0
+
+- [ ] **Step 11: Verify runtime RED**
+
+    go test ./internal/runtime -run 'InitialInput(ReadyText|ReadinessTimeout)' -count=1
+
+Expected: readiness sequencing fails because input is sent immediately, and timeout cleanup fails because rollback receives a canceled context.
+
+- [ ] **Step 12: Implement condition-based readiness waiting**
+
+Add imports strings and time, then add:
+
+    const executionPlanInitialInputPollInterval = 50 * time.Millisecond
+
+    func (s *Service) waitForExecutionPlanInitialInputReady(ctx context.Context, pane Pane, readyText string) error {
+        if readyText == "" {
+            return nil
+        }
+        ticker := time.NewTicker(executionPlanInitialInputPollInterval)
+        defer ticker.Stop()
+
+        var lastErr error
+        for {
+            output, err := s.backend.DumpScreen(ctx, zellij.DumpScreenRequest{
+                PaneID: zellij.PaneID(pane.ZellijPaneID),
+            })
+            if err == nil && strings.Contains(output, readyText) {
+                return nil
+            }
+            if err != nil {
+                lastErr = err
+            }
+
+            select {
+            case <-ctx.Done():
+                cause := ctx.Err()
+                if lastErr != nil {
+                    cause = errors.Join(cause, lastErr)
+                }
+                return fmt.Errorf("wait for initial input readiness in pane %q: %w", pane.ID, cause)
+            case <-ticker.C:
+            }
+        }
+    }
+
+Change sendExecutionPlanInitialInput to accept readyText and call the helper before SendInput:
+
+    func (s *Service) sendExecutionPlanInitialInput(ctx context.Context, pane Pane, initialInput, readyText string) error
+
+Update both call sites to pass spec.InitialInputReadyText.
+
+- [ ] **Step 13: Make rollback independent of request cancellation**
+
+At the start of rollbackExecutionPlan, create and use a bounded cleanup context:
+
+    rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+    defer cancel()
+
+Use rollbackCtx for ClosePane calls. Registry removal remains unchanged.
+
+- [ ] **Step 14: Verify runtime GREEN and race safety**
+
+    gofmt -w internal/runtime/execution_plan.go internal/runtime/execution_plan_test.go internal/runtime/service_test.go
+    go test ./internal/runtime -run 'InitialInput(ReadyText|ReadinessTimeout)' -count=1
+    go test ./internal/runtime -count=1
+    ./scripts/test-race-core.sh
+
+Expected: all commands exit 0.
+
+- [ ] **Step 15: Update documentation for readiness and hyphen-goal smoke**
+
+Update README.md to say the launcher waits up to the configured timeout for the Codex input prompt before pasting.
+
+Extend Work Goal Prefill Smoke in docs/manual-smoke-test.md with:
+
+    zellij-agent work --session hyphen-goal-smoke -- --help
+
+Require the coder snapshot to show `--help` without automatic submission, then clean up task hyphen-goal-smoke.
+
+- [ ] **Step 16: Run final verification and rebuild**
+
+    go test ./... -count=1
+    ./scripts/test-race-core.sh
+    git diff --check
+    go build -o bin/zellij-agent ./cmd/zellij-agent
+    cp bin/zellij-agent ~/.config/custom-cli
+
+Expected: all commands exit 0 and the rebuilt binary is registered immediately after build.
+
+- [ ] **Step 17: Perform real-Zellij smoke with an isolated daemon socket**
+
+Start the rebuilt daemon on a temporary socket without disturbing the existing daemon. Run normal and hyphen-goal work commands, capture coder snapshots, and assert exact prefill with no Codex response. Clean both tasks, stop the temporary daemon, and remove its socket.
+
+Do not commit. The user will inspect and commit the final working tree.
+
+---
+
 ## Plan Self-Review
 
-- Spec coverage: Tasks 1-4 cover optional JSON, conversion, exact coder-only goal, no newline, runtime delivery, empty input, rollback, dry-run visibility, docs, build registration, and manual verification.
+- Spec coverage: Tasks 1-5 cover optional JSON, conversion, exact coder-only goal, no newline, readiness polling, timeout-safe rollback, leading-hyphen input, dry-run visibility, docs, build registration, and manual verification.
 - Scope: the plan excludes project detection, command selection, optional-tool checks, launcher overrides, and feedback-loop behavior.
 - Type consistency: both layers use InitialInput string; JSON uses initial_input; runtime passes it through SendInputRequest.Text.
 - Rollback consistency: the first pane is recorded before delivery, and a remaining-pane delivery error returns its created pane to the existing rollback path.
+- Readiness consistency: work supplies marker `›`; transport and runtime preserve InitialInputReadyText; runtime waits through Backend.DumpScreen before SendInput; work context defaults to 15 seconds.

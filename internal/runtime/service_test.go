@@ -552,13 +552,16 @@ type fakeBackend struct {
 	listErr        error
 	dumpErr        error
 
-	listPanes  []zellij.Pane
-	dumpOutput string
+	listPanes   []zellij.Pane
+	dumpOutput  string
+	dumpOutputs []string
+	dumpErrors  []error
 
 	createRequests    []zellij.CreatePaneRequest
 	createTabRequests []zellij.CreateTabRequest
 	closeRequests     []zellij.ClosePaneRequest
 	closeTabRequests  []zellij.CloseTabRequest
+	closeContextErrs  []error
 	sendRequests      []zellij.SendInputRequest
 	dumpRequests      []zellij.DumpScreenRequest
 	listCalls         []struct{}
@@ -641,10 +644,11 @@ func (b *fakeBackend) CreatePane(ctx context.Context, req zellij.CreatePaneReque
 	return b.createID, nil
 }
 
-func (b *fakeBackend) ClosePane(_ context.Context, req zellij.ClosePaneRequest) error {
+func (b *fakeBackend) ClosePane(ctx context.Context, req zellij.ClosePaneRequest) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.closeRequests = append(b.closeRequests, req)
+	b.closeContextErrs = append(b.closeContextErrs, ctx.Err())
 	if err := b.closeErrByPane[req.PaneID]; err != nil {
 		return err
 	}
@@ -675,10 +679,17 @@ func (b *fakeBackend) DumpScreen(_ context.Context, req zellij.DumpScreenRequest
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.dumpRequests = append(b.dumpRequests, req)
-	if b.dumpErr != nil {
-		return "", b.dumpErr
+	output := b.dumpOutput
+	if len(b.dumpOutputs) > 0 {
+		output = b.dumpOutputs[0]
+		b.dumpOutputs = b.dumpOutputs[1:]
 	}
-	return b.dumpOutput, nil
+	err := b.dumpErr
+	if len(b.dumpErrors) > 0 {
+		err = b.dumpErrors[0]
+		b.dumpErrors = b.dumpErrors[1:]
+	}
+	return output, err
 }
 
 func (b *fakeBackend) SubscribeCommand(req zellij.SubscribeRequest) (zellij.CommandSpec, error) {

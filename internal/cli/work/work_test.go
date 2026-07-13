@@ -34,6 +34,12 @@ func TestRunDryRunPrintsExecutionPlanEnvelope(t *testing.T) {
 	if client.requestID != "" {
 		t.Fatalf("requestID = %q, want no submit during dry-run", client.requestID)
 	}
+	if got := bytes.Count(stdout.Bytes(), []byte(`"initial_input"`)); got != 1 {
+		t.Fatalf("dry-run initial_input keys = %d, want coder-only JSON field", got)
+	}
+	if got := bytes.Count(stdout.Bytes(), []byte(`"initial_input_ready_text"`)); got != 1 {
+		t.Fatalf("dry-run initial_input_ready_text keys = %d, want coder-only JSON field", got)
+	}
 	var envelope transport.RequestEnvelope
 	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
 		t.Fatalf("dry-run JSON decode error = %v; output=%q", err, stdout.String())
@@ -50,6 +56,20 @@ func TestRunDryRunPrintsExecutionPlanEnvelope(t *testing.T) {
 	}
 	if got := payload.Tabs[0].Panes[0].Command; len(got) != 4 || got[0] != "/tmp/bin/zellij-agent" || got[1] != "role" || got[2] != "coding-agent" || got[3] != cwd {
 		t.Fatalf("coder command = %#v, want configured role command", got)
+	}
+	if got := payload.Tabs[0].Panes[0].InitialInput; got != "implement work command" {
+		t.Fatalf("coder InitialInput = %q, want dry-run goal", got)
+	}
+	if got := payload.Tabs[0].Panes[0].InitialInputReadyText; got != "›" {
+		t.Fatalf("coder InitialInputReadyText = %q, want Codex prompt marker", got)
+	}
+	for _, pane := range payload.Tabs[0].Panes[1:] {
+		if pane.InitialInput != "" {
+			t.Fatalf("pane %q InitialInput = %q, want coder-only prefill", pane.ID, pane.InitialInput)
+		}
+		if pane.InitialInputReadyText != "" {
+			t.Fatalf("pane %q InitialInputReadyText = %q, want coder-only readiness", pane.ID, pane.InitialInputReadyText)
+		}
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty dry-run stderr", stderr.String())
@@ -111,7 +131,8 @@ func TestRunHelpPrintsUsageToStdout(t *testing.T) {
 			}
 			if !strings.Contains(stdout.String(), "Usage: zellij-agent work") ||
 				!strings.Contains(stdout.String(), "--socket") ||
-				!strings.Contains(stdout.String(), "--timeout") {
+				!strings.Contains(stdout.String(), "--timeout") ||
+				!strings.Contains(stdout.String(), "default 15s") {
 				t.Fatalf("stdout = %q, want work usage with common options", stdout.String())
 			}
 			if stderr.Len() != 0 {

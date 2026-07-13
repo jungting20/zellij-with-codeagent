@@ -69,7 +69,7 @@ func closePaneCommand(binary, session string, id PaneID) CommandSpec {
 }
 
 func pasteCommand(binary, session string, id PaneID, text string) CommandSpec {
-	return newActionCommand(binary, session, "paste", "--pane-id", string(id), text)
+	return newActionCommand(binary, session, "paste", "--pane-id", string(id), "--", text)
 }
 
 func sendEnterCommand(binary, session string, id PaneID) CommandSpec {

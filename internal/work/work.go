@@ -43,10 +43,12 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 				Name: session,
 				Panes: []transport.ExecutionPlanPane{
 					{
-						ID:      "coder",
-						Role:    "coding-agent",
-						CWD:     cwd,
-						Command: append(append([]string{}, roleCommand...), "coding-agent", cwd),
+						ID:                    "coder",
+						Role:                  "coding-agent",
+						CWD:                   cwd,
+						Command:               append(append([]string{}, roleCommand...), "coding-agent", cwd),
+						InitialInput:          goal,
+						InitialInputReadyText: "›",
 					},
 					{
 						ID:      "test",
