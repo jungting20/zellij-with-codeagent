@@ -66,12 +66,14 @@ type Model struct {
 	selectedKey   string
 	events        []transport.Event
 	snapshots     map[string]string
+	snapshotNext  string
 
 	refreshing, refreshDirty, snapshotting bool
 	stream                                 *transport.EventStream
-	connection, statusText                 string
+	connection, statusText, actionText     string
 	mode                                   string
 	input                                  []rune
+	inputPane                              string
 	confirmTask                            string
 	actionInFlight                         bool
 }
@@ -116,10 +118,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.snapshotting = false
 		if msg.err != nil {
 			m.statusText = "snapshot failed: " + msg.err.Error()
-			return m, nil
+		} else {
+			m.snapshots[msg.paneID] = msg.output
+			m.statusText = "snapshot refreshed for " + msg.paneID
 		}
-		m.snapshots[msg.paneID] = msg.output
-		m.statusText = "snapshot refreshed for " + msg.paneID
+		if next := m.snapshotNext; next != "" {
+			m.snapshotNext = ""
+			return m, m.requestSnapshot(next)
+		}
 		return m, nil
 	case actionResultMsg:
 		return m.handleActionResult(msg)
@@ -323,7 +329,11 @@ func (m Model) moveSelection(delta int) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) requestSnapshot(paneID string) tea.Cmd {
-	if paneID == "" || m.snapshotting {
+	if paneID == "" {
+		return nil
+	}
+	if m.snapshotting {
+		m.snapshotNext = paneID
 		return nil
 	}
 	m.snapshotting = true

@@ -43,6 +43,7 @@ func (m Model) updateActionOrNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.mode = "input"
 		m.input = nil
+		m.inputPane = pane.ID
 		m.statusText = "input for " + pane.ID
 		return m, nil
 	case "r":
@@ -78,6 +79,7 @@ func (m Model) updateInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEsc:
 		m.mode = "normal"
 		m.input = nil
+		m.inputPane = ""
 		m.statusText = "input cancelled"
 		return m, nil
 	case tea.KeyBackspace, tea.KeyDelete:
@@ -89,17 +91,17 @@ func (m Model) updateInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.input) == 0 || m.actionInFlight {
 			return m, nil
 		}
-		pane := m.selectedPane()
-		if pane == nil {
+		paneID := m.inputPane
+		if paneID == "" {
 			m.mode = "normal"
 			m.input = nil
-			m.statusText = "input failed: selected pane disappeared"
+			m.statusText = "input failed: target pane is unavailable"
 			return m, nil
 		}
 		text := string(m.input)
 		m.actionInFlight = true
-		m.statusText = "sending input to " + pane.ID
-		return m, m.sendInputCmd(pane.ID, text)
+		m.statusText = "sending input to " + paneID
+		return m, m.sendInputCmd(paneID, text)
 	case tea.KeyRunes:
 		m.input = append(m.input, msg.Runes...)
 		return m, nil
@@ -159,12 +161,15 @@ func (m Model) handleActionResult(msg actionResultMsg) (tea.Model, tea.Cmd) {
 	m.actionInFlight = false
 	m.mode = "normal"
 	m.input = nil
+	m.inputPane = ""
 	m.confirmTask = ""
 	if msg.err != nil {
 		m.statusText = msg.kind + " failed: " + msg.err.Error()
+		m.actionText = m.statusText
 		return m, nil
 	}
 	m.statusText = msg.summary
+	m.actionText = msg.summary
 	return m, m.requestRefresh()
 }
 

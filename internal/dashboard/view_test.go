@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"zellij-with-codeagent/internal/transport"
 )
@@ -18,6 +19,27 @@ func TestViewHandlesEmptyAndTinyWindows(t *testing.T) {
 		view := m.View()
 		if !strings.Contains(view, "RUNTIME DASHBOARD") || !strings.Contains(view, "no managed panes") {
 			t.Fatalf("size=%#v view=%q", size, view)
+		}
+	}
+}
+
+func TestViewFitsConfiguredWindow(t *testing.T) {
+	m := NewModel(context.Background(), &fakeClient{}, Options{})
+	m.width, m.height = 30, 6
+	m.refreshing = true
+	var panes []transport.Pane
+	for _, id := range []string{"a", "b", "c", "d"} {
+		panes = append(panes, transport.Pane{ID: id, SessionID: "session", TaskID: "task", TabID: "tab", Role: "coding-agent", Status: "running"})
+	}
+	next, _ := m.Update(refreshResultMsg{status: transport.InspectRuntimeResponse{Panes: panes}})
+	view := next.(Model).View()
+	lines := strings.Split(view, "\n")
+	if len(lines) > m.height {
+		t.Fatalf("view lines = %d, want <= %d: %q", len(lines), m.height, view)
+	}
+	for i, line := range lines {
+		if width := ansi.StringWidth(line); width > m.width {
+			t.Fatalf("line %d width = %d, want <= %d: %q", i, width, m.width, line)
 		}
 	}
 }

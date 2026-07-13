@@ -42,7 +42,7 @@ func (m Model) View() string {
 	b.WriteByte('\n')
 	switch m.mode {
 	case "input":
-		fmt.Fprintf(&b, "input> %s\n", string(m.input))
+		fmt.Fprintf(&b, "input[%s]> %s\n", m.inputPane, string(m.input))
 	case "confirm-cleanup":
 		fmt.Fprintf(&b, "confirm cleanup task=%s [y/N]\n", m.confirmTask)
 	}
@@ -52,8 +52,16 @@ func (m Model) View() string {
 		b.WriteString(mutedStyle.Render(m.statusText))
 	}
 	b.WriteByte('\n')
+	if m.actionText != "" && m.actionText != m.statusText {
+		if strings.Contains(m.actionText, "failed") {
+			b.WriteString(errorStyle.Render(m.actionText))
+		} else {
+			b.WriteString(mutedStyle.Render(m.actionText))
+		}
+		b.WriteByte('\n')
+	}
 	b.WriteString(mutedStyle.Render("j/k: move  enter: expand  s: snapshot  i: input  r: reconcile  x: cleanup  R: refresh  q: quit"))
-	return b.String()
+	return fitScreen(b.String(), m.width, m.height)
 }
 
 func (m Model) treeView() string {
@@ -154,4 +162,17 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func fitScreen(value string, width, height int) string {
+	lines := strings.Split(value, "\n")
+	if height > 0 && len(lines) > height {
+		lines = lines[:height]
+	}
+	if width > 0 {
+		for i, line := range lines {
+			lines[i] = truncate(line, width)
+		}
+	}
+	return strings.Join(lines, "\n")
 }

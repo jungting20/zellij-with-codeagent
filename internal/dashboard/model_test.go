@@ -150,6 +150,40 @@ func TestModelSelectionRequestsSnapshot(t *testing.T) {
 	}
 }
 
+func TestModelQueuesSnapshotWhenSelectionChangesDuringSnapshot(t *testing.T) {
+	client := &fakeClient{snapshot: transport.SnapshotOutputResponse{Output: "output"}}
+	m := NewModel(context.Background(), client, Options{})
+	m = applyRefresh(t, m, transport.InspectRuntimeResponse{Panes: []transport.Pane{
+		{ID: "a", SessionID: "s", TaskID: "t", TabID: "tab", Status: "running"},
+		{ID: "b", SessionID: "s", TaskID: "t", TabID: "tab", Status: "running"},
+	}})
+	for i, row := range m.rows {
+		if row.node.pane != nil && row.node.pane.ID == "a" {
+			m.selected, m.selectedKey = i, row.node.key
+		}
+	}
+	first := m.requestSnapshot("a")
+	if first == nil {
+		t.Fatal("first snapshot command is nil")
+	}
+	next, cmd := m.moveSelection(1)
+	m = next.(Model)
+	if pane := m.selectedPane(); pane == nil || pane.ID != "b" {
+		t.Fatalf("selected pane = %#v, want b", pane)
+	}
+	if cmd != nil {
+		t.Fatal("second snapshot must wait for the in-flight snapshot")
+	}
+	next, followup := m.Update(first())
+	if followup == nil {
+		t.Fatal("completed snapshot must start queued selected-pane snapshot")
+	}
+	next, _ = next.(Model).Update(followup())
+	if client.snapshotPane != "b" {
+		t.Fatalf("last snapshot pane = %q, want b", client.snapshotPane)
+	}
+}
+
 func applyRefresh(t *testing.T, m Model, status transport.InspectRuntimeResponse) Model {
 	t.Helper()
 	m.refreshing = true
@@ -192,6 +226,35 @@ func TestModelInputEditingCancelAndInactiveRejection(t *testing.T) {
 	next, cmd := inactive.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
 	if cmd != nil || next.(Model).mode != "normal" || !strings.Contains(next.(Model).statusText, "inactive") {
 		t.Fatalf("inactive input model = %#v cmd=%v", next.(Model), cmd)
+	}
+}
+
+func TestModelInputKeepsOriginalPaneAcrossRefresh(t *testing.T) {
+	client := &fakeClient{}
+	m := NewModel(context.Background(), client, Options{})
+	m = applyRefresh(t, m, transport.InspectRuntimeResponse{Panes: []transport.Pane{
+		{ID: "a", SessionID: "s", TaskID: "t", TabID: "tab", Status: "running"},
+		{ID: "b", SessionID: "s", TaskID: "t", TabID: "tab", Status: "running"},
+	}})
+	for i, row := range m.rows {
+		if row.node.pane != nil && row.node.pane.ID == "a" {
+			m.selected, m.selectedKey = i, row.node.key
+		}
+	}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	next, _ = next.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("echo")})
+	m = next.(Model)
+	m.refreshing = true
+	next, _ = m.Update(refreshResultMsg{status: transport.InspectRuntimeResponse{Panes: []transport.Pane{
+		{ID: "b", SessionID: "s", TaskID: "t", TabID: "tab", Status: "running"},
+	}}})
+	next, cmd := next.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("input command is nil")
+	}
+	_ = cmd()
+	if client.inputPane != "a" {
+		t.Fatalf("input pane = %q, want original pane a", client.inputPane)
 	}
 }
 
@@ -256,6 +319,21 @@ func TestModelReconcileSummaryAndActionError(t *testing.T) {
 	next, _ = next.(Model).Update(cmd())
 	if !strings.Contains(next.(Model).statusText, "input failed: denied") {
 		t.Fatalf("status = %q", next.(Model).statusText)
+	}
+}
+
+func TestModelPreservesActionSummaryAcrossImmediateRefresh(t *testing.T) {
+	client, m := modelWithSelectedPane(t, transport.Pane{ID: "coder", TaskID: "task-1", Status: "running"})
+	client.reconcile = transport.ReconcileResponse{Active: []transport.Pane{{ID: "coder"}}}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	next, _ = next.(Model).Update(cmd())
+	m = next.(Model)
+	m.refreshing = true
+	next, _ = m.Update(refreshResultMsg{status: transport.InspectRuntimeResponse{Panes: []transport.Pane{{
+		ID: "coder", SessionID: "session", TaskID: "task-1", TabID: "tab", Status: "running",
+	}}}})
+	if view := next.(Model).View(); !strings.Contains(view, "reconciled active=1 lost=0") {
+		t.Fatalf("view lost action summary after refresh: %q", view)
 	}
 }
 
