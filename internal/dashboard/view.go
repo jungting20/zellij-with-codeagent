@@ -40,6 +40,12 @@ func (m Model) View() string {
 		b.WriteString(renderBlock("OUTPUT / EVENTS", detail, width))
 	}
 	b.WriteByte('\n')
+	switch m.mode {
+	case "input":
+		fmt.Fprintf(&b, "input> %s\n", string(m.input))
+	case "confirm-cleanup":
+		fmt.Fprintf(&b, "confirm cleanup task=%s [y/N]\n", m.confirmTask)
+	}
 	if strings.Contains(m.statusText, "failed") || m.connection == "degraded" {
 		b.WriteString(errorStyle.Render(m.statusText))
 	} else {

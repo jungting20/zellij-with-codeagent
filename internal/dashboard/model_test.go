@@ -156,3 +156,133 @@ func applyRefresh(t *testing.T, m Model, status transport.InspectRuntimeResponse
 	next, _ := m.Update(refreshResultMsg{status: status})
 	return next.(Model)
 }
+
+func TestModelInputSendsLineWithNewline(t *testing.T) {
+	client, m := modelWithSelectedPane(t, transport.Pane{ID: "coder", TaskID: "task-1", Status: "running"})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	next, _ = next.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("echo ok")})
+	next, cmd := next.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter must submit non-empty input")
+	}
+	msg := cmd()
+	next, _ = next.(Model).Update(msg)
+	if client.inputPane != "coder" || client.input.Text != "echo ok\n" {
+		t.Fatalf("input pane=%q req=%#v", client.inputPane, client.input)
+	}
+	if next.(Model).mode != "normal" {
+		t.Fatalf("mode = %q, want normal", next.(Model).mode)
+	}
+}
+
+func TestModelInputEditingCancelAndInactiveRejection(t *testing.T) {
+	_, m := modelWithSelectedPane(t, transport.Pane{ID: "coder", TaskID: "task-1", Status: "running"})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	next, _ = next.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ab")})
+	next, _ = next.(Model).Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	if got := string(next.(Model).input); got != "a" {
+		t.Fatalf("input = %q, want a", got)
+	}
+	next, _ = next.(Model).Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if next.(Model).mode != "normal" || len(next.(Model).input) != 0 {
+		t.Fatalf("cancelled model = %#v", next.(Model))
+	}
+
+	_, inactive := modelWithSelectedPane(t, transport.Pane{ID: "coder", TaskID: "task-1", Status: "exited"})
+	next, cmd := inactive.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if cmd != nil || next.(Model).mode != "normal" || !strings.Contains(next.(Model).statusText, "inactive") {
+		t.Fatalf("inactive input model = %#v cmd=%v", next.(Model), cmd)
+	}
+}
+
+func TestModelEmptyInputDoesNotSubmit(t *testing.T) {
+	client, m := modelWithSelectedPane(t, transport.Pane{ID: "coder", TaskID: "task-1", Status: "starting"})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	next, cmd := next.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil || client.inputPane != "" || next.(Model).mode != "input" {
+		t.Fatalf("empty submit model=%#v pane=%q cmd=%v", next.(Model), client.inputPane, cmd)
+	}
+}
+
+func TestModelCleanupRequiresConfirmationAndScopesTask(t *testing.T) {
+	client, m := modelWithSelectedPane(t, transport.Pane{ID: "coder", TaskID: "task-1", Status: "running"})
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if cmd != nil || next.(Model).mode != "confirm-cleanup" {
+		t.Fatal("x must only enter confirmation")
+	}
+	next, cmd = next.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatal("y must submit cleanup")
+	}
+	msg := cmd()
+	next, _ = next.(Model).Update(msg)
+	if client.cleanup.TaskID != "task-1" || len(client.cleanup.PaneIDs) != 0 || client.cleanup.Role != "" {
+		t.Fatalf("cleanup = %#v", client.cleanup)
+	}
+}
+
+func TestModelCleanupCancellationAndMissingTask(t *testing.T) {
+	client, m := modelWithSelectedPane(t, transport.Pane{ID: "coder", TaskID: "task-1", Status: "running"})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	next, cmd := next.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if cmd != nil || client.cleanup.TaskID != "" || next.(Model).mode != "normal" {
+		t.Fatalf("cancel cleanup model=%#v request=%#v", next.(Model), client.cleanup)
+	}
+
+	_, noTask := modelWithSelectedPane(t, transport.Pane{ID: "coder", Status: "running"})
+	next, cmd = noTask.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if cmd != nil || next.(Model).mode != "normal" || !strings.Contains(next.(Model).statusText, "task") {
+		t.Fatalf("missing task model=%#v cmd=%v", next.(Model), cmd)
+	}
+}
+
+func TestModelReconcileSummaryAndActionError(t *testing.T) {
+	client, m := modelWithSelectedPane(t, transport.Pane{ID: "coder", TaskID: "task-1", Status: "running"})
+	client.reconcile = transport.ReconcileResponse{Active: []transport.Pane{{ID: "coder"}}, Lost: []transport.Pane{{ID: "lost"}}}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if cmd == nil {
+		t.Fatal("r must reconcile")
+	}
+	next, _ = next.(Model).Update(cmd())
+	if !strings.Contains(next.(Model).statusText, "active=1 lost=1") {
+		t.Fatalf("status = %q", next.(Model).statusText)
+	}
+
+	client, m = modelWithSelectedPane(t, transport.Pane{ID: "coder", TaskID: "task-1", Status: "running"})
+	client.inputErr = errors.New("denied")
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	next, _ = next.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	next, cmd = next.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = next.(Model).Update(cmd())
+	if !strings.Contains(next.(Model).statusText, "input failed: denied") {
+		t.Fatalf("status = %q", next.(Model).statusText)
+	}
+}
+
+func TestModelSuppressesDuplicateAction(t *testing.T) {
+	_, m := modelWithSelectedPane(t, transport.Pane{ID: "coder", TaskID: "task-1", Status: "running"})
+	m.actionInFlight = true
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if cmd != nil || !next.(Model).actionInFlight {
+		t.Fatalf("duplicate action model=%#v cmd=%v", next.(Model), cmd)
+	}
+}
+
+func modelWithSelectedPane(t *testing.T, pane transport.Pane) (*fakeClient, Model) {
+	t.Helper()
+	client := &fakeClient{}
+	pane.SessionID = "session"
+	if pane.TabID == "" {
+		pane.TabID = "tab"
+	}
+	m := NewModel(context.Background(), client, Options{})
+	m = applyRefresh(t, m, transport.InspectRuntimeResponse{Panes: []transport.Pane{pane}})
+	for i, row := range m.rows {
+		if row.node.pane != nil {
+			m.selected = i
+			m.selectedKey = row.node.key
+			break
+		}
+	}
+	return client, m
+}

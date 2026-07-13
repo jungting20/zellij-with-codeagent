@@ -121,6 +121,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.snapshots[msg.paneID] = msg.output
 		m.statusText = "snapshot refreshed for " + msg.paneID
 		return m, nil
+	case actionResultMsg:
+		return m.handleActionResult(msg)
 	case streamReadyMsg:
 		if msg.err != nil || msg.stream == nil {
 			m.connection = "degraded"
@@ -139,7 +141,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.closeStream()
 		return m, nil
 	case tea.KeyMsg:
-		return m.updateNormalKey(msg)
+		return m.updateKey(msg)
 	}
 	return m, nil
 }
