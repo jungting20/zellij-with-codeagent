@@ -2,6 +2,7 @@ package eventbus
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -103,5 +104,35 @@ func TestBusRecentClonesHistory(t *testing.T) {
 	again := bus.Recent(0)
 	if again[0].Message != "ready" {
 		t.Fatalf("Recent() leaked mutable history, got %#v", again[0])
+	}
+}
+
+func TestBusConcurrentPublishAndUnregister(t *testing.T) {
+	const iterations = 1000
+
+	for i := 0; i < iterations; i++ {
+		bus := NewWithBuffer(1)
+		ctx, cancel := context.WithCancel(context.Background())
+		_, unregister := bus.Subscribe(ctx)
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			<-start
+			bus.Publish(Event{Type: TypeRawOutput, Message: "concurrent"})
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			unregister()
+		}()
+
+		close(start)
+		wg.Wait()
+		cancel()
+		bus.Close()
 	}
 }

@@ -78,8 +78,9 @@ func (b *Bus) Subscribe(ctx context.Context) (<-chan Event, func()) {
 // when their buffer is full so publishers cannot deadlock.
 func (b *Bus) Publish(e Event) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	if b.closed {
-		b.mu.Unlock()
 		return
 	}
 	b.history = append(b.history, e)
@@ -87,13 +88,8 @@ func (b *Bus) Publish(e Event) {
 		copy(b.history, b.history[overflow:])
 		b.history = b.history[:b.historyN]
 	}
-	subs := make([]chan Event, 0, len(b.subs))
-	for _, ch := range b.subs {
-		subs = append(subs, ch)
-	}
-	b.mu.Unlock()
 
-	for _, ch := range subs {
+	for _, ch := range b.subs {
 		select {
 		case ch <- e:
 		default:
