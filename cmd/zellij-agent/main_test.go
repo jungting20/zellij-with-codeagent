@@ -22,13 +22,23 @@ func TestRunHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run() exit code = %d, want 0", code)
 	}
-	for _, want := range []string{"Usage: zellij-agent", "planner", "work", "chrome", "code-review", "debate-background"} {
+	for _, want := range []string{"Usage: zellij-agent", "planner", "work", "chrome", "dashboard", "code-review", "debate-background"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, missing %q", stdout.String(), want)
 		}
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunDispatchesDashboardHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"dashboard", "--help"}, strings.NewReader(""), &stdout, &stderr)
+
+	if code != 0 || !strings.Contains(stdout.String(), "Usage: zellij-agent dashboard") || stderr.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 

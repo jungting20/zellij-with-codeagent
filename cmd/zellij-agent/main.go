@@ -10,10 +10,12 @@ import (
 	codereviewcli "zellij-with-codeagent/internal/cli/codereview"
 	ctlcli "zellij-with-codeagent/internal/cli/ctl"
 	daemoncli "zellij-with-codeagent/internal/cli/daemon"
+	dashboardcli "zellij-with-codeagent/internal/cli/dashboard"
 	debatebg "zellij-with-codeagent/internal/cli/debatebackground"
 	plannercli "zellij-with-codeagent/internal/cli/planner"
 	rolecli "zellij-with-codeagent/internal/cli/role"
 	workcli "zellij-with-codeagent/internal/cli/work"
+	"zellij-with-codeagent/internal/dashboard"
 	"zellij-with-codeagent/internal/transport"
 )
 
@@ -47,6 +49,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return chromecli.Run(args[1:], stdin, stdout, stderr, newChromeClient, chromecli.Config{
 			DefaultRoleCommand: []string{executablePath(), "role"},
 		})
+	case "dashboard":
+		return dashboardcli.Run(args[1:], stdin, stdout, stderr, newDashboardClient, dashboardcli.Config{})
 	case "code-review":
 		return codereviewcli.Run(args[1:], stdout, stderr)
 	case "debate-background":
@@ -73,6 +77,10 @@ func newWorkClient(socketPath string, timeout time.Duration) workcli.AgentClient
 }
 
 func newChromeClient(socketPath string, timeout time.Duration) chromecli.AgentClient {
+	return newAutoStartClient(socketPath, timeout)
+}
+
+func newDashboardClient(socketPath string, timeout time.Duration) dashboard.Client {
 	return newAutoStartClient(socketPath, timeout)
 }
 
@@ -108,6 +116,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  planner  Generate, validate, and submit planner requests")
 	fmt.Fprintln(w, "  work     Start a personal mixed-mode coding workspace")
 	fmt.Fprintln(w, "  chrome   Start a Chrome network tracking tab")
+	fmt.Fprintln(w, "  dashboard")
+	fmt.Fprintln(w, "           Supervise the managed runtime in a live TUI")
 	fmt.Fprintln(w, "  code-review")
 	fmt.Fprintln(w, "           Review the latest git diff with debate-background")
 	fmt.Fprintln(w, "  debate-background")
