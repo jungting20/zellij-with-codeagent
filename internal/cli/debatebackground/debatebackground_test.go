@@ -232,6 +232,32 @@ func TestRunStartsCodexOnlyAfterSuccessfulTextResult(t *testing.T) {
 	}
 }
 
+func TestRunOverallTimeoutCancelsCodexStarter(t *testing.T) {
+	repo := testRepository(t)
+	output := filepath.Join(t.TempDir(), "result.md")
+	starter := &blockingCodexStarter{}
+	var stdout, stderr bytes.Buffer
+
+	started := time.Now()
+	code := run([]string{
+		"--topic", "continue until timeout", "--cwd", repo, "--output", output,
+		"--timeout", "50ms", "--start-codex",
+	}, nil, &stdout, &stderr, testDependencies(&fakeRoleRunner{}, starter))
+
+	if code != 1 {
+		t.Fatalf("run() exit code = %d, want 1; stderr=%q", code, stderr.String())
+	}
+	if !errors.Is(starter.contextErr, context.DeadlineExceeded) {
+		t.Fatalf("starter context error = %v, want deadline exceeded", starter.contextErr)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("run() elapsed = %v, want overall timeout to stop Codex", elapsed)
+	}
+	if !strings.Contains(stderr.String(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("stderr = %q, want Codex deadline diagnostic", stderr.String())
+	}
+}
+
 func TestRunHelpDocumentsCompatibilityAndOutputFormat(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
@@ -279,6 +305,20 @@ func (r *fakeRoleRunner) roleNames() []string {
 
 type fakeCodexStarter struct {
 	requests []CodexStartRequest
+}
+
+type blockingCodexStarter struct {
+	contextErr error
+}
+
+func (s *blockingCodexStarter) Start(ctx context.Context, _ CodexStartRequest) error {
+	select {
+	case <-ctx.Done():
+		s.contextErr = ctx.Err()
+		return ctx.Err()
+	case <-time.After(300 * time.Millisecond):
+		return errors.New("starter context was not canceled")
+	}
 }
 
 func (s *fakeCodexStarter) Start(_ context.Context, req CodexStartRequest) error {

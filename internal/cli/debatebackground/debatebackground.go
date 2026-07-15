@@ -173,7 +173,7 @@ func run(args []string, _ io.Reader, stdout, stderr io.Writer, deps Dependencies
 			CWD:        repository,
 			PromptFile: resolvedOutput,
 		}
-		if err := deps.CodexStarter.Start(context.Background(), req); err != nil {
+		if err := deps.CodexStarter.Start(ctx, req); err != nil {
 			fmt.Fprintf(stderr, "zellij-agent debate-background codex start failed: %v\n", err)
 			return 1
 		}

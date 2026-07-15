@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -109,6 +110,37 @@ func TestProcessRoleRunnerPreservesExitCodeAndBoundsStderr(t *testing.T) {
 	}
 }
 
+func TestProcessRoleRunnerIncludesBoundedStderrForOutputErrors(t *testing.T) {
+	tests := []struct {
+		mode string
+		kind string
+	}{
+		{mode: "malformed-with-stderr", kind: FailureMalformed},
+		{mode: "wrong-role-with-stderr", kind: FailureContract},
+	}
+	for _, tt := range tests {
+		t.Run(tt.mode, func(t *testing.T) {
+			repository := t.TempDir()
+			t.Setenv("ROLE_HELPER_MODE", tt.mode)
+			t.Setenv("ROLE_HELPER_REPOSITORY", repository)
+
+			_, err := newHelperProcessRoleRunner(t).Run(context.Background(), RoleRequest{
+				Role: Proposer, Repository: repository, Prompt: "proposer input", Timeout: time.Second,
+			})
+			runErr := assertRunError(t, err, tt.kind, nil)
+			if !strings.Contains(runErr.Message, "stderr-tail-marker") {
+				t.Fatalf("RunError.Message = %q, want retained stderr tail", runErr.Message)
+			}
+			if strings.Contains(runErr.Message, "stderr-head-marker") {
+				t.Fatalf("RunError.Message retained discarded stderr head: %q", runErr.Message)
+			}
+			if len(runErr.Message) > 9*1024 {
+				t.Fatalf("len(RunError.Message) = %d, want bounded diagnostic", len(runErr.Message))
+			}
+		})
+	}
+}
+
 func TestProcessRoleRunnerTimesOut(t *testing.T) {
 	repository := t.TempDir()
 	t.Setenv("ROLE_HELPER_MODE", "sleep")
@@ -191,6 +223,9 @@ func TestRoleHelperProcess(t *testing.T) {
 		_ = json.NewEncoder(os.Stdout).Encode(result)
 	case "malformed":
 		fmt.Fprint(os.Stdout, "not-json")
+	case "malformed-with-stderr":
+		fmt.Fprint(os.Stderr, "stderr-head-marker"+strings.Repeat("x", 9*1024)+"stderr-tail-marker")
+		fmt.Fprint(os.Stdout, "not-json")
 	case "trailing":
 		_ = json.NewEncoder(os.Stdout).Encode(result)
 		fmt.Fprint(os.Stdout, `{"unexpected":true}`)
@@ -198,6 +233,10 @@ func TestRoleHelperProcess(t *testing.T) {
 		result.SchemaVersion = "debate-role/v0"
 		_ = json.NewEncoder(os.Stdout).Encode(result)
 	case "wrong-role":
+		result.Role = Critic.Name
+		_ = json.NewEncoder(os.Stdout).Encode(result)
+	case "wrong-role-with-stderr":
+		fmt.Fprint(os.Stderr, "stderr-head-marker"+strings.Repeat("x", 9*1024)+"stderr-tail-marker")
 		result.Role = Critic.Name
 		_ = json.NewEncoder(os.Stdout).Encode(result)
 	case "wrong-engine":
@@ -214,9 +253,29 @@ func TestRoleHelperProcess(t *testing.T) {
 		os.Exit(7)
 	case "sleep":
 		time.Sleep(5 * time.Second)
+	case "spawn-grandchild":
+		grandchild := exec.Command(os.Args[0], "-test.run=TestRoleGrandchildHelperProcess", "--")
+		grandchild.Env = append(os.Environ(), "ROLE_GRANDCHILD_HELPER=1")
+		if err := grandchild.Start(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(8)
+		}
+		if err := os.WriteFile(os.Getenv("ROLE_GRANDCHILD_PID_FILE"), []byte(fmt.Sprint(grandchild.Process.Pid)), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(9)
+		}
+		time.Sleep(5 * time.Second)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown ROLE_HELPER_MODE %q\n", os.Getenv("ROLE_HELPER_MODE"))
 		os.Exit(6)
 	}
+	os.Exit(0)
+}
+
+func TestRoleGrandchildHelperProcess(t *testing.T) {
+	if os.Getenv("ROLE_GRANDCHILD_HELPER") != "1" {
+		return
+	}
+	time.Sleep(5 * time.Second)
 	os.Exit(0)
 }

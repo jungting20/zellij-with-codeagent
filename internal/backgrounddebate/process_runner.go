@@ -36,6 +36,7 @@ func (r *ProcessRoleRunner) Run(ctx context.Context, req RoleRequest) (debaterol
 
 	args := append(append([]string{}, r.command[1:]...), "role", req.Role.Name, "--output-format", "json", req.Repository)
 	cmd := exec.CommandContext(roleCtx, r.command[0], args...)
+	configureProcessTreeCancellation(cmd)
 	cmd.Dir = req.Repository
 	cmd.Stdin = strings.NewReader(req.Prompt)
 	var stdout bytes.Buffer
@@ -45,7 +46,7 @@ func (r *ProcessRoleRunner) Run(ctx context.Context, req RoleRequest) (debaterol
 
 	if err := cmd.Run(); err != nil {
 		if roleCtx.Err() != nil {
-			return debaterole.Result{}, &RunError{Kind: FailureTimeout, Message: roleCtx.Err().Error()}
+			return debaterole.Result{}, withStderrDiagnostic(&RunError{Kind: FailureTimeout, Message: roleCtx.Err().Error()}, stderr)
 		}
 		var exitErr *exec.ExitError
 		var exitCode *int
@@ -53,39 +54,37 @@ func (r *ProcessRoleRunner) Run(ctx context.Context, req RoleRequest) (debaterol
 			code := exitErr.ExitCode()
 			exitCode = &code
 		}
-		message := fmt.Sprintf("role command failed: %v", err)
-		if diagnostic := strings.TrimSpace(stderr.String()); diagnostic != "" {
-			message += ": " + diagnostic
-		}
-		return debaterole.Result{}, &RunError{Kind: FailureExecution, Message: message, ExitCode: exitCode}
+		return debaterole.Result{}, withStderrDiagnostic(&RunError{
+			Kind: FailureExecution, Message: fmt.Sprintf("role command failed: %v", err), ExitCode: exitCode,
+		}, stderr)
 	}
 
 	var result debaterole.Result
 	decoder := json.NewDecoder(&stdout)
 	if err := decoder.Decode(&result); err != nil {
-		return debaterole.Result{}, malformedRoleOutput(err)
+		return debaterole.Result{}, withStderrDiagnostic(malformedRoleOutput(err), stderr)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
 			err = errors.New("multiple JSON values")
 		}
-		return debaterole.Result{}, malformedRoleOutput(err)
+		return debaterole.Result{}, withStderrDiagnostic(malformedRoleOutput(err), stderr)
 	}
 	if result.SchemaVersion != debaterole.SchemaVersion {
-		return debaterole.Result{}, contractMismatch(fmt.Sprintf("expected schema %q, got %q", debaterole.SchemaVersion, result.SchemaVersion))
+		return debaterole.Result{}, withStderrDiagnostic(contractMismatch(fmt.Sprintf("expected schema %q, got %q", debaterole.SchemaVersion, result.SchemaVersion)), stderr)
 	}
 	if result.Role != req.Role.Name {
-		return debaterole.Result{}, contractMismatch(fmt.Sprintf("expected role %q, got %q", req.Role.Name, result.Role))
+		return debaterole.Result{}, withStderrDiagnostic(contractMismatch(fmt.Sprintf("expected role %q, got %q", req.Role.Name, result.Role)), stderr)
 	}
 	if result.Engine != req.Role.Engine {
-		return debaterole.Result{}, contractMismatch(fmt.Sprintf("expected engine %q, got %q", req.Role.Engine, result.Engine))
+		return debaterole.Result{}, withStderrDiagnostic(contractMismatch(fmt.Sprintf("expected engine %q, got %q", req.Role.Engine, result.Engine)), stderr)
 	}
 	if result.Status != StatusSuccess {
-		return debaterole.Result{}, contractMismatch(fmt.Sprintf("expected status %q, got %q", StatusSuccess, result.Status))
+		return debaterole.Result{}, withStderrDiagnostic(contractMismatch(fmt.Sprintf("expected status %q, got %q", StatusSuccess, result.Status)), stderr)
 	}
 	if strings.TrimSpace(result.Content) == "" {
-		return debaterole.Result{}, &RunError{Kind: FailureEmpty, Message: "role returned empty content"}
+		return debaterole.Result{}, withStderrDiagnostic(&RunError{Kind: FailureEmpty, Message: "role returned empty content"}, stderr)
 	}
 	return result, nil
 }
@@ -96,6 +95,14 @@ func malformedRoleOutput(err error) *RunError {
 
 func contractMismatch(message string) *RunError {
 	return &RunError{Kind: FailureContract, Message: message}
+}
+
+func withStderrDiagnostic(runErr *RunError, stderr *tailBuffer) *RunError {
+	diagnostic := strings.TrimSpace(stderr.String())
+	if diagnostic != "" {
+		runErr.Message += ": " + diagnostic
+	}
+	return runErr
 }
 
 type tailBuffer struct {
