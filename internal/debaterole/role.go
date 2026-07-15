@@ -1,0 +1,159 @@
+package debaterole
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+)
+
+const SchemaVersion = "debate-role/v1"
+
+type ProviderRequest struct {
+	Repository string
+	Prompt     string
+}
+
+type Provider interface {
+	Run(context.Context, ProviderRequest) (string, error)
+}
+
+type ProviderFunc func(context.Context, ProviderRequest) (string, error)
+
+func (fn ProviderFunc) Run(ctx context.Context, req ProviderRequest) (string, error) {
+	return fn(ctx, req)
+}
+
+type Config struct {
+	Role         string
+	Engine       string
+	SystemPrompt string
+	Provider     Provider
+}
+
+type Result struct {
+	SchemaVersion string `json:"schema_version"`
+	Role          string `json:"role"`
+	Engine        string `json:"engine"`
+	Status        string `json:"status"`
+	Content       string `json:"content"`
+}
+
+func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, cfg Config) int {
+	fs := flag.NewFlagSet(cfg.Role, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	outputFormat := fs.String("output-format", "text", "output format: text or json")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *outputFormat != "text" && *outputFormat != "json" {
+		fmt.Fprintf(stderr, "Error: --output-format must be text or json\n")
+		return 2
+	}
+	if fs.NArg() == 0 {
+		fmt.Fprintln(stderr, "Error: path is required")
+		return 2
+	}
+
+	repository, err := resolveRepositoryPath(fs.Arg(0))
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	var input string
+	if fs.NArg() > 1 {
+		input = strings.Join(fs.Args()[1:], " ")
+	} else {
+		data, err := io.ReadAll(stdin)
+		if err != nil {
+			fmt.Fprintf(stderr, "Error: read stdin: %v\n", err)
+			return 1
+		}
+		input = string(data)
+	}
+	if strings.TrimSpace(input) == "" {
+		fmt.Fprintln(stderr, "Error: prompt is required")
+		return 2
+	}
+	if cfg.Provider == nil {
+		fmt.Fprintln(stderr, "Error: provider is required")
+		return 1
+	}
+
+	content, err := cfg.Provider.Run(context.Background(), ProviderRequest{
+		Repository: repository,
+		Prompt:     ComposePrompt(cfg.SystemPrompt, input),
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.ExitCode()
+		}
+		return 1
+	}
+	content = strings.TrimRight(content, "\r\n")
+	if content == "" {
+		fmt.Fprintln(stderr, "Error: provider returned an empty response")
+		return 1
+	}
+
+	if *outputFormat == "json" {
+		err = json.NewEncoder(stdout).Encode(Result{
+			SchemaVersion: SchemaVersion,
+			Role:          cfg.Role,
+			Engine:        cfg.Engine,
+			Status:        "success",
+			Content:       content,
+		})
+	} else {
+		_, err = fmt.Fprintln(stdout, content)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: write output: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func ComposePrompt(systemPrompt, input string) string {
+	return "<<<SYSTEM_ROLE_BEGIN>>>\n" + strings.TrimSpace(systemPrompt) +
+		"\n<<<SYSTEM_ROLE_END>>>\n\n<<<DEBATE_INPUT_BEGIN>>>\n" + strings.TrimSpace(input) +
+		"\n<<<DEBATE_INPUT_END>>>\n"
+}
+
+func resolveRepositoryPath(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve path %q: %w", path, err)
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return "", fmt.Errorf("path %q is not accessible: %w", absPath, err)
+	}
+	searchPath := absPath
+	if !info.IsDir() {
+		searchPath = filepath.Dir(absPath)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(searchPath, ".git")); err == nil {
+			return searchPath, nil
+		}
+		parent := filepath.Dir(searchPath)
+		if parent == searchPath {
+			break
+		}
+		searchPath = parent
+	}
+	return "", fmt.Errorf("path %q is not inside a git repository", absPath)
+}
