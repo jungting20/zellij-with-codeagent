@@ -16,7 +16,13 @@ Focus on correctness, edge cases, regressions, duplication, repeated business lo
 Do not rewrite the whole code.
 Only leave actionable review comments.`
 
+type BackgroundRun func([]string, io.Writer, io.Writer) int
+
 func Run(args []string, stdout, stderr io.Writer) int {
+	return run(args, stdout, stderr, debatebg.Run)
+}
+
+func run(args []string, stdout, stderr io.Writer, backgroundRun BackgroundRun) int {
 	fs := flag.NewFlagSet("code-review", flag.ContinueOnError)
 	if isHelpRequest(args) {
 		fs.SetOutput(stdout)
@@ -43,7 +49,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	return debatebg.Run([]string{
+	return backgroundRun([]string{
 		"--topic", reviewTopic(*prompt),
 		"--rounds", strconv.Itoa(*rounds),
 		"--start-codex",

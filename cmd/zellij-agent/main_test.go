@@ -2,15 +2,11 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 
-	debatebg "zellij-with-codeagent/internal/cli/debatebackground"
-	"zellij-with-codeagent/internal/debate"
 	"zellij-with-codeagent/internal/transport"
 )
 
@@ -80,54 +76,31 @@ func TestRunDispatchesChromeDryRun(t *testing.T) {
 	}
 }
 
-func TestRunDispatchesCodeReview(t *testing.T) {
-	runner := &zellijAgentBackgroundRunner{}
-	restoreRunner := debatebg.SetBackgroundRunnerForTesting(runner)
-	defer restoreRunner()
-	starter := &zellijAgentCodexStarter{}
-	restoreStarter := debatebg.SetCodexStarterForTesting(starter)
-	defer restoreStarter()
+func TestRunDispatchesCodeReviewHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"code-review", "--rounds", "1"}, strings.NewReader(""), &stdout, &stderr)
+	code := run([]string{"code-review", "--help"}, strings.NewReader(""), &stdout, &stderr)
 
-	if code != 0 {
-		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
-	}
-	if len(runner.requestsFor("agy")) != 1 || len(runner.requestsFor("agent")) != 1 || len(runner.requestsFor("codex")) != 1 {
-		t.Fatalf("runner requests = %#v, want default review agents", runner.requests)
-	}
-	if len(starter.requests) != 1 {
-		t.Fatalf("codex start requests = %#v, want one", starter.requests)
-	}
-	if !strings.Contains(runner.requestsFor("codex")[0].Stdin, "Review the latest git diff.") {
-		t.Fatalf("codex prompt = %q, want review topic", runner.requestsFor("codex")[0].Stdin)
+	if code != 0 || !strings.Contains(stdout.String(), "Usage: zellij-agent code-review [options]") || stderr.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 
-func TestRunDispatchesDebateBackground(t *testing.T) {
-	runner := &zellijAgentBackgroundRunner{}
-	restore := debatebg.SetBackgroundRunnerForTesting(runner)
-	defer restore()
+func TestRunDispatchesDebateBackgroundHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{
-		"debate-background",
-		"--topic", "top-level background",
-		"--agents", "agy,codex",
-		"--cwd", "/repo",
-		"--agent-timeout", "1s",
-		"--timeout", "5s",
-	}, strings.NewReader(""), &stdout, &stderr)
+	code := run([]string{"debate-background", "--help"}, strings.NewReader(""), &stdout, &stderr)
 
 	if code != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	if len(runner.requestsFor("agy")) != 1 || len(runner.requestsFor("codex")) != 1 || len(runner.requestsFor("debate-coordinator")) != 1 {
-		t.Fatalf("runner requests = %#v, want agy, codex, coordinator", runner.requests)
+	for _, want := range []string{"--output-format", "--agents", "--config"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, missing %q", stdout.String(), want)
+		}
 	}
-	if !strings.Contains(stdout.String(), "debate request=") || !strings.Contains(stdout.String(), "background synthesis") {
-		t.Fatalf("stdout = %q, want debate-background output", stdout.String())
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
 }
 
@@ -218,40 +191,4 @@ func containsValue(values []string, value string) bool {
 		}
 	}
 	return false
-}
-
-type zellijAgentBackgroundRunner struct {
-	mu       sync.Mutex
-	requests []debate.BackgroundCommandRequest
-}
-
-type zellijAgentCodexStarter struct {
-	requests []debatebg.CodexStartRequest
-}
-
-func (r *zellijAgentBackgroundRunner) Run(_ context.Context, req debate.BackgroundCommandRequest) (debate.BackgroundCommandResult, error) {
-	r.mu.Lock()
-	r.requests = append(r.requests, req)
-	r.mu.Unlock()
-	if req.AgentID == "debate-coordinator" {
-		return debate.BackgroundCommandResult{Stdout: "background synthesis"}, nil
-	}
-	return debate.BackgroundCommandResult{Stdout: "background answer from " + req.AgentID}, nil
-}
-
-func (r *zellijAgentBackgroundRunner) requestsFor(agentID string) []debate.BackgroundCommandRequest {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var requests []debate.BackgroundCommandRequest
-	for _, req := range r.requests {
-		if req.AgentID == agentID {
-			requests = append(requests, req)
-		}
-	}
-	return requests
-}
-
-func (s *zellijAgentCodexStarter) Start(_ context.Context, req debatebg.CodexStartRequest) error {
-	s.requests = append(s.requests, req)
-	return nil
 }

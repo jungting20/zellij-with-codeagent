@@ -2,77 +2,97 @@ package codereview
 
 import (
 	"bytes"
-	"context"
+	"io"
+	"reflect"
 	"strings"
-	"sync"
 	"testing"
-
-	debatebg "zellij-with-codeagent/internal/cli/debatebackground"
-	"zellij-with-codeagent/internal/debate"
 )
 
-func TestRunUsesFixedReviewTopicAndStartsCodexByDefault(t *testing.T) {
-	runner := &fakeBackgroundRunner{}
-	restoreRunner := debatebg.SetBackgroundRunnerForTesting(runner)
-	defer restoreRunner()
-	starter := &fakeCodexStarter{}
-	restoreStarter := debatebg.SetCodexStarterForTesting(starter)
-	defer restoreStarter()
-	var stdout, stderr bytes.Buffer
+func TestRunForwardsReviewToDebateBackground(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "fixed topic and rounds",
+			args: []string{"--rounds", "2"},
+			want: []string{"--topic", ReviewTopic, "--rounds", "2", "--start-codex"},
+		},
+		{
+			name: "additional prompt",
+			args: []string{"--prompt", "  Pay extra attention to CLI compatibility.  "},
+			want: []string{
+				"--topic", ReviewTopic + "\n\nAdditional review prompt:\nPay extra attention to CLI compatibility.",
+				"--rounds", "1",
+				"--start-codex",
+			},
+		},
+	}
 
-	code := Run([]string{"--rounds", "2"}, &stdout, &stderr)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotArgs []string
+			var gotStdout, gotStderr bool
+			var stdout, stderr bytes.Buffer
+			backgroundRun := func(args []string, out, errOut io.Writer) int {
+				gotArgs = append([]string(nil), args...)
+				gotStdout = out == &stdout
+				gotStderr = errOut == &stderr
+				return 17
+			}
 
-	if code != 0 {
-		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
-	}
-	if got := len(runner.requestsFor("agy")); got != 2 {
-		t.Fatalf("agy requests = %d, want 2 rounds", got)
-	}
-	firstPrompt := runner.requestsFor("codex")[0].Stdin
-	if !strings.Contains(firstPrompt, ReviewTopic) {
-		t.Fatalf("first codex prompt = %q, want fixed review topic", firstPrompt)
-	}
-	if strings.Contains(firstPrompt, "--topic") {
-		t.Fatalf("first codex prompt = %q, want topic text not CLI flag text", firstPrompt)
-	}
-	if len(starter.requests) != 1 {
-		t.Fatalf("codex start requests = %#v, want one", starter.requests)
-	}
-	if starter.requests[0].PromptFile == "" || !strings.Contains(stdout.String(), "[debate-background codex]") {
-		t.Fatalf("stdout = %q promptFile=%q, want automatic codex start", stdout.String(), starter.requests[0].PromptFile)
+			code := run(tt.args, &stdout, &stderr, BackgroundRun(backgroundRun))
+
+			if code != 17 {
+				t.Fatalf("run() exit code = %d, want forwarded 17", code)
+			}
+			if !reflect.DeepEqual(gotArgs, tt.want) {
+				t.Fatalf("background args = %#v, want %#v", gotArgs, tt.want)
+			}
+			if !gotStdout || !gotStderr {
+				t.Fatalf("writers forwarded: stdout=%t stderr=%t, want both true", gotStdout, gotStderr)
+			}
+		})
 	}
 }
 
-func TestRunAddsOptionalPromptToReviewTopic(t *testing.T) {
-	runner := &fakeBackgroundRunner{}
-	restoreRunner := debatebg.SetBackgroundRunnerForTesting(runner)
-	defer restoreRunner()
-	starter := &fakeCodexStarter{}
-	restoreStarter := debatebg.SetCodexStarterForTesting(starter)
-	defer restoreStarter()
-	var stdout, stderr bytes.Buffer
-
-	code := Run([]string{"--prompt", "Pay extra attention to CLI compatibility."}, &stdout, &stderr)
-
-	if code != 0 {
-		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+func TestRunDoesNotInvokeDebateBackgroundForLocalExit(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantCode int
+	}{
+		{name: "help", args: []string{"--help"}, wantCode: 0},
+		{name: "unexpected positional", args: []string{"surprise"}, wantCode: 2},
 	}
-	firstPrompt := runner.requestsFor("codex")[0].Stdin
-	if !strings.Contains(firstPrompt, ReviewTopic) {
-		t.Fatalf("first codex prompt = %q, want fixed review topic", firstPrompt)
-	}
-	if !strings.Contains(firstPrompt, "Pay extra attention to CLI compatibility.") {
-		t.Fatalf("first codex prompt = %q, want extra prompt", firstPrompt)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			var stdout, stderr bytes.Buffer
+			code := run(tt.args, &stdout, &stderr, func([]string, io.Writer, io.Writer) int {
+				called = true
+				return 0
+			})
+
+			if code != tt.wantCode {
+				t.Fatalf("run() exit code = %d, want %d; stdout=%q stderr=%q", code, tt.wantCode, stdout.String(), stderr.String())
+			}
+			if called {
+				t.Fatal("background runner invoked, want local exit")
+			}
+		})
 	}
 }
 
 func TestRunHelpShowsReviewOptions(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"--help"}, &stdout, &stderr)
+	code := run([]string{"--help"}, &stdout, &stderr, nil)
 
 	if code != 0 {
-		t.Fatalf("Run() exit code = %d, want 0", code)
+		t.Fatalf("run() exit code = %d, want 0", code)
 	}
 	output := stdout.String()
 	if !strings.Contains(output, "Usage: zellij-agent code-review [options]") || !strings.Contains(output, "-rounds int") || !strings.Contains(output, "-prompt string") {
@@ -84,40 +104,4 @@ func TestRunHelpShowsReviewOptions(t *testing.T) {
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
-}
-
-type fakeBackgroundRunner struct {
-	mu       sync.Mutex
-	requests []debate.BackgroundCommandRequest
-}
-
-type fakeCodexStarter struct {
-	requests []debatebg.CodexStartRequest
-}
-
-func (r *fakeBackgroundRunner) Run(_ context.Context, req debate.BackgroundCommandRequest) (debate.BackgroundCommandResult, error) {
-	r.mu.Lock()
-	r.requests = append(r.requests, req)
-	r.mu.Unlock()
-	if req.AgentID == "debate-coordinator" {
-		return debate.BackgroundCommandResult{Stdout: "background synthesis"}, nil
-	}
-	return debate.BackgroundCommandResult{Stdout: "background answer from " + req.AgentID}, nil
-}
-
-func (r *fakeBackgroundRunner) requestsFor(agentID string) []debate.BackgroundCommandRequest {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var requests []debate.BackgroundCommandRequest
-	for _, req := range r.requests {
-		if req.AgentID == agentID {
-			requests = append(requests, req)
-		}
-	}
-	return requests
-}
-
-func (s *fakeCodexStarter) Start(_ context.Context, req debatebg.CodexStartRequest) error {
-	s.requests = append(s.requests, req)
-	return nil
 }
