@@ -14,7 +14,7 @@ func TestRunResolvesInputAndRendersOutput(t *testing.T) {
 	repo := newTestRepository(t)
 	wantPrompt := func(input string) string {
 		return "<<<SYSTEM_ROLE_BEGIN>>>\nSYSTEM\n<<<SYSTEM_ROLE_END>>>\n\n" +
-			"<<<DEBATE_INPUT_BEGIN>>>\n" + input + "\n<<<DEBATE_INPUT_END>>>\n"
+			"<<<DEBATE_INPUT_BEGIN>>>\n" + repositoryInputForTest(repo, input) + "\n<<<DEBATE_INPUT_END>>>\n"
 	}
 
 	tests := []struct {
@@ -73,6 +73,13 @@ func TestRunResolvesInputAndRendersOutput(t *testing.T) {
 			}
 		})
 	}
+}
+
+func repositoryInputForTest(repository, input string) string {
+	return "<<<TARGET_REPOSITORY_BEGIN>>>\n" + repository +
+		"\n<<<TARGET_REPOSITORY_END>>>\n\n" +
+		"Analyze only the target repository above. Do not reuse files or context from another project.\n\n" +
+		"<<<USER_INPUT_BEGIN>>>\n" + input + "\n<<<USER_INPUT_END>>>"
 }
 
 func TestRunResolvesRepositoryRootFromNestedPath(t *testing.T) {

@@ -24,7 +24,7 @@ func (codexProvider) Run(ctx context.Context, req debaterole.ProviderRequest) (s
 		return "", fmt.Errorf("codex executable not found on PATH")
 	}
 	cmd := exec.CommandContext(ctx, path,
-		"exec", "--sandbox", "read-only", "--ask-for-approval", "never", "--cd", req.Repository, "-",
+		"exec", "--sandbox", "read-only", "--cd", req.Repository, "-",
 	)
 	cmd.Dir = req.Repository
 	cmd.Stdin = strings.NewReader(req.Prompt)

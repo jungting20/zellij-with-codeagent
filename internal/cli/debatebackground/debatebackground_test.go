@@ -47,7 +47,7 @@ func TestRunJSONKeepsStdoutStructuredAndProgressOnStderr(t *testing.T) {
 	if strings.Contains(stdout.String(), "saved debate output") || strings.Contains(stdout.String(), "progress") {
 		t.Fatalf("stdout contains surrounding text: %q", stdout.String())
 	}
-	for _, want := range []string{"role=debate-proposer status=started", "role=debate-judge status=completed", "saved debate output to " + output} {
+	for _, want := range []string{"repository=" + repo, "role=debate-proposer status=started", "role=debate-judge status=completed", "saved debate output to " + output} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr = %q, missing %q", stderr.String(), want)
 		}

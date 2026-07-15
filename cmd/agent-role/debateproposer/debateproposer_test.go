@@ -63,7 +63,7 @@ printf 'proposer answer\n'
 	if gotCWD != repo {
 		t.Errorf("agy cwd = %q, want %q", gotCWD, repo)
 	}
-	wantArgs := []string{"--mode", "plan", "--print", debaterole.ComposePrompt(expectedSystemPrompt, "test problem")}
+	wantArgs := []string{"--new-project", "--mode", "plan", "--print", debaterole.ComposePrompt(expectedSystemPrompt, repositoryInputForTest(repo, "test problem"))}
 	gotArgs := strings.SplitN(strings.TrimSuffix(readFile(t, argsFile), "\n"), "\n", len(wantArgs))
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
 		t.Errorf("agy args = %#v, want %#v", gotArgs, wantArgs)
@@ -150,4 +150,11 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func repositoryInputForTest(repository, input string) string {
+	return "<<<TARGET_REPOSITORY_BEGIN>>>\n" + repository +
+		"\n<<<TARGET_REPOSITORY_END>>>\n\n" +
+		"Analyze only the target repository above. Do not reuse files or context from another project.\n\n" +
+		"<<<USER_INPUT_BEGIN>>>\n" + input + "\n<<<USER_INPUT_END>>>"
 }

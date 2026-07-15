@@ -78,12 +78,12 @@ printf 'judge answer\n'
 	if got := strings.TrimSpace(readFile(t, cwdFile)); got != repo {
 		t.Errorf("codex cwd = %q, want %q", got, repo)
 	}
-	wantArgs := []string{"exec", "--sandbox", "read-only", "--ask-for-approval", "never", "--cd", repo, "-"}
+	wantArgs := []string{"exec", "--sandbox", "read-only", "--cd", repo, "-"}
 	gotArgs := strings.Split(strings.TrimSuffix(readFile(t, argsFile), "\n"), "\n")
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
 		t.Errorf("codex args = %#v, want %#v", gotArgs, wantArgs)
 	}
-	wantStdin := debaterole.ComposePrompt(expectedSystemPrompt, "proposal and critique")
+	wantStdin := debaterole.ComposePrompt(expectedSystemPrompt, repositoryInputForTest(repo, "proposal and critique"))
 	if got := readFile(t, stdinFile); got != wantStdin {
 		t.Errorf("codex stdin = %q, want %q", got, wantStdin)
 	}
@@ -169,4 +169,11 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func repositoryInputForTest(repository, input string) string {
+	return "<<<TARGET_REPOSITORY_BEGIN>>>\n" + repository +
+		"\n<<<TARGET_REPOSITORY_END>>>\n\n" +
+		"Analyze only the target repository above. Do not reuse files or context from another project.\n\n" +
+		"<<<USER_INPUT_BEGIN>>>\n" + input + "\n<<<USER_INPUT_END>>>"
 }

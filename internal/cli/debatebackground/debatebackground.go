@@ -122,6 +122,7 @@ func run(args []string, _ io.Reader, stdout, stderr io.Writer, deps Dependencies
 		fmt.Fprintf(stderr, "Error: --cwd must resolve to an accessible git repository: %v\n", err)
 		return 2
 	}
+	fmt.Fprintf(stderr, "[debate progress] repository=%s\n", repository)
 	if deps.Runner == nil {
 		fmt.Fprintln(stderr, "zellij-agent debate-background runner is unavailable")
 		return 1

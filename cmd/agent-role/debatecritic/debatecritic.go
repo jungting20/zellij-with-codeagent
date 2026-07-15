@@ -31,7 +31,7 @@ func (agentProvider) Run(ctx context.Context, req debaterole.ProviderRequest) (s
 	if err != nil {
 		return "", fmt.Errorf("agent executable not found on PATH")
 	}
-	cmd := exec.CommandContext(ctx, path, "--print", "--mode", "ask", "--output-format", "json", "--trust", req.Prompt)
+	cmd := exec.CommandContext(ctx, path, "--print", "--mode", "ask", "--output-format", "json", "--trust", "--workspace", req.Repository, req.Prompt)
 	cmd.Dir = req.Repository
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

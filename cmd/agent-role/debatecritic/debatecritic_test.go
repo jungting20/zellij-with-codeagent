@@ -73,7 +73,7 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"c
 	if got := strings.TrimSpace(readFile(t, cwdFile)); got != repo {
 		t.Errorf("agent cwd = %q, want %q", got, repo)
 	}
-	wantArgs := []string{"--print", "--mode", "ask", "--output-format", "json", "--trust", debaterole.ComposePrompt(expectedSystemPrompt, "test proposal")}
+	wantArgs := []string{"--print", "--mode", "ask", "--output-format", "json", "--trust", "--workspace", repo, debaterole.ComposePrompt(expectedSystemPrompt, repositoryInputForTest(repo, "test proposal"))}
 	gotArgs := strings.SplitN(strings.TrimSuffix(readFile(t, argsFile), "\n"), "\n", len(wantArgs))
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
 		t.Errorf("agent args = %#v, want %#v", gotArgs, wantArgs)
@@ -212,4 +212,11 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func repositoryInputForTest(repository, input string) string {
+	return "<<<TARGET_REPOSITORY_BEGIN>>>\n" + repository +
+		"\n<<<TARGET_REPOSITORY_END>>>\n\n" +
+		"Analyze only the target repository above. Do not reuse files or context from another project.\n\n" +
+		"<<<USER_INPUT_BEGIN>>>\n" + input + "\n<<<USER_INPUT_END>>>"
 }

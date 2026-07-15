@@ -89,7 +89,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, cfg Config) i
 
 	content, err := cfg.Provider.Run(context.Background(), ProviderRequest{
 		Repository: repository,
-		Prompt:     ComposePrompt(cfg.SystemPrompt, input),
+		Prompt:     ComposePrompt(cfg.SystemPrompt, repositoryInput(repository, input)),
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
@@ -127,6 +127,13 @@ func ComposePrompt(systemPrompt, input string) string {
 	return "<<<SYSTEM_ROLE_BEGIN>>>\n" + strings.TrimSpace(systemPrompt) +
 		"\n<<<SYSTEM_ROLE_END>>>\n\n<<<DEBATE_INPUT_BEGIN>>>\n" + strings.TrimSpace(input) +
 		"\n<<<DEBATE_INPUT_END>>>\n"
+}
+
+func repositoryInput(repository, input string) string {
+	return "<<<TARGET_REPOSITORY_BEGIN>>>\n" + strings.TrimSpace(repository) +
+		"\n<<<TARGET_REPOSITORY_END>>>\n\n" +
+		"Analyze only the target repository above. Do not reuse files or context from another project.\n\n" +
+		"<<<USER_INPUT_BEGIN>>>\n" + strings.TrimSpace(input) + "\n<<<USER_INPUT_END>>>"
 }
 
 func resolveRepositoryPath(path string) (string, error) {

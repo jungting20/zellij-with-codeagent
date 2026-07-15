@@ -23,7 +23,7 @@ func (agyProvider) Run(ctx context.Context, req debaterole.ProviderRequest) (str
 	if err != nil {
 		return "", fmt.Errorf("agy executable not found on PATH")
 	}
-	cmd := exec.CommandContext(ctx, path, "--mode", "plan", "--print", req.Prompt)
+	cmd := exec.CommandContext(ctx, path, "--new-project", "--mode", "plan", "--print", req.Prompt)
 	cmd.Dir = req.Repository
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
