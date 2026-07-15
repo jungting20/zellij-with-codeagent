@@ -179,3 +179,40 @@ zellij-agent work --socket /tmp/agentd.sock --session work-reuse-smoke "inspect 
 
 Confirm the second submission creates all work panes and does not report
 `registry record already exists`.
+
+### Project Detection Dry Runs
+
+Project detection reads only marker files at the supplied working-directory
+root. These dry runs print execution-plan JSON and do not run project commands
+or submit work to the daemon.
+
+```bash
+root=$(mktemp -d)
+printf 'module example.com/demo\n' > "$root/go.mod"
+zellij-agent work --cwd "$root" --dry-run "inspect go defaults"
+
+root=$(mktemp -d)
+printf '{"scripts":{"test":"vitest","build":"vite build"}}\n' > "$root/package.json"
+printf "lockfileVersion: '9.0'\n" > "$root/pnpm-lock.yaml"
+zellij-agent work --cwd "$root" --dry-run "inspect pnpm defaults"
+
+root=$(mktemp -d)
+printf '[package]\nname = "demo"\nversion = "0.1.0"\n' > "$root/Cargo.toml"
+zellij-agent work --cwd "$root" --dry-run "inspect rust defaults"
+```
+
+In each payload, inspect the `test` pane command and the `notes` pane script.
+They should show `go test ./...` / `go build ./...`, `pnpm test` / `pnpm
+build`, and `cargo test` / `cargo check`, respectively.
+
+Confirm a mixed root disables feedback instead of choosing a profile:
+
+```bash
+root=$(mktemp -d)
+printf 'module example.com/demo\n' > "$root/go.mod"
+printf '{"scripts":{"test":"vitest"}}\n' > "$root/package.json"
+zellij-agent work --cwd "$root" --dry-run "inspect mixed markers"
+```
+
+The test and notes scripts should contain `multiple project families detected`
+and must not contain an executable test command.

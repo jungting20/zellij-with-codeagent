@@ -86,8 +86,8 @@ cp bin/zellij-agent ~/.config/custom-cli
 
 - [x] Allow a successfully cleaned `work` task to reuse its logical pane IDs through the same daemon.
 - [x] Deliver the supplied goal to the interactive coder pane as its initial prompt. The goal is prefilled without Enter so the user reviews and submits it.
-- [ ] Detect common project types such as Go, Node, and Rust.
-- [ ] Select useful default test/build commands from detected project files.
+- [x] Detect common project types such as Go, Node, and Rust.
+- [x] Select useful default test/build commands from detected project files.
 - [ ] Add explicit overrides such as `--profile`, `--test-command`, `--no-review`, and `--no-lazygit` only where they solve a real workflow need.
 - [ ] Check optional tools such as `codex` and `lazygit` before submission and print actionable fallback information.
 

@@ -90,12 +90,14 @@ Use `zellij-agent ctl` as the thin command-line client for the local socket:
 The command creates one Zellij tab with five panes:
 
 - `coder`: interactive Codex session through `zellij-agent role coding-agent <cwd>`, with the goal prefilled for review; press Enter to submit it.
-- `test`: test shell prepared for `go test ./...`.
+- `test`: test shell prepared with a default command detected from root project markers (Go, npm/pnpm/Yarn, or Rust).
 - `review`: non-interactive Codex review assistant seeded with the goal.
 - `lazygit`: repository Git UI through `lazygit`.
 - `notes`: session notes and useful `zellij-agent ctl` commands.
 
 The runtime waits for the Codex input prompt, up to `--timeout` (15 seconds by default), before pasting the exact trimmed goal without an Enter key. Review or edit the text in Codex, then press Enter when you want the coding session to begin. `--dry-run` exposes the value and readiness marker as the coder pane's `initial_input` and `initial_input_ready_text` without creating a workspace.
+
+Project detection reads only known marker files in the selected working-directory root. By default the test pane suggests the detected command without running it. `--auto-test` runs that detected command once when the pane starts. If markers conflict, `package.json` is malformed, or no Node `test` script exists, the workspace still opens with feedback disabled and an actionable reason in the test and notes panes.
 
 Useful options:
 

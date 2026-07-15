@@ -78,6 +78,9 @@ func TestRunDryRunPrintsExecutionPlanEnvelope(t *testing.T) {
 
 func TestRunSubmitsGeneratedPlan(t *testing.T) {
 	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "go.mod"), []byte("module example.com/demo\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(go.mod) error = %v", err)
+	}
 	client := &fakeAgentClient{}
 	var stdout, stderr bytes.Buffer
 
@@ -114,6 +117,171 @@ func TestRunSubmitsGeneratedPlan(t *testing.T) {
 	}
 }
 
+func TestRunDryRunDetectsProjectDefaults(t *testing.T) {
+	tests := []struct {
+		name       string
+		files      map[string]string
+		autoTest   bool
+		wantTest   string
+		wantNotes  []string
+		rejectTest string
+	}{
+		{
+			name:     "go",
+			files:    map[string]string{"go.mod": "module example.com/demo\n"},
+			wantTest: "Suggested test command: go test ./...",
+			wantNotes: []string{
+				"Profile: go",
+				"Markers: go.mod",
+				"Build command: go build ./...",
+				"Feedback: enabled",
+			},
+		},
+		{
+			name: "pnpm",
+			files: map[string]string{
+				"package.json":   `{"scripts":{"test":"vitest","build":"vite build"}}`,
+				"pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+			},
+			wantTest: "Suggested test command: pnpm test",
+			wantNotes: []string{
+				"Profile: pnpm",
+				"Markers: package.json, pnpm-lock.yaml",
+				"Build command: pnpm build",
+				"Feedback: enabled",
+			},
+		},
+		{
+			name:     "rust",
+			files:    map[string]string{"Cargo.toml": "[package]\nname = \"demo\"\n"},
+			wantTest: "Suggested test command: cargo test",
+			wantNotes: []string{
+				"Profile: rust",
+				"Build command: cargo check",
+				"Feedback: enabled",
+			},
+		},
+		{
+			name:     "unknown",
+			files:    map[string]string{},
+			wantTest: "Feedback disabled: project type not detected",
+			wantNotes: []string{
+				"Profile: unknown",
+				"Feedback: disabled",
+				"Reason: project type not detected",
+			},
+		},
+		{
+			name: "mixed",
+			files: map[string]string{
+				"go.mod":       "module example.com/demo\n",
+				"package.json": `{"scripts":{"test":"vitest"}}`,
+			},
+			wantTest: "Feedback disabled: multiple project families detected",
+			wantNotes: []string{
+				"Profile: unknown",
+				"Markers: go.mod, package.json",
+				"Feedback: disabled",
+				"Reason: multiple project families detected",
+			},
+		},
+		{
+			name:     "node without test script under auto test",
+			files:    map[string]string{"package.json": `{"scripts":{"build":"vite build"}}`},
+			autoTest: true,
+			wantTest: "Feedback disabled: package.json has no test script",
+			wantNotes: []string{
+				"Profile: npm",
+				"Build command: npm run build",
+				"Feedback: disabled",
+			},
+			rejectTest: "npm test",
+		},
+		{
+			name:       "malformed package json under auto test",
+			files:      map[string]string{"package.json": `{"scripts":`},
+			autoTest:   true,
+			wantTest:   "Feedback disabled: invalid package.json",
+			wantNotes:  []string{"Profile: npm", "Feedback: disabled", "Reason: invalid package.json"},
+			rejectTest: "npm test",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cwd := t.TempDir()
+			for name, body := range tt.files {
+				if err := os.WriteFile(filepath.Join(cwd, name), []byte(body), 0o600); err != nil {
+					t.Fatalf("WriteFile(%s) error = %v", name, err)
+				}
+			}
+			client := &fakeAgentClient{}
+			var stdout, stderr bytes.Buffer
+
+			args := []string{"--cwd", cwd, "--dry-run"}
+			if tt.autoTest {
+				args = append(args, "--auto-test")
+			}
+			args = append(args, "ship it")
+			code := Run(args, strings.NewReader(""), &stdout, &stderr, fakeFactory(client), Config{})
+			if code != 0 {
+				t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+			}
+			var envelope transport.RequestEnvelope
+			if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+				t.Fatalf("Unmarshal(envelope) error = %v", err)
+			}
+			var payload transport.ExecutionPlanPayload
+			if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+				t.Fatalf("Unmarshal(payload) error = %v", err)
+			}
+			testScript := payload.Tabs[0].Panes[1].Command[2]
+			notesScript := payload.Tabs[0].Panes[4].Command[2]
+			if !strings.Contains(testScript, tt.wantTest) {
+				t.Fatalf("test script = %q, want substring %q", testScript, tt.wantTest)
+			}
+			if tt.rejectTest != "" && strings.Contains(testScript, tt.rejectTest) {
+				t.Fatalf("test script = %q, reject executable command %q", testScript, tt.rejectTest)
+			}
+			for _, want := range tt.wantNotes {
+				if !strings.Contains(notesScript, want) {
+					t.Fatalf("notes script = %q, want substring %q", notesScript, want)
+				}
+			}
+		})
+	}
+}
+
+func TestRunDryRunAutoTestDoesNotExecuteDetectedCommand(t *testing.T) {
+	cwd := t.TempDir()
+	writePath := filepath.Join(cwd, "executed")
+	if err := os.WriteFile(filepath.Join(cwd, "package.json"), []byte(`{"scripts":{"test":"touch executed"}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(package.json) error = %v", err)
+	}
+	binDir := filepath.Join(cwd, "bin")
+	if err := os.Mkdir(binDir, 0o700); err != nil {
+		t.Fatalf("Mkdir(bin) error = %v", err)
+	}
+	npmPath := filepath.Join(binDir, "npm")
+	script := "#!/bin/sh\ntouch " + writePath + "\n"
+	if err := os.WriteFile(npmPath, []byte(script), 0o700); err != nil {
+		t.Fatalf("WriteFile(npm) error = %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--cwd", cwd, "--dry-run", "--auto-test", "ship it"}, strings.NewReader(""), &stdout, &stderr, fakeFactory(&fakeAgentClient{}), Config{})
+	if code != 0 {
+		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(writePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("detected command side effect exists or stat failed: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "npm") || !strings.Contains(stdout.String(), "test") {
+		t.Fatalf("dry-run output = %q, want encoded npm test command", stdout.String())
+	}
+}
+
 func TestRunHelpPrintsUsageToStdout(t *testing.T) {
 	tests := [][]string{
 		{"--help"},
@@ -132,7 +300,8 @@ func TestRunHelpPrintsUsageToStdout(t *testing.T) {
 			if !strings.Contains(stdout.String(), "Usage: zellij-agent work") ||
 				!strings.Contains(stdout.String(), "--socket") ||
 				!strings.Contains(stdout.String(), "--timeout") ||
-				!strings.Contains(stdout.String(), "default 15s") {
+				!strings.Contains(stdout.String(), "default 15s") ||
+				!strings.Contains(stdout.String(), "run the detected project test command once") {
 				t.Fatalf("stdout = %q, want work usage with common options", stdout.String())
 			}
 			if stderr.Len() != 0 {

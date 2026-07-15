@@ -42,7 +42,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 	cwdFlag := fs.String("cwd", "", "application working directory")
 	session := fs.String("session", "", "execution session/task id override")
 	dryRun := fs.Bool("dry-run", false, "print the /v1/requests envelope without submitting it")
-	autoTest := fs.Bool("auto-test", false, "run go test ./... in the test pane")
+	autoTest := fs.Bool("auto-test", false, "run the detected project test command once")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -58,6 +58,11 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 		fmt.Fprintf(stderr, "resolve cwd: %v\n", err)
 		return 1
 	}
+	project, err := workplan.DetectProject(cwd)
+	if err != nil {
+		fmt.Fprintf(stderr, "detect project: %v\n", err)
+		return 1
+	}
 
 	payload, err := workplan.BuildPlan(workplan.PlanRequest{
 		Goal:        goal,
@@ -65,6 +70,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 		Session:     *session,
 		RoleCommand: cfg.DefaultRoleCommand,
 		AutoTest:    *autoTest,
+		Project:     project,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "build work plan: %v\n", err)
@@ -122,7 +128,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  --dry-run")
 	fmt.Fprintln(w, "    \tprint the /v1/requests envelope without submitting it")
 	fmt.Fprintln(w, "  --auto-test")
-	fmt.Fprintln(w, "    \trun go test ./... in the test pane")
+	fmt.Fprintln(w, "    \trun the detected project test command once")
 }
 
 func resolveCWD(value string) (string, error) {

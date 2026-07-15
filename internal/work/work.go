@@ -18,6 +18,7 @@ type PlanRequest struct {
 	Session     string
 	RoleCommand []string
 	AutoTest    bool
+	Project     ProjectDetection
 }
 
 func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
@@ -54,7 +55,7 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 						ID:      "test",
 						Role:    "test-runner",
 						CWD:     cwd,
-						Command: []string{"sh", "-lc", testScript(req.AutoTest)},
+						Command: []string{"sh", "-lc", testScript(req.AutoTest, req.Project)},
 					},
 					{
 						ID:      "review",
@@ -72,7 +73,7 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 						ID:      "notes",
 						Role:    "notes",
 						CWD:     cwd,
-						Command: []string{"sh", "-lc", notesScript(session, cwd, goal)},
+						Command: []string{"sh", "-lc", notesScript(session, cwd, goal, req.Project)},
 					},
 				},
 			},
@@ -138,18 +139,34 @@ func hash8(value string) string {
 	return fmt.Sprintf("%08x", h.Sum32())
 }
 
-func testScript(autoTest bool) string {
-	if autoTest {
+func testScript(autoTest bool, project ProjectDetection) string {
+	if !project.FeedbackEnabled || len(project.TestCommand) == 0 {
+		reason := strings.TrimSpace(project.DisabledReason)
+		if reason == "" {
+			reason = "no test command resolved; use --test-command"
+		}
 		return strings.Join([]string{
-			"printf '$ go test ./...\\n'",
-			"go test ./...",
+			printLine("Feedback disabled: " + reason),
+			"exec sh",
+		}, "\n")
+	}
+
+	display := displayCommand(project.TestCommand)
+	if autoTest {
+		resultLabel := display
+		if len(project.TestCommand) > 2 {
+			resultLabel = displayCommand(project.TestCommand[:2])
+		}
+		return strings.Join([]string{
+			fmt.Sprintf("printf '$ %s\\n'", display),
+			shellCommand(project.TestCommand),
 			"status=$?",
-			"printf 'go test finished with exit=%s\\n' \"$status\"",
+			fmt.Sprintf("printf '%s finished with exit=%%s\\n' \"$status\"", resultLabel),
 			"exec sh",
 		}, "\n")
 	}
 	return strings.Join([]string{
-		"printf 'Suggested test command: go test ./...\\n'",
+		printLine("Suggested test command: " + display),
 		"exec sh",
 	}, "\n")
 }
@@ -169,18 +186,62 @@ func lazygitScript() string {
 	}, "\n")
 }
 
-func notesScript(session, cwd, goal string) string {
-	return strings.Join([]string{
+func notesScript(session, cwd, goal string, project ProjectDetection) string {
+	markers := strings.Join(project.Markers, ", ")
+	if markers == "" {
+		markers = "(none)"
+	}
+	testCommand := displayCommand(project.TestCommand)
+	if testCommand == "" {
+		testCommand = "(none)"
+	}
+	buildCommand := displayCommand(project.BuildCommand)
+	if buildCommand == "" {
+		buildCommand = "(none)"
+	}
+	feedback := "disabled"
+	if project.FeedbackEnabled && len(project.TestCommand) > 0 {
+		feedback = "enabled"
+	}
+
+	lines := []string{
 		"printf 'Session: %s\\n' " + shellQuote(session),
 		"printf 'CWD: %s\\n' " + shellQuote(cwd),
 		"printf 'Goal: %s\\n' " + shellQuote(goal),
+		printLine("Profile: " + string(project.Profile)),
+		printLine("Markers: " + markers),
+		printLine("Test command: " + testCommand),
+		printLine("Build command: " + buildCommand),
+		printLine("Feedback: " + feedback),
+	}
+	if feedback == "disabled" && strings.TrimSpace(project.DisabledReason) != "" {
+		lines = append(lines, printLine("Reason: "+project.DisabledReason))
+	}
+	lines = append(lines,
 		"printf '\\nUseful commands:\\n'",
 		"printf 'zellij-agent ctl status\\n'",
 		"printf 'zellij-agent ctl events --limit 20\\n'",
 		"printf 'zellij-agent ctl snapshot coder --full\\n'",
-		"printf 'zellij-agent ctl cleanup --task %s\\n' " + shellQuote(session),
+		"printf 'zellij-agent ctl cleanup --task %s\\n' "+shellQuote(session),
 		"exec sh",
-	}, "\n")
+	)
+	return strings.Join(lines, "\n")
+}
+
+func displayCommand(command []string) string {
+	return strings.Join(command, " ")
+}
+
+func shellCommand(command []string) string {
+	quoted := make([]string, 0, len(command))
+	for _, arg := range command {
+		quoted = append(quoted, shellQuote(arg))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func printLine(value string) string {
+	return "printf '%s\\n' " + shellQuote(value)
 }
 
 func shellQuote(value string) string {

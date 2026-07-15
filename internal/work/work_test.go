@@ -10,6 +10,7 @@ func TestBuildPlanCreatesMixedWorkPanes(t *testing.T) {
 		Goal:        "implement the mixed work command",
 		CWD:         "/tmp/app",
 		RoleCommand: []string{"/tmp/bin/zellij-agent", "role"},
+		Project:     goProjectDetection(),
 	})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
@@ -89,6 +90,7 @@ func TestBuildPlanAutoTestRunsGoTestOnce(t *testing.T) {
 		Goal:     "run tests",
 		CWD:      "/tmp/app",
 		AutoTest: true,
+		Project:  goProjectDetection(),
 	})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
@@ -144,5 +146,117 @@ func TestBuildPlanPrefillsOnlyCoderWithTrimmedGoal(t *testing.T) {
 		if pane.InitialInputReadyText != "" {
 			t.Fatalf("pane %q InitialInputReadyText = %q, want coder-only readiness", pane.ID, pane.InitialInputReadyText)
 		}
+	}
+}
+
+func TestBuildPlanUsesDetectedProjectCommands(t *testing.T) {
+	tests := []struct {
+		name            string
+		project         ProjectDetection
+		wantTestDisplay string
+		wantBuild       string
+	}{
+		{
+			name: "go",
+			project: ProjectDetection{
+				Profile:         ProjectProfileGo,
+				Markers:         []string{"go.mod"},
+				TestCommand:     []string{"go", "test", "./..."},
+				BuildCommand:    []string{"go", "build", "./..."},
+				FeedbackEnabled: true,
+			},
+			wantTestDisplay: "Suggested test command: go test ./...",
+			wantBuild:       "Build command: go build ./...",
+		},
+		{
+			name: "pnpm",
+			project: ProjectDetection{
+				Profile:         ProjectProfilePNPM,
+				Markers:         []string{"package.json", "pnpm-lock.yaml"},
+				TestCommand:     []string{"pnpm", "test"},
+				BuildCommand:    []string{"pnpm", "build"},
+				FeedbackEnabled: true,
+			},
+			wantTestDisplay: "Suggested test command: pnpm test",
+			wantBuild:       "Build command: pnpm build",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := BuildPlan(PlanRequest{
+				Goal:    "ship it",
+				CWD:     "/tmp/app",
+				Project: tt.project,
+			})
+			if err != nil {
+				t.Fatalf("BuildPlan() error = %v", err)
+			}
+			testScript := payload.Tabs[0].Panes[1].Command[2]
+			notesScript := payload.Tabs[0].Panes[4].Command[2]
+			if !strings.Contains(testScript, tt.wantTestDisplay) {
+				t.Fatalf("test script = %q, want %q", testScript, tt.wantTestDisplay)
+			}
+			if !strings.Contains(notesScript, "Profile: "+string(tt.project.Profile)) ||
+				!strings.Contains(notesScript, "Test command: "+strings.Join(tt.project.TestCommand, " ")) ||
+				!strings.Contains(notesScript, tt.wantBuild) ||
+				!strings.Contains(notesScript, "Feedback: enabled") {
+				t.Fatalf("notes script = %q, want detected project preflight", notesScript)
+			}
+		})
+	}
+}
+
+func TestBuildPlanAutoTestRunsDetectedCommand(t *testing.T) {
+	payload, err := BuildPlan(PlanRequest{
+		Goal:     "run tests",
+		CWD:      "/tmp/app",
+		AutoTest: true,
+		Project: ProjectDetection{
+			Profile:         ProjectProfilePNPM,
+			Markers:         []string{"package.json", "pnpm-lock.yaml"},
+			TestCommand:     []string{"pnpm", "test"},
+			FeedbackEnabled: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	script := payload.Tabs[0].Panes[1].Command[2]
+	if !strings.Contains(script, "printf '$ pnpm test\\n'") || !strings.Contains(script, "'pnpm' 'test'") || !strings.Contains(script, "pnpm test finished with exit=%s") {
+		t.Fatalf("test script = %q, want detected pnpm test execution", script)
+	}
+}
+
+func TestBuildPlanDisablesUnknownProjectFeedback(t *testing.T) {
+	payload, err := BuildPlan(PlanRequest{
+		Goal:     "ship it",
+		CWD:      "/tmp/app",
+		AutoTest: true,
+		Project: ProjectDetection{
+			Profile:        ProjectProfileUnknown,
+			DisabledReason: "project type not detected; use --test-command",
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	testScript := payload.Tabs[0].Panes[1].Command[2]
+	notesScript := payload.Tabs[0].Panes[4].Command[2]
+	if !strings.Contains(testScript, "Feedback disabled: project type not detected; use --test-command") || strings.Contains(testScript, "go test") {
+		t.Fatalf("test script = %q, want disabled feedback without hard-coded Go command", testScript)
+	}
+	if !strings.Contains(notesScript, "Feedback: disabled") || !strings.Contains(notesScript, "Reason: project type not detected; use --test-command") {
+		t.Fatalf("notes script = %q, want disabled reason", notesScript)
+	}
+}
+
+func goProjectDetection() ProjectDetection {
+	return ProjectDetection{
+		Profile:         ProjectProfileGo,
+		Markers:         []string{"go.mod"},
+		TestCommand:     []string{"go", "test", "./..."},
+		BuildCommand:    []string{"go", "build", "./..."},
+		FeedbackEnabled: true,
 	}
 }
