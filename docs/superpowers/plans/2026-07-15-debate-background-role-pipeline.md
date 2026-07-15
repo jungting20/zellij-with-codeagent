@@ -357,7 +357,7 @@ Expected: both commands exit 0.
 ./bin/zellij-agent role debate-judge --help
 ```
 
-Expected: help exits 0. Invalid background calls exit 2, create no result, and explain the validation error on stderr.
+Expected: `debate-background --help` exits 0. Existing standalone role help behavior is unchanged; verify that each role prints its flag usage without requiring a provider call. Invalid background calls exit 2, create no result, and explain the validation error on stderr.
 
 - [ ] **Step 5: Verify final scope**
 
