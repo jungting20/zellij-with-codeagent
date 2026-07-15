@@ -28,33 +28,39 @@ func Run(ctx context.Context, runner RoleRunner, opts Options) Result {
 		current := &result.Rounds[len(result.Rounds)-1]
 
 		proposal, failure := runRole(ctx, runner, opts, round, Proposer, proposerPrompt(opts.Topic, previousJudgment))
+		if hasRoleResult(proposal) {
+			current.Proposer = &proposal
+		}
 		if failure != nil {
 			result.Failure = failure
 			return result
 		}
-		current.Proposer = &proposal
 		if failure := finishRole(opts, round, Proposer, proposal); failure != nil {
 			result.Failure = failure
 			return result
 		}
 
 		critique, failure := runRole(ctx, runner, opts, round, Critic, criticPrompt(opts.Topic, proposal.Content))
+		if hasRoleResult(critique) {
+			current.Critic = &critique
+		}
 		if failure != nil {
 			result.Failure = failure
 			return result
 		}
-		current.Critic = &critique
 		if failure := finishRole(opts, round, Critic, critique); failure != nil {
 			result.Failure = failure
 			return result
 		}
 
 		judgment, failure := runRole(ctx, runner, opts, round, Judge, judgePrompt(opts.Topic, proposal.Content, critique.Content))
+		if hasRoleResult(judgment) {
+			current.Judge = &judgment
+		}
 		if failure != nil {
 			result.Failure = failure
 			return result
 		}
-		current.Judge = &judgment
 		if failure := finishRole(opts, round, Judge, judgment); failure != nil {
 			result.Failure = failure
 			return result
@@ -66,6 +72,10 @@ func Run(ctx context.Context, runner RoleRunner, opts Options) Result {
 
 	result.Status = StatusSuccess
 	return result
+}
+
+func hasRoleResult(result debaterole.Result) bool {
+	return result.SchemaVersion != "" || result.Role != "" || result.Engine != "" || result.Status != "" || result.Content != ""
 }
 
 func validateOptions(runner RoleRunner, opts Options) string {
@@ -97,7 +107,7 @@ func runRole(ctx context.Context, runner RoleRunner, opts Options, round int, ro
 	if err != nil {
 		failure := failureFromError(roleCtx, round, role.Name, err)
 		progress(opts.Progress, ProgressEvent{Round: round, Rounds: opts.Rounds, Role: role.Name, Status: "failed"})
-		return debaterole.Result{}, failure
+		return roleResult, failure
 	}
 	return roleResult, nil
 }

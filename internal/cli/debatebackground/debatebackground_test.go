@@ -3,236 +3,318 @@ package debatebackground
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
-	"zellij-with-codeagent/internal/debate"
+	"zellij-with-codeagent/internal/backgrounddebate"
+	"zellij-with-codeagent/internal/debaterole"
 )
 
-func TestRunUsesStdoutRunner(t *testing.T) {
-	runner := &fakeBackgroundRunner{}
-	restore := SetBackgroundRunnerForTesting(runner)
-	defer restore()
+func TestRunJSONKeepsStdoutStructuredAndProgressOnStderr(t *testing.T) {
+	repo := testRepository(t)
+	output := filepath.Join(t.TempDir(), "result.json")
+	runner := &fakeRoleRunner{}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{
-		"--topic", "background test",
-		"--agents", "agy,codex",
-		"--cwd", "/repo",
-		"--agent-timeout", "1s",
-		"--timeout", "5s",
-	}, &stdout, &stderr)
+	code := run([]string{
+		"--topic", "structured output",
+		"--rounds", "1",
+		"--cwd", repo,
+		"--output", output,
+		"--output-format", "json",
+	}, strings.NewReader("ignored"), &stdout, &stderr, testDependencies(runner, nil))
 
 	if code != 0 {
-		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	if len(runner.requestsFor("agy")) != 1 || len(runner.requestsFor("codex")) != 1 || len(runner.requestsFor("debate-coordinator")) != 1 {
-		t.Fatalf("runner requests = %#v, want agy, codex, coordinator", runner.requests)
+	var printed backgrounddebate.Result
+	if err := json.Unmarshal(stdout.Bytes(), &printed); err != nil {
+		t.Fatalf("stdout is not exactly one JSON document: %v\nstdout=%q", err, stdout.String())
 	}
-	output := stdout.String()
-	for _, want := range []string{
-		"debate request=",
-		"agents=agy,codex",
-		"[round 1 debate-agy]",
-		"background answer from agy",
-		"[debate-coordinator synthesis]",
-		"background synthesis",
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("stdout = %q, missing %q", output, want)
+	if printed.Status != backgrounddebate.StatusSuccess || printed.OutputPath != output {
+		t.Fatalf("printed result = %#v", printed)
+	}
+	saved := decodeResultFile(t, output)
+	if !reflect.DeepEqual(saved, printed) {
+		t.Fatalf("saved result = %#v, want printed result %#v", saved, printed)
+	}
+	if strings.Contains(stdout.String(), "saved debate output") || strings.Contains(stdout.String(), "progress") {
+		t.Fatalf("stdout contains surrounding text: %q", stdout.String())
+	}
+	for _, want := range []string{"role=debate-proposer status=started", "role=debate-judge status=completed", "saved debate output to " + output} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr = %q, missing %q", stderr.String(), want)
 		}
 	}
 }
 
-func TestRunHelpPrintsUsageToStdout(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-
-	code := Run([]string{"--help"}, &stdout, &stderr)
-
-	if code != 0 {
-		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "Usage: zellij-agent debate-background") ||
-		!strings.Contains(stdout.String(), "-topic string") ||
-		!strings.Contains(stdout.String(), `-output string`) ||
-		!strings.Contains(stdout.String(), `(default "/tmp")`) {
-		t.Fatalf("stdout = %q, want debate-background usage", stdout.String())
-	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
-	}
-}
-
-func TestRunSavesPrintedResultBeforeFinalOutput(t *testing.T) {
-	runner := &fakeBackgroundRunner{}
-	restore := SetBackgroundRunnerForTesting(runner)
-	defer restore()
+func TestRunTextSavesMarkdownBeforePrintingResult(t *testing.T) {
+	repo := testRepository(t)
 	outputDir := t.TempDir()
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{
-		"--topic", "save result",
-		"--agents", "agy,codex",
-		"--cwd", "/repo",
-		"--agent-timeout", "1s",
-		"--timeout", "5s",
+	code := run([]string{
+		"--topic", "markdown output",
+		"--cwd", repo,
 		"--output", outputDir,
-	}, &stdout, &stderr)
+	}, nil, &stdout, &stderr, testDependencies(&fakeRoleRunner{}, nil))
 
 	if code != 0 {
-		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	output := stdout.String()
-	notice := "saved debate output to "
-	resultHeader := "debate request="
-	noticeIndex := strings.Index(output, notice)
-	resultIndex := strings.Index(output, resultHeader)
-	if noticeIndex == -1 || resultIndex == -1 || noticeIndex > resultIndex {
-		t.Fatalf("stdout = %q, want save notice before final result", output)
+	noticeIndex := strings.Index(stdout.String(), "saved debate output to ")
+	headingIndex := strings.Index(stdout.String(), "# Background Debate")
+	if noticeIndex < 0 || headingIndex < 0 || noticeIndex > headingIndex {
+		t.Fatalf("stdout = %q, want save notice before Markdown", stdout.String())
 	}
-	savedPath := strings.TrimSpace(output[noticeIndex+len(notice) : strings.Index(output[noticeIndex:], "\n")+noticeIndex])
-	if filepath.Dir(savedPath) != outputDir {
-		t.Fatalf("saved path = %q, want file under %q", savedPath, outputDir)
+	lineEnd := strings.IndexByte(stdout.String()[noticeIndex:], '\n')
+	if lineEnd < 0 {
+		t.Fatalf("stdout = %q, want newline after save notice", stdout.String())
 	}
-	saved, err := os.ReadFile(savedPath)
+	path := strings.TrimSpace(stdout.String()[noticeIndex+len("saved debate output to ") : noticeIndex+lineEnd])
+	if filepath.Dir(path) != outputDir || filepath.Ext(path) != ".md" {
+		t.Fatalf("output path = %q, want generated Markdown under %q", path, outputDir)
+	}
+	saved, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read saved output: %v", err)
+		t.Fatalf("read saved Markdown: %v", err)
 	}
-	for _, want := range []string{
-		"debate request=",
-		"[round 1 debate-agy]",
-		"background answer from agy",
-		"[debate-coordinator synthesis]",
-		"background synthesis",
-	} {
-		if !strings.Contains(string(saved), want) {
-			t.Fatalf("saved output = %q, missing %q", string(saved), want)
+	printed := stdout.String()[headingIndex:]
+	if string(saved) != printed {
+		t.Fatalf("saved Markdown differs from printed result\nsaved=%q\nprinted=%q", string(saved), printed)
+	}
+	for _, want := range []string{"## Status", "success", "## Topic", "markdown output", "### Proposer", "proposer answer", "## Final Recommendation", "judge answer"} {
+		if !strings.Contains(printed, want) {
+			t.Fatalf("Markdown = %q, missing %q", printed, want)
 		}
 	}
 }
 
-func TestRunStartsCodexWithPrintedResult(t *testing.T) {
-	runner := &fakeBackgroundRunner{}
-	restoreRunner := SetBackgroundRunnerForTesting(runner)
-	defer restoreRunner()
-	starter := &fakeCodexStarter{}
-	restoreStarter := SetCodexStarterForTesting(starter)
-	defer restoreStarter()
+func TestRunWarnsAndIgnoresDeprecatedAgentsAndConfig(t *testing.T) {
+	repo := testRepository(t)
+	runner := &fakeRoleRunner{}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{
-		"--topic", "codex follow up",
-		"--agents", "agy,codex",
-		"--cwd", "/repo",
-		"--agent-timeout", "1s",
-		"--timeout", "5s",
-		"--start-codex",
-	}, &stdout, &stderr)
+	code := run([]string{
+		"--topic", "compatibility",
+		"--cwd", repo,
+		"--output", filepath.Join(t.TempDir(), "result.json"),
+		"--output-format", "json",
+		"--agents", "legacy-one,legacy-two",
+		"--config", "/does/not/exist.yml",
+	}, nil, &stdout, &stderr, testDependencies(runner, nil))
 
 	if code != 0 {
-		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	if len(starter.requests) != 1 {
-		t.Fatalf("codex start requests = %#v, want one", starter.requests)
+	if !strings.Contains(stderr.String(), "warning: --agents is deprecated and ignored") || !strings.Contains(stderr.String(), "warning: --config is deprecated and ignored") {
+		t.Fatalf("stderr = %q, want both compatibility warnings", stderr.String())
+	}
+	if got, want := runner.roleNames(), []string{backgrounddebate.Proposer.Name, backgrounddebate.Critic.Name, backgrounddebate.Judge.Name}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("roles = %#v, want fixed pipeline %#v", got, want)
+	}
+
+	// Explicitly supplying the old default values still counts as using the flags.
+	runner = &fakeRoleRunner{}
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{
+		"--topic", "explicit defaults", "--cwd", repo,
+		"--output", filepath.Join(t.TempDir(), "result.json"), "--output-format", "json",
+		"--agents", "agy,agent,codex", "--config", "",
+	}, nil, &stdout, &stderr, testDependencies(runner, nil))
+	if code != 0 || !strings.Contains(stderr.String(), "warning: --agents") || !strings.Contains(stderr.String(), "warning: --config") {
+		t.Fatalf("explicit defaults: code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestRunSavesPartialFailureAndReturnsOne(t *testing.T) {
+	repo := testRepository(t)
+	output := filepath.Join(t.TempDir(), "failure.json")
+	exitCode := 7
+	runner := &fakeRoleRunner{failRole: backgrounddebate.Critic.Name, failResult: debaterole.Result{
+		SchemaVersion: debaterole.SchemaVersion,
+		Role:          backgrounddebate.Critic.Name,
+		Engine:        backgrounddebate.Critic.Engine,
+		Status:        "failed",
+		Content:       "critic partial diagnostic",
+	}, failErr: &backgrounddebate.RunError{Kind: backgrounddebate.FailureExecution, Message: "critic crashed", ExitCode: &exitCode}}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"--topic", "partial failure", "--cwd", repo,
+		"--output", output, "--output-format", "json",
+	}, nil, &stdout, &stderr, testDependencies(runner, nil))
+
+	if code != 1 {
+		t.Fatalf("run() exit code = %d, want 1; stderr=%q", code, stderr.String())
+	}
+	printed := decodeResult(t, stdout.Bytes())
+	if printed.Status != backgrounddebate.StatusFailed || printed.Failure == nil || printed.Failure.Role != backgrounddebate.Critic.Name || printed.Failure.ExitCode == nil || *printed.Failure.ExitCode != 7 {
+		t.Fatalf("printed failure = %#v", printed)
+	}
+	if len(printed.Rounds) != 1 || printed.Rounds[0].Proposer == nil || printed.Rounds[0].Critic == nil || printed.Rounds[0].Critic.Content != "critic partial diagnostic" || printed.Rounds[0].Judge != nil {
+		t.Fatalf("partial rounds = %#v", printed.Rounds)
+	}
+	if got := runner.roleNames(); !reflect.DeepEqual(got, []string{backgrounddebate.Proposer.Name, backgrounddebate.Critic.Name}) {
+		t.Fatalf("roles = %#v, want no judge call", got)
+	}
+	if saved := decodeResultFile(t, output); !reflect.DeepEqual(saved, printed) {
+		t.Fatalf("saved result = %#v, want printed %#v", saved, printed)
+	}
+}
+
+func TestRunRejectsJSONWithStartCodexWithoutCreatingFile(t *testing.T) {
+	repo := testRepository(t)
+	output := filepath.Join(t.TempDir(), "must-not-exist.json")
+	runner := &fakeRoleRunner{}
+	starter := &fakeCodexStarter{}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"--topic", "invalid start", "--cwd", repo, "--output", output,
+		"--output-format", "json", "--start-codex",
+	}, nil, &stdout, &stderr, testDependencies(runner, starter))
+
+	if code != 2 {
+		t.Fatalf("run() exit code = %d, want 2", code)
+	}
+	if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("output stat error = %v, want not exist", err)
+	}
+	if len(runner.requests) != 0 || len(starter.requests) != 0 || stdout.Len() != 0 {
+		t.Fatalf("validation performed side effects: roles=%d starts=%d stdout=%q", len(runner.requests), len(starter.requests), stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "--start-codex requires --output-format text") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRunStartsCodexOnlyAfterSuccessfulTextResult(t *testing.T) {
+	repo := testRepository(t)
+	output := filepath.Join(t.TempDir(), "result.md")
+	starter := &fakeCodexStarter{}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{
+		"--topic", "continue", "--cwd", repo, "--output", output,
+		"--start-codex", "--codex-bin", "my-codex",
+	}, nil, &stdout, &stderr, testDependencies(&fakeRoleRunner{}, starter))
+
+	if code != 0 || len(starter.requests) != 1 {
+		t.Fatalf("run(): code=%d starts=%#v stderr=%q", code, starter.requests, stderr.String())
 	}
 	req := starter.requests[0]
-	if len(req.Command) < 4 || req.Command[0] != "codex" || req.Command[1] != "--cd" || req.Command[2] != "/repo" {
-		t.Fatalf("codex command = %#v, want codex --cd /repo <prompt>", req.Command)
+	wantCommand := []string{
+		"my-codex", "--cd", repo, "--add-dir", filepath.Dir(output),
+		"The completed debate is saved at " + output + ". Read it and continue from the final judge recommendation.",
 	}
-	if len(req.Command) < 6 || req.Command[3] != "--add-dir" || req.PromptFile == "" {
-		t.Fatalf("codex command = %#v promptFile=%q, want --add-dir and prompt file", req.Command, req.PromptFile)
+	if !reflect.DeepEqual(req.Command, wantCommand) || req.CWD != repo || req.PromptFile != output {
+		t.Fatalf("start request = %#v, want command %#v", req, wantCommand)
 	}
-	if strings.Contains(req.Command[len(req.Command)-1], req.InitialPrompt) {
-		t.Fatalf("codex command prompt includes full debate output")
+	if _, err := os.Stat(output); err != nil {
+		t.Fatalf("Codex was started without persisted output: %v", err)
 	}
-	if !strings.HasPrefix(req.Command[len(req.Command)-1], "토론결과를 각 주장별로 요약해줘") {
-		t.Fatalf("codex command prompt = %q, want summary instruction prefix", req.Command[len(req.Command)-1])
-	}
-	if !strings.Contains(req.Command[len(req.Command)-1], req.PromptFile) {
-		t.Fatalf("codex command prompt = %q, want prompt file path %q", req.Command[len(req.Command)-1], req.PromptFile)
-	}
-	for _, want := range []string{
-		"debate request=",
-		"agents=agy,codex",
-		"[round 1 debate-agy]",
-		"background answer from agy",
-		"[debate-coordinator synthesis]",
-		"background synthesis",
-	} {
-		if !strings.Contains(req.InitialPrompt, want) {
-			t.Fatalf("initial prompt = %q, missing %q", req.InitialPrompt, want)
-		}
-	}
-	if !strings.Contains(stdout.String(), "[debate-background codex]") {
-		t.Fatalf("stdout = %q, want codex start notice", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), "saved debate output to ") {
-		t.Fatalf("stdout = %q, want prompt file notice", stdout.String())
+
+	starter = &fakeCodexStarter{}
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"--topic", "fail", "--cwd", repo, "--output", filepath.Join(t.TempDir(), "failed.md"), "--start-codex"}, nil, &stdout, &stderr,
+		testDependencies(&fakeRoleRunner{failRole: backgrounddebate.Proposer.Name, failErr: errors.New("no proposal")}, starter))
+	if code != 1 || len(starter.requests) != 0 {
+		t.Fatalf("failed run: code=%d starts=%#v", code, starter.requests)
 	}
 }
 
-func TestRunPrintsRoundProgress(t *testing.T) {
-	runner := &fakeBackgroundRunner{}
-	restore := SetBackgroundRunnerForTesting(runner)
-	defer restore()
+func TestRunHelpDocumentsCompatibilityAndOutputFormat(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{
-		"--topic", "progress test",
-		"--agents", "agy,codex",
-		"--rounds", "2",
-		"--cwd", "/repo",
-		"--agent-timeout", "1s",
-		"--timeout", "5s",
-	}, &stdout, &stderr)
+	code := run([]string{"--help"}, nil, &stdout, &stderr, Dependencies{})
 
-	if code != 0 {
-		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("run help: code=%d stderr=%q", code, stderr.String())
 	}
-	output := stdout.String()
 	for _, want := range []string{
-		"[debate progress] round=1/2 status=started agents=agy,codex",
-		"[debate progress] round=1/2 status=done",
-		"[debate progress] round=2/2 status=started agents=agy,codex",
-		"[debate progress] round=2/2 status=done",
-		"[debate progress] coordinator status=started",
-		"[debate progress] coordinator status=done",
+		"Usage: zellij-agent debate-background [options]",
+		"--output-format text|json",
+		"--agents", "deprecated; accepted and ignored",
+		"--config",
+		"--start-codex is available only with text output",
 	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("stdout = %q, missing %q", output, want)
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, missing %q", stdout.String(), want)
 		}
 	}
 }
 
-type fakeBackgroundRunner struct {
-	requests []debate.BackgroundCommandRequest
+type fakeRoleRunner struct {
+	requests   []backgrounddebate.RoleRequest
+	failRole   string
+	failResult debaterole.Result
+	failErr    error
+}
+
+func (r *fakeRoleRunner) Run(_ context.Context, req backgrounddebate.RoleRequest) (debaterole.Result, error) {
+	r.requests = append(r.requests, req)
+	if req.Role.Name == r.failRole {
+		return r.failResult, r.failErr
+	}
+	content := strings.TrimPrefix(req.Role.Name, "debate-") + " answer"
+	return debaterole.Result{SchemaVersion: debaterole.SchemaVersion, Role: req.Role.Name, Engine: req.Role.Engine, Status: "success", Content: content}, nil
+}
+
+func (r *fakeRoleRunner) roleNames() []string {
+	names := make([]string, len(r.requests))
+	for i, req := range r.requests {
+		names[i] = req.Role.Name
+	}
+	return names
 }
 
 type fakeCodexStarter struct {
 	requests []CodexStartRequest
 }
 
-func (r *fakeBackgroundRunner) Run(_ context.Context, req debate.BackgroundCommandRequest) (debate.BackgroundCommandResult, error) {
-	r.requests = append(r.requests, req)
-	if req.AgentID == "debate-coordinator" {
-		return debate.BackgroundCommandResult{Stdout: "background synthesis"}, nil
-	}
-	return debate.BackgroundCommandResult{Stdout: "background answer from " + req.AgentID}, nil
-}
-
-func (r *fakeBackgroundRunner) requestsFor(agentID string) []debate.BackgroundCommandRequest {
-	var requests []debate.BackgroundCommandRequest
-	for _, req := range r.requests {
-		if req.AgentID == agentID {
-			requests = append(requests, req)
-		}
-	}
-	return requests
-}
-
 func (s *fakeCodexStarter) Start(_ context.Context, req CodexStartRequest) error {
 	s.requests = append(s.requests, req)
 	return nil
+}
+
+func testDependencies(runner backgrounddebate.RoleRunner, starter CodexStarter) Dependencies {
+	return Dependencies{Runner: runner, CodexStarter: starter, Now: func() time.Time {
+		return time.Date(2026, 7, 15, 12, 34, 56, 789, time.UTC)
+	}}
+}
+
+func testRepository(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o700); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	return repo
+}
+
+func decodeResultFile(t *testing.T, path string) backgrounddebate.Result {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result %q: %v", path, err)
+	}
+	return decodeResult(t, data)
+}
+
+func decodeResult(t *testing.T, data []byte) backgrounddebate.Result {
+	t.Helper()
+	var result backgrounddebate.Result
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("decode result: %v\ndata=%q", err, data)
+	}
+	return result
 }
