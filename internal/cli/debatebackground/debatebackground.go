@@ -66,7 +66,7 @@ func run(args []string, _ io.Reader, stdout, stderr io.Writer, deps Dependencies
 	topic := fs.String("topic", "", "debate topic")
 	fs.String("agents", "agy,agent,codex", "deprecated compatibility option; accepted and ignored")
 	rounds := fs.Int("rounds", 1, "number of debate rounds to run, from 1 to 3")
-	agentTimeout := fs.Duration("agent-timeout", 2*time.Minute, "per-role response timeout")
+	agentTimeout := fs.Duration("agent-timeout", 3*time.Minute, "per-role response timeout")
 	fs.String("config", "", "deprecated compatibility option; accepted and ignored")
 	cwd := fs.String("cwd", ".", "repository path for role commands")
 	outputPath := fs.String("output", defaultOutputPath, "file or directory for the saved debate result")
@@ -196,7 +196,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  --rounds int                   Number of rounds, from 1 to 3 (default 1).")
 	fmt.Fprintln(w, "  --cwd path                     Accessible Git repository (default .).")
 	fmt.Fprintln(w, "  --timeout duration             Overall command timeout (default 10m).")
-	fmt.Fprintln(w, "  --agent-timeout duration       Per-role timeout (default 2m).")
+	fmt.Fprintln(w, "  --agent-timeout duration       Per-role timeout (default 3m).")
 	fmt.Fprintln(w, "  --output path                  Result file or directory (default /tmp).")
 	fmt.Fprintln(w, "  --output-format text|json      Output format (default text).")
 	fmt.Fprintln(w, "  --start-codex                  Start Codex after success; --start-codex is available only with text output.")
@@ -210,7 +210,13 @@ func progressWriter(stderr io.Writer) func(backgrounddebate.ProgressEvent) {
 		if event.Role == backgrounddebate.Proposer.Name && event.Status == "started" {
 			fmt.Fprintf(stderr, "[debate progress] round=%d/%d status=started\n", event.Round, event.Rounds)
 		}
-		fmt.Fprintf(stderr, "[debate progress] round=%d/%d role=%s status=%s\n", event.Round, event.Rounds, event.Role, event.Status)
+		if event.Status == "completed" {
+			fmt.Fprintf(stderr, "[debate progress] round=%d/%d role=%s status=%s content_chars=%d\n",
+				event.Round, event.Rounds, event.Role, event.Status, event.ContentChars)
+		} else {
+			fmt.Fprintf(stderr, "[debate progress] round=%d/%d role=%s status=%s\n",
+				event.Round, event.Rounds, event.Role, event.Status)
+		}
 		if event.Role == backgrounddebate.Judge.Name && event.Status == "completed" {
 			fmt.Fprintf(stderr, "[debate progress] round=%d/%d status=completed\n", event.Round, event.Rounds)
 		}

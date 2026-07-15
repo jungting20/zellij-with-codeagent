@@ -47,7 +47,21 @@ func TestRunJSONKeepsStdoutStructuredAndProgressOnStderr(t *testing.T) {
 	if strings.Contains(stdout.String(), "saved debate output") || strings.Contains(stdout.String(), "progress") {
 		t.Fatalf("stdout contains surrounding text: %q", stdout.String())
 	}
+	for _, req := range runner.requests {
+		if req.Timeout != 3*time.Minute {
+			t.Fatalf("role %s timeout = %v, want 3m", req.Role.Name, req.Timeout)
+		}
+	}
 	for _, want := range []string{"repository=" + repo, "role=debate-proposer status=started", "role=debate-judge status=completed", "saved debate output to " + output} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr = %q, missing %q", stderr.String(), want)
+		}
+	}
+	for _, want := range []string{
+		"role=debate-proposer status=completed content_chars=15",
+		"role=debate-critic status=completed content_chars=13",
+		"role=debate-judge status=completed content_chars=12",
+	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr = %q, missing %q", stderr.String(), want)
 		}
@@ -268,6 +282,7 @@ func TestRunHelpDocumentsCompatibilityAndOutputFormat(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Usage: zellij-agent debate-background [options]",
+		"--agent-timeout duration       Per-role timeout (default 3m).",
 		"--output-format text|json",
 		"--agents", "deprecated; accepted and ignored",
 		"--config",
