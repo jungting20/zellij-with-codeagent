@@ -2,6 +2,7 @@ package rolecli
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -56,6 +57,42 @@ func TestRunDispatchesDebateCoordinator(t *testing.T) {
 	}
 }
 
+func TestRunDispatchesDebateProposer(t *testing.T) {
+	repo := newTemporaryGitRepository(t)
+	binDir := t.TempDir()
+	writeFakeProvider(t, filepath.Join(binDir, "agy"), "#!/bin/sh\nprintf 'proposer answer\\n'\n")
+	t.Setenv("PATH", binDir)
+	setStdin(t, "proposal prompt\n")
+
+	if code := Run([]string{"debate-proposer", repo}); code != 0 {
+		t.Fatalf("Run(debate-proposer) = %d, want 0", code)
+	}
+}
+
+func TestRunDispatchesDebateCritic(t *testing.T) {
+	repo := newTemporaryGitRepository(t)
+	binDir := t.TempDir()
+	writeFakeProvider(t, filepath.Join(binDir, "agent"), "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"critic answer\"}'\n")
+	t.Setenv("PATH", binDir)
+	setStdin(t, "critique prompt\n")
+
+	if code := Run([]string{"debate-critic", repo}); code != 0 {
+		t.Fatalf("Run(debate-critic) = %d, want 0", code)
+	}
+}
+
+func TestRunDispatchesDebateJudge(t *testing.T) {
+	repo := newTemporaryGitRepository(t)
+	binDir := t.TempDir()
+	writeFakeProvider(t, filepath.Join(binDir, "codex"), "#!/bin/sh\nprintf 'judge answer\\n'\n")
+	t.Setenv("PATH", binDir)
+	setStdin(t, "judgment prompt\n")
+
+	if code := Run([]string{"debate-judge", repo}); code != 0 {
+		t.Fatalf("Run(debate-judge) = %d, want 0", code)
+	}
+}
+
 func TestRunDispatchesTabNetworkValidation(t *testing.T) {
 	if code := Run([]string{"tab-network", "--port", "0"}); code == 0 {
 		t.Fatalf("Run(tab-network --port 0) = %d, want non-zero", code)
@@ -65,5 +102,42 @@ func TestRunDispatchesTabNetworkValidation(t *testing.T) {
 func TestRunDispatchesTabWatcherValidation(t *testing.T) {
 	if code := Run([]string{"tab-watcher", "--port", "0"}); code == 0 {
 		t.Fatalf("Run(tab-watcher --port 0) = %d, want non-zero", code)
+	}
+}
+
+func newTemporaryGitRepository(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	cmd := exec.Command("git", "init", "--quiet", repo)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	return repo
+}
+
+func writeFakeProvider(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write fake provider: %v", err)
+	}
+}
+
+func setStdin(t *testing.T, input string) {
+	t.Helper()
+	oldStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdin = r
+	t.Cleanup(func() {
+		os.Stdin = oldStdin
+		_ = r.Close()
+	})
+	if _, err := w.WriteString(input); err != nil {
+		t.Fatalf("write stdin: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close stdin writer: %v", err)
 	}
 }

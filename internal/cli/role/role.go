@@ -11,6 +11,9 @@ import (
 	"zellij-with-codeagent/cmd/agent-role/codingagent"
 	"zellij-with-codeagent/cmd/agent-role/console"
 	"zellij-with-codeagent/cmd/agent-role/debatecoordinator"
+	"zellij-with-codeagent/cmd/agent-role/debatecritic"
+	"zellij-with-codeagent/cmd/agent-role/debatejudge"
+	"zellij-with-codeagent/cmd/agent-role/debateproposer"
 	"zellij-with-codeagent/cmd/agent-role/editor"
 	"zellij-with-codeagent/cmd/agent-role/lsp"
 	"zellij-with-codeagent/cmd/agent-role/network"
@@ -59,6 +62,12 @@ func Run(args []string) int {
 		return codingagent.Run(args[1:])
 	case roles.RoleDebateCoordinator:
 		return debatecoordinator.Run(args[1:])
+	case roles.RoleDebateProposer:
+		return debateproposer.Run(args[1:])
+	case roles.RoleDebateCritic:
+		return debatecritic.Run(args[1:])
+	case roles.RoleDebateJudge:
+		return debatejudge.Run(args[1:])
 	case "roles":
 		runRoles(args[1:])
 	default:

@@ -23,6 +23,9 @@ const (
 	RoleTabWatcher        = "tab-watcher"
 	RoleCodingAgent       = "coding-agent"
 	RoleDebateCoordinator = "debate-coordinator"
+	RoleDebateProposer    = "debate-proposer"
+	RoleDebateCritic      = "debate-critic"
+	RoleDebateJudge       = "debate-judge"
 )
 
 var specs = []RoleSpec{
@@ -116,6 +119,36 @@ var specs = []RoleSpec{
 		Description: "Waits for debate synthesis input, then runs Codex to produce the coordinator summary.",
 		Arguments: []ArgumentSpec{
 			{Name: "path", Required: true, Description: "File or directory path inside the repository where Codex should run."},
+		},
+	},
+	{
+		Name:        RoleDebateProposer,
+		Usage:       "debate-proposer [options] <path> [prompt...]",
+		Description: "Proposes and explores debate solutions with agy.",
+		Arguments: []ArgumentSpec{
+			{Name: "path", Required: true, Description: "File or directory path inside the repository to analyze."},
+			{Name: "prompt", Required: false, Description: "Debate input; reads stdin when omitted."},
+			{Name: "--output-format", Required: false, Description: "Output format: text or json. Defaults to text."},
+		},
+	},
+	{
+		Name:        RoleDebateCritic,
+		Usage:       "debate-critic [options] <path> [prompt...]",
+		Description: "Red-teams debate proposals with Cursor Agent.",
+		Arguments: []ArgumentSpec{
+			{Name: "path", Required: true, Description: "File or directory path inside the repository to analyze."},
+			{Name: "prompt", Required: false, Description: "Debate input; reads stdin when omitted."},
+			{Name: "--output-format", Required: false, Description: "Output format: text or json. Defaults to text."},
+		},
+	},
+	{
+		Name:        RoleDebateJudge,
+		Usage:       "debate-judge [options] <path> [prompt...]",
+		Description: "Judges debate arguments and finalizes a recommendation with Codex.",
+		Arguments: []ArgumentSpec{
+			{Name: "path", Required: true, Description: "File or directory path inside the repository to analyze."},
+			{Name: "prompt", Required: false, Description: "Debate input; reads stdin when omitted."},
+			{Name: "--output-format", Required: false, Description: "Output format: text or json. Defaults to text."},
 		},
 	},
 }

@@ -106,3 +106,40 @@ func TestLookupDebateCoordinator(t *testing.T) {
 		t.Fatalf("arguments = %#v, want required path", spec.Arguments)
 	}
 }
+
+func TestLookupDebateProposerCriticJudge(t *testing.T) {
+	tests := []struct{ name, usage string }{
+		{RoleDebateProposer, "debate-proposer [options] <path> [prompt...]"},
+		{RoleDebateCritic, "debate-critic [options] <path> [prompt...]"},
+		{RoleDebateJudge, "debate-judge [options] <path> [prompt...]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec, ok := Lookup(tt.name)
+			if !ok {
+				t.Fatalf("Lookup(%q) ok = false, want true", tt.name)
+			}
+			if spec.Usage != tt.usage {
+				t.Errorf("Lookup(%q).Usage = %q, want %q", tt.name, spec.Usage, tt.usage)
+			}
+
+			wantArguments := []struct {
+				name     string
+				required bool
+			}{
+				{name: "path", required: true},
+				{name: "prompt", required: false},
+				{name: "--output-format", required: false},
+			}
+			if len(spec.Arguments) != len(wantArguments) {
+				t.Fatalf("Lookup(%q).Arguments = %#v, want %d arguments", tt.name, spec.Arguments, len(wantArguments))
+			}
+			for i, want := range wantArguments {
+				if got := spec.Arguments[i]; got.Name != want.name || got.Required != want.required {
+					t.Errorf("Lookup(%q).Arguments[%d] = %#v, want name %q required %t", tt.name, i, got, want.name, want.required)
+				}
+			}
+		})
+	}
+}
