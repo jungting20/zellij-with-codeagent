@@ -74,6 +74,32 @@ func TestRunExecutesRolesInOrderAndScopesPrompts(t *testing.T) {
 	}
 }
 
+func TestRunReportsCompletedContentCharacterCounts(t *testing.T) {
+	runner := &recordingRunner{}
+	var events []ProgressEvent
+	result := Run(context.Background(), runner, Options{
+		Topic: "topic", Repository: "/repo", Rounds: 1, AgentTimeout: time.Second,
+		Progress: func(event ProgressEvent) { events = append(events, event) },
+	})
+	if result.Status != StatusSuccess {
+		t.Fatalf("Run() status = %q, want success", result.Status)
+	}
+	var completed []ProgressEvent
+	for _, event := range events {
+		if event.Status == "completed" {
+			completed = append(completed, event)
+		}
+	}
+	want := []ProgressEvent{
+		{Round: 1, Rounds: 1, Role: Proposer.Name, Status: "completed", ContentChars: len([]rune("proposal-1"))},
+		{Round: 1, Rounds: 1, Role: Critic.Name, Status: "completed", ContentChars: len([]rune("critique-1"))},
+		{Round: 1, Rounds: 1, Role: Judge.Name, Status: "completed", ContentChars: len([]rune("judgment-1"))},
+	}
+	if !reflect.DeepEqual(completed, want) {
+		t.Fatalf("completed events = %#v, want %#v", completed, want)
+	}
+}
+
 func TestRunRejectsInvalidOptionsBeforeCallingRunner(t *testing.T) {
 	tests := []struct {
 		name string

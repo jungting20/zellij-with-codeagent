@@ -13,7 +13,8 @@ TOPIC:
 PREVIOUS_JUDGMENT:
 %s
 
-Propose the strongest answer to the topic, accounting for the previous judgment when present.`, embeddedResponseWarning, topic, previousJudgment)
+Propose the strongest answer to the topic, accounting for the previous judgment when present.
+Return no more than 2,000 characters.`, embeddedResponseWarning, topic, previousJudgment)
 }
 
 func criticPrompt(topic, currentProposal string) string {
@@ -25,7 +26,8 @@ TOPIC:
 CURRENT_PROPOSAL:
 %s
 
-Critique the current proposal and identify its most important weaknesses.`, embeddedResponseWarning, topic, currentProposal)
+Critique the current proposal and identify its most important weaknesses.
+Return no more than 2,000 characters. Do not quote the proposal at length.`, embeddedResponseWarning, topic, currentProposal)
 }
 
 func judgePrompt(topic, currentProposal, currentCritique string) string {
@@ -40,5 +42,6 @@ CURRENT_PROPOSAL:
 CURRENT_CRITIQUE:
 %s
 
-Judge the current exchange and provide the best final answer for this round.`, embeddedResponseWarning, topic, currentProposal, currentCritique)
+Judge the current exchange and provide the best final answer for this round.
+Return no more than 3,000 characters. Do not restate the proposal or critique.`, embeddedResponseWarning, topic, currentProposal, currentCritique)
 }

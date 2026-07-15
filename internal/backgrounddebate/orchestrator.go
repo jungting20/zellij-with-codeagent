@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"zellij-with-codeagent/internal/debaterole"
 )
@@ -117,7 +118,10 @@ func finishRole(opts Options, round int, role RoleSpec, roleResult debaterole.Re
 		progress(opts.Progress, ProgressEvent{Round: round, Rounds: opts.Rounds, Role: role.Name, Status: "failed"})
 		return failure
 	}
-	progress(opts.Progress, ProgressEvent{Round: round, Rounds: opts.Rounds, Role: role.Name, Status: "completed"})
+	progress(opts.Progress, ProgressEvent{
+		Round: round, Rounds: opts.Rounds, Role: role.Name, Status: "completed",
+		ContentChars: utf8.RuneCountInString(roleResult.Content),
+	})
 	return nil
 }
 

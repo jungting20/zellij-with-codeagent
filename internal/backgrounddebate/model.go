@@ -47,10 +47,11 @@ type Options struct {
 }
 
 type ProgressEvent struct {
-	Round  int
-	Rounds int
-	Role   string
-	Status string
+	Round        int
+	Rounds       int
+	Role         string
+	Status       string
+	ContentChars int
 }
 
 type RoundResult struct {
