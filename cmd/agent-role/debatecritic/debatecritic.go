@@ -42,11 +42,11 @@ func (agentProvider) Run(ctx context.Context, req debaterole.ProviderRequest) (s
 
 	var result cursorResult
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return "", fmt.Errorf("decode agent JSON result: %w", err)
+		return "", fmt.Errorf("decode agent JSON result: %w%s", err, diagnostic(stderr.String()))
 	}
 	if result.Type != "result" || result.Subtype != "success" || result.IsError || strings.TrimSpace(result.Result) == "" {
-		return "", fmt.Errorf("invalid agent JSON result: type=%q subtype=%q is_error=%t result_empty=%t",
-			result.Type, result.Subtype, result.IsError, strings.TrimSpace(result.Result) == "")
+		return "", fmt.Errorf("invalid agent JSON result: type=%q subtype=%q is_error=%t result_empty=%t%s",
+			result.Type, result.Subtype, result.IsError, strings.TrimSpace(result.Result) == "", diagnostic(stderr.String()))
 	}
 	return result.Result, nil
 }

@@ -75,6 +75,40 @@ func TestRunResolvesInputAndRendersOutput(t *testing.T) {
 	}
 }
 
+func TestRunResolvesRepositoryRootFromNestedPath(t *testing.T) {
+	repo := newTestRepository(t)
+	nestedDir := filepath.Join(repo, "nested", "directory")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nestedFile := filepath.Join(nestedDir, "proposal.txt")
+	if err := os.WriteFile(nestedFile, []byte("proposal"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{nestedDir, nestedFile} {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			var gotRepository string
+			provider := ProviderFunc(func(_ context.Context, req ProviderRequest) (string, error) {
+				gotRepository = req.Repository
+				return "answer", nil
+			})
+			var stdout, stderr bytes.Buffer
+
+			code := Run([]string{path, "prompt"}, bytes.NewReader(nil), &stdout, &stderr, Config{
+				Role: "debate-proposer", Engine: "agy", SystemPrompt: "SYSTEM", Provider: provider,
+			})
+
+			if code != 0 {
+				t.Fatalf("Run() code = %d, want 0; stderr = %q", code, stderr.String())
+			}
+			if gotRepository != repo {
+				t.Errorf("provider repository = %q, want root %q", gotRepository, repo)
+			}
+		})
+	}
+}
+
 func TestRunValidation(t *testing.T) {
 	repo := newTestRepository(t)
 	nonRepo := t.TempDir()

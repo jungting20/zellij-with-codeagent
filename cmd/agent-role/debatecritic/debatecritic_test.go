@@ -114,6 +114,38 @@ func TestRunRejectsInvalidAgentResult(t *testing.T) {
 	}
 }
 
+func TestRunPreservesAgentDiagnosticForInvalidResult(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+	}{
+		{name: "malformed JSON", response: `not-json`},
+		{name: "unsuccessful JSON", response: `{"type":"result","subtype":"error","is_error":true,"result":"failed"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			binDir := t.TempDir()
+			writeExecutable(t, filepath.Join(binDir, "agent"), "#!/bin/sh\nprintf 'provider diagnostic\\n' >&2\nprintf '%s\\n' '"+tt.response+"'\n")
+			t.Setenv("PATH", binDir)
+			repo := newTestRepository(t)
+			var stdout, stderr bytes.Buffer
+
+			code := runWithIO([]string{repo, "test proposal"}, bytes.NewReader(nil), &stdout, &stderr)
+
+			if code == 0 {
+				t.Errorf("runWithIO() code = 0, want non-zero")
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want empty", stdout.String())
+			}
+			if !strings.Contains(stderr.String(), "provider diagnostic") {
+				t.Errorf("stderr = %q, want provider diagnostic", stderr.String())
+			}
+		})
+	}
+}
+
 func TestRunReportsMissingAgent(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	repo := newTestRepository(t)
