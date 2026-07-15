@@ -16,6 +16,8 @@ import (
 //go:embed system_prompt.txt
 var systemPrompt string
 
+const maxContentChars = 3000
+
 type codexProvider struct{}
 
 func (codexProvider) Run(ctx context.Context, req debaterole.ProviderRequest) (string, error) {
@@ -42,9 +44,17 @@ func Run(args []string) int {
 }
 
 func runWithIO(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	return debaterole.Run(args, stdin, stdout, stderr, debaterole.Config{
-		Role: "debate-judge", Engine: "codex", SystemPrompt: systemPrompt, Provider: codexProvider{},
-	})
+	return debaterole.Run(args, stdin, stdout, stderr, roleConfig(codexProvider{}))
+}
+
+func roleConfig(provider debaterole.Provider) debaterole.Config {
+	return debaterole.Config{
+		Role:            "debate-judge",
+		Engine:          "codex",
+		SystemPrompt:    systemPrompt,
+		Provider:        provider,
+		MaxContentChars: maxContentChars,
+	}
 }
 
 func diagnostic(stderr string) string {

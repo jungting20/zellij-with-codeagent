@@ -17,6 +17,8 @@ import (
 //go:embed system_prompt.txt
 var systemPrompt string
 
+const maxContentChars = 2000
+
 type cursorResult struct {
 	Type    string `json:"type"`
 	Subtype string `json:"subtype"`
@@ -56,9 +58,17 @@ func Run(args []string) int {
 }
 
 func runWithIO(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	return debaterole.Run(args, stdin, stdout, stderr, debaterole.Config{
-		Role: "debate-critic", Engine: "agent", SystemPrompt: systemPrompt, Provider: agentProvider{},
-	})
+	return debaterole.Run(args, stdin, stdout, stderr, roleConfig(agentProvider{}))
+}
+
+func roleConfig(provider debaterole.Provider) debaterole.Config {
+	return debaterole.Config{
+		Role:            "debate-critic",
+		Engine:          "agent",
+		SystemPrompt:    systemPrompt,
+		Provider:        provider,
+		MaxContentChars: maxContentChars,
+	}
 }
 
 func diagnostic(stderr string) string {

@@ -34,7 +34,22 @@ const expectedSystemPrompt = `당신은 토론의 제안자이자 탐색자다.
 * 후보안
 * 비교
 * 최초 권고안
-* 불확실한 부분`
+* 불확실한 부분
+
+간결한 출력 규칙:
+
+* 전체 출력은 2,000자 이내로 작성한다.
+* 후보안은 2~3개, 각 후보안은 최대 2개 항목으로 제한한다.
+* 구체적인 근거는 전체 최대 5개만 남긴다.
+* 주제 반복, 도구 로그, 탐색 과정, 긴 파일 목록은 생략한다.
+* 위 출력 형식의 6개 섹션은 모두 유지한다.`
+
+func TestRoleConfigSetsContentLimit(t *testing.T) {
+	cfg := roleConfig(agyProvider{})
+	if cfg.MaxContentChars != 2000 {
+		t.Fatalf("MaxContentChars = %d, want 2000", cfg.MaxContentChars)
+	}
+}
 
 func TestRunInvokesAgyAndRendersJSON(t *testing.T) {
 	binDir := t.TempDir()
