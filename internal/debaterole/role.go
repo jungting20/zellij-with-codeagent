@@ -31,10 +31,11 @@ func (fn ProviderFunc) Run(ctx context.Context, req ProviderRequest) (string, er
 }
 
 type Config struct {
-	Role         string
-	Engine       string
-	SystemPrompt string
-	Provider     Provider
+	Role            string
+	Engine          string
+	SystemPrompt    string
+	Provider        Provider
+	MaxContentChars int
 }
 
 type Result struct {
@@ -99,8 +100,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, cfg Config) i
 		}
 		return 1
 	}
-	content = strings.TrimRight(content, "\r\n")
-	if content == "" {
+	content = compactContent(content, cfg.MaxContentChars)
+	if strings.TrimSpace(content) == "" {
 		fmt.Fprintln(stderr, "Error: provider returned an empty response")
 		return 1
 	}
@@ -121,6 +122,32 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, cfg Config) i
 		return 1
 	}
 	return 0
+}
+
+const contentOmissionMarker = "\n\n[출력 길이 제한으로 중간 내용 생략]\n\n"
+
+func compactContent(content string, maxChars int) string {
+	if maxChars <= 0 {
+		return strings.TrimRight(content, "\r\n")
+	}
+	content = strings.TrimSpace(content)
+	runes := []rune(content)
+	if len(runes) <= maxChars {
+		return content
+	}
+	marker := []rune(contentOmissionMarker)
+	remaining := maxChars - len(marker)
+	if remaining <= 0 {
+		return string(marker[:maxChars])
+	}
+	headCount := remaining * 70 / 100
+	tailCount := remaining - headCount
+	result := strings.TrimSpace(string(runes[:headCount])) + contentOmissionMarker +
+		strings.TrimSpace(string(runes[len(runes)-tailCount:]))
+	if resultRunes := []rune(result); len(resultRunes) > maxChars {
+		result = string(resultRunes[:maxChars])
+	}
+	return result
 }
 
 func ComposePrompt(systemPrompt, input string) string {

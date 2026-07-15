@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestRunResolvesInputAndRendersOutput(t *testing.T) {
@@ -80,6 +82,35 @@ func repositoryInputForTest(repository, input string) string {
 		"\n<<<TARGET_REPOSITORY_END>>>\n\n" +
 		"Analyze only the target repository above. Do not reuse files or context from another project.\n\n" +
 		"<<<USER_INPUT_BEGIN>>>\n" + input + "\n<<<USER_INPUT_END>>>"
+}
+
+func TestCompactContentPreservesContentWithinLimit(t *testing.T) {
+	got := compactContent("  concise answer\r\n", 100)
+	if got != "concise answer" {
+		t.Fatalf("compactContent() = %q, want concise answer", got)
+	}
+}
+
+func TestCompactContentBoundsUnicodeAndPreservesBothEnds(t *testing.T) {
+	const maxChars = 80
+	input := "시작-" + strings.Repeat("가", 100) + "-최종결론"
+	got := compactContent(input, maxChars)
+	if count := utf8.RuneCountInString(got); count > maxChars {
+		t.Fatalf("rune count = %d, want <= %d; content=%q", count, maxChars, got)
+	}
+	if !strings.HasPrefix(got, "시작-") || !strings.HasSuffix(got, "-최종결론") {
+		t.Fatalf("compactContent() = %q, want beginning and end", got)
+	}
+	if !strings.Contains(got, "[출력 길이 제한으로 중간 내용 생략]") {
+		t.Fatalf("compactContent() = %q, want omission marker", got)
+	}
+}
+
+func TestCompactContentWithZeroLimitPreservesLegacyWhitespace(t *testing.T) {
+	got := compactContent("  answer  \r\n", 0)
+	if got != "  answer  " {
+		t.Fatalf("compactContent() = %q, want legacy whitespace", got)
+	}
 }
 
 func TestRunResolvesRepositoryRootFromNestedPath(t *testing.T) {
@@ -166,6 +197,12 @@ func TestRunValidation(t *testing.T) {
 			name:     "empty provider response",
 			args:     []string{repo, "prompt"},
 			provider: successfulProvider("\r\n"),
+			wantCode: 1,
+		},
+		{
+			name:     "whitespace-only provider response",
+			args:     []string{repo, "prompt"},
+			provider: successfulProvider(" \t\r\n"),
 			wantCode: 1,
 		},
 	}
