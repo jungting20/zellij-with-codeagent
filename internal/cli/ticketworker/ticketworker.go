@@ -151,7 +151,7 @@ func runStart(args []string, stdout, stderr io.Writer, cfg Config) int {
 	payload, err := ticketworker.BuildPlan(ticketworker.PlanRequest{
 		CWD: cwd, ConfigPath: configPath, Session: session,
 		ZellijSession: zellijSession,
-		Executable:    executable, SocketPath: nonDefaultSocket(*socketPath), Config: workerConfig,
+		Executable:    executable, SocketPath: nonDefaultSocket(*socketPath), Timeout: *timeout, Config: workerConfig,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "build ticket-worker plan: %v\n", err)

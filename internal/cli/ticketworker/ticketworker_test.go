@@ -55,7 +55,7 @@ func TestRunStartDryRunPreservesZellijSessionWithExplicitMaxWorkers(t *testing.T
 	client := &fakeClient{}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"start", "--dry-run", "--max-workers", "5", "--zellij-session", "physical-a"}, strings.NewReader(""), &stdout, &stderr, testCLIConfig(root, client))
+	code := Run([]string{"start", "--dry-run", "--max-workers", "5", "--timeout", "3s", "--zellij-session", "physical-a"}, strings.NewReader(""), &stdout, &stderr, testCLIConfig(root, client))
 
 	if code != 0 {
 		t.Fatalf("start --dry-run code = %d, stderr=%q", code, stderr.String())
@@ -89,6 +89,9 @@ func TestRunStartDryRunPreservesZellijSessionWithExplicitMaxWorkers(t *testing.T
 	}
 	if !containsAdjacent(manager.Command, "--zellij-session", "physical-a") {
 		t.Fatalf("manager command = %#v, want physical zellij session", manager.Command)
+	}
+	if !containsAdjacent(manager.Command, "--timeout", "3s") {
+		t.Fatalf("manager command = %#v, want startup timeout", manager.Command)
 	}
 	if !containsAdjacent(monitor.Command, "--capacity", "5") {
 		t.Fatalf("monitor command = %#v, want capacity override", monitor.Command)
@@ -164,16 +167,19 @@ func TestRunStartSubmitsPlan(t *testing.T) {
 	}}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"start", "--session", "tickets", "--socket", "/tmp/custom.sock", "--timeout", "5s", "--zellij-session", "physical-a"}, strings.NewReader(""), &stdout, &stderr, testCLIConfig(root, client))
+	code := Run([]string{"start", "--session", "tickets", "--socket", "/tmp/custom.sock", "--timeout", "3s", "--zellij-session", "physical-a"}, strings.NewReader(""), &stdout, &stderr, testCLIConfig(root, client))
 
 	if code != 0 {
 		t.Fatalf("code = %d, stderr=%q", code, stderr.String())
 	}
-	if client.socketPath != "/tmp/custom.sock" || client.timeout != 5*time.Second || client.requestID != "req_tickets" {
+	if client.socketPath != "/tmp/custom.sock" || client.timeout != 3*time.Second || client.requestID != "req_tickets" {
 		t.Fatalf("client socket=%q timeout=%s request=%q", client.socketPath, client.timeout, client.requestID)
 	}
 	if client.payload.Session != "tickets" || client.submitCalls != 1 {
 		t.Fatalf("payload/session calls = %q/%d", client.payload.Session, client.submitCalls)
+	}
+	if !containsAdjacent(client.payload.Tabs[0].Panes[0].Command, "--timeout", "3s") {
+		t.Fatalf("manager command = %#v, want startup timeout", client.payload.Tabs[0].Panes[0].Command)
 	}
 	if !strings.Contains(stdout.String(), "request=req_tickets session=tickets") {
 		t.Fatalf("stdout = %q, want submission summary", stdout.String())

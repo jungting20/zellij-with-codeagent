@@ -170,6 +170,12 @@ func (m *Manager) waitForAnchor(ctx context.Context) error {
 	var lastInspectionErr error
 	for {
 		response, err := m.client.InspectRuntime(readyCtx)
+		if readyErr := readyCtx.Err(); readyErr != nil {
+			if err != nil {
+				lastInspectionErr = err
+			}
+			return m.anchorNotReadyError(readyErr, lastInspectionErr)
+		}
 		if err != nil {
 			lastInspectionErr = err
 		} else if m.runtimeHasPane(response, m.anchorPaneID, "starting", "running") {
@@ -178,14 +184,21 @@ func (m *Manager) waitForAnchor(ctx context.Context) error {
 
 		select {
 		case <-readyCtx.Done():
-			anchorErr := fmt.Errorf("ticket-worker manager anchor not ready: %w", readyCtx.Err())
-			if lastInspectionErr != nil {
-				return errors.Join(anchorErr, lastInspectionErr)
-			}
-			return anchorErr
+			return m.anchorNotReadyError(readyCtx.Err(), lastInspectionErr)
 		case <-poll.C:
 		}
 	}
+}
+
+func (m *Manager) anchorNotReadyError(readinessErr, inspectionErr error) error {
+	anchorErr := fmt.Errorf(
+		"ticket-worker manager anchor not ready: pane %q task %q zellij session %q: %w",
+		m.anchorPaneID, m.taskID, m.zellijSession, readinessErr,
+	)
+	if inspectionErr != nil {
+		return errors.Join(anchorErr, inspectionErr)
+	}
+	return anchorErr
 }
 
 func (m *Manager) runtimeHasPane(response transport.InspectRuntimeResponse, paneID string, statuses ...string) bool {

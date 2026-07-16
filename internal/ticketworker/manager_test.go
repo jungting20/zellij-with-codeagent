@@ -81,11 +81,34 @@ func TestManagerAnchorReadinessTimeoutCreatesNoWorkers(t *testing.T) {
 
 	select {
 	case err := <-runDone:
-		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "anchor not ready") {
+		for _, want := range []string{"anchor not ready", "ticket-worker-manager", "tickets", "physical-a"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Run error = %v, want %q", err, want)
+			}
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("Run error = %v, want anchor-not-ready deadline error", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Run did not return after startup timeout")
+	}
+	client.assertCreateCount(t, 0)
+}
+
+func TestManagerRejectsAnchorReturnedAfterReadinessDeadline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := &lateAnchorManagerClient{
+		fakeManagerClient: newFakeManagerClient(),
+		cancelRun:         cancel,
+	}
+	manager := newTestManager(t, client, make(chan time.Time), 1)
+	manager.startupTimeout = time.Millisecond
+
+	err := manager.Run(ctx)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run error = %v, want readiness deadline error", err)
 	}
 	client.assertCreateCount(t, 0)
 }
@@ -469,6 +492,22 @@ type fakeManagerClient struct {
 	inspectionQueue   []fakeInspectionResult
 	inspectionCalls   int
 	inspectionDefault fakeInspectionResult
+}
+
+type lateAnchorManagerClient struct {
+	*fakeManagerClient
+	cancelRun context.CancelFunc
+}
+
+func (c *lateAnchorManagerClient) InspectRuntime(ctx context.Context) (transport.InspectRuntimeResponse, error) {
+	<-ctx.Done()
+	return validAnchorInspection(), nil
+}
+
+func (c *lateAnchorManagerClient) CreatePane(ctx context.Context, req transport.CreatePaneRequest) (transport.CreatePaneResponse, error) {
+	response, err := c.fakeManagerClient.CreatePane(ctx, req)
+	c.cancelRun()
+	return response, err
 }
 
 func newFakeManagerClient() *fakeManagerClient {

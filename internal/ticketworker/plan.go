@@ -21,6 +21,7 @@ type PlanRequest struct {
 	ZellijSession string
 	Executable    []string
 	SocketPath    string
+	Timeout       time.Duration
 	Config        Config
 }
 
@@ -57,6 +58,9 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 		"--anchor", "ticket-worker-manager",
 		"--zellij-session", zellijSession,
 	)
+	if req.Timeout > 0 {
+		managerCommand = append(managerCommand, "--timeout", req.Timeout.String())
+	}
 	monitorCommand := append(append([]string{}, executable...),
 		"dashboard",
 		"--task", session,
