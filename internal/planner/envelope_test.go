@@ -108,6 +108,17 @@ func TestDecodeExecutionPlanEnvelopeRejectsUnknownPayloadFields(t *testing.T) {
 	}
 }
 
+func TestDecodeExecutionPlanEnvelopeRejectsNullPayload(t *testing.T) {
+	_, err := DecodeExecutionPlanEnvelope([]byte(`{
+		"type":"execution_plan",
+		"request_id":"req_page",
+		"payload":null
+	}`))
+	if !errors.Is(err, ErrInvalidExecutionPlanEnvelope) {
+		t.Fatalf("DecodeExecutionPlanEnvelope() error = %v, want ErrInvalidExecutionPlanEnvelope", err)
+	}
+}
+
 func TestValidateExecutionPlanRejectsMissingZellijSession(t *testing.T) {
 	plan, err := DecodeExecutionPlanEnvelope([]byte(`{
 		"type":"execution_plan",
