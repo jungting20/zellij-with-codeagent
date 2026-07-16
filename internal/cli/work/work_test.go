@@ -114,6 +114,7 @@ func TestRunRejectsMissingZellijSession(t *testing.T) {
 }
 
 func TestRunSubmitsGeneratedPlan(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "test-session")
 	cwd := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cwd, "go.mod"), []byte("module example.com/demo\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(go.mod) error = %v", err)
@@ -155,6 +156,7 @@ func TestRunSubmitsGeneratedPlan(t *testing.T) {
 }
 
 func TestRunDryRunDetectsProjectDefaults(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "test-session")
 	tests := []struct {
 		name       string
 		files      map[string]string
@@ -290,6 +292,7 @@ func TestRunDryRunDetectsProjectDefaults(t *testing.T) {
 }
 
 func TestRunDryRunAutoTestDoesNotExecuteDetectedCommand(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "test-session")
 	cwd := t.TempDir()
 	writePath := filepath.Join(cwd, "executed")
 	if err := os.WriteFile(filepath.Join(cwd, "package.json"), []byte(`{"scripts":{"test":"touch executed"}}`), 0o600); err != nil {
@@ -393,6 +396,7 @@ func TestRunRejectsInvalidCWD(t *testing.T) {
 }
 
 func TestRunSubmitErrorIncludesDaemonHint(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "test-session")
 	cwd := t.TempDir()
 	client := &fakeAgentClient{submitErr: errors.New("dial unix /tmp/agentd.sock: connect: no such file")}
 	var stdout, stderr bytes.Buffer

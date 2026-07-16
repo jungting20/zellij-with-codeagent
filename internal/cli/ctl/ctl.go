@@ -319,6 +319,19 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	debateOpts := debate.Options{
+		Topic:        *topic,
+		Agents:       debate.ParseAgents(*agentsCSV),
+		Rounds:       *rounds,
+		AgentTimeout: *agentTimeout,
+		ConfigPath:   *configPath,
+		CWD:          *cwd,
+		AgentRoleBin: *agentRoleBin,
+	}
+	if err := debate.ValidateOptions(debateOpts); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	zellijSession, err := cli.ResolveZellijSession(*zellijSessionFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "resolve zellij session: %v\n", err)
@@ -328,16 +341,8 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
 
-	result, err := debate.Run(ctx, newClient(opts.socketPath, opts.timeout), debate.Options{
-		Topic:         *topic,
-		Agents:        debate.ParseAgents(*agentsCSV),
-		Rounds:        *rounds,
-		AgentTimeout:  *agentTimeout,
-		ConfigPath:    *configPath,
-		CWD:           *cwd,
-		AgentRoleBin:  *agentRoleBin,
-		ZellijSession: zellijSession,
-	})
+	debateOpts.ZellijSession = zellijSession
+	result, err := debate.Run(ctx, newClient(opts.socketPath, opts.timeout), debateOpts)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		if debate.IsValidationError(err) {
@@ -496,7 +501,27 @@ func loadExecutionPlan(filePath string, stdin io.Reader) (planner.ValidatedExecu
 	if err != nil {
 		return planner.ValidatedExecutionPlan{}, err
 	}
-	return planner.DecodeExecutionPlanEnvelope(data)
+	var shape map[string]json.RawMessage
+	if err := json.Unmarshal(data, &shape); err != nil {
+		return planner.ValidatedExecutionPlan{}, err
+	}
+	if _, hasType := shape["type"]; hasType {
+		return planner.DecodeExecutionPlanEnvelope(data)
+	}
+	if _, hasRequestID := shape["request_id"]; hasRequestID {
+		return planner.DecodeExecutionPlanEnvelope(data)
+	}
+	if _, hasPayload := shape["payload"]; hasPayload {
+		return planner.DecodeExecutionPlanEnvelope(data)
+	}
+	payload, err := planner.DecodeExecutionPlanPayload(data)
+	if err != nil {
+		return planner.ValidatedExecutionPlan{}, err
+	}
+	return planner.ValidatedExecutionPlan{
+		Envelope: transport.RequestEnvelope{Type: transport.RequestTypeExecutionPlan},
+		Payload:  payload,
+	}, nil
 }
 
 func rebuildExecutionPlanEnvelope(plan *planner.ValidatedExecutionPlan) error {

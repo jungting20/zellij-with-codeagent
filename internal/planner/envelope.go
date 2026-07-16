@@ -58,6 +58,17 @@ func DecodeExecutionPlanEnvelope(data []byte) (ValidatedExecutionPlan, error) {
 	return ValidatedExecutionPlan{Envelope: envelope, Payload: *payload}, nil
 }
 
+func DecodeExecutionPlanPayload(data []byte) (transport.ExecutionPlanPayload, error) {
+	var payload *transport.ExecutionPlanPayload
+	if err := decodeStrict(data, &payload); err != nil {
+		return transport.ExecutionPlanPayload{}, fmt.Errorf("%w: invalid payload: %v", ErrInvalidExecutionPlanEnvelope, err)
+	}
+	if payload == nil {
+		return transport.ExecutionPlanPayload{}, fmt.Errorf("%w: invalid payload: object is required", ErrInvalidExecutionPlanEnvelope)
+	}
+	return *payload, nil
+}
+
 func ValidateExecutionPlan(plan ValidatedExecutionPlan) error {
 	return validateExecutionPlanPayload(plan.Payload)
 }

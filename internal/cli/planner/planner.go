@@ -174,12 +174,6 @@ func runTUI(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient 
 		fmt.Fprintf(stderr, "unexpected arguments: %s\n", strings.Join(fs.Args(), " "))
 		return 2
 	}
-	zellijSession, err := cli.ResolveZellijSession(*zellijSessionFlag)
-	if err != nil {
-		fmt.Fprintf(stderr, "resolve zellij session: %v\n", err)
-		return 1
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 	health := checkAgentHealth(ctx, newClient(*socketPath, *timeout))
@@ -192,7 +186,7 @@ func runTUI(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient 
 	fmt.Fprintf(stderr, "mock_source=%s\n", *mockSource)
 	fmt.Fprintln(stderr)
 
-	err = nil
+	var err error
 	*goal, err = promptChat(reader, stderr, *goal)
 	if err != nil {
 		fmt.Fprintf(stderr, "read request failed: %v\n", err)
@@ -218,6 +212,11 @@ func runTUI(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient 
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "resolve source failed: %v\n", err)
+		return 1
+	}
+	zellijSession, err := cli.ResolveZellijSession(*zellijSessionFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "resolve zellij session: %v\n", err)
 		return 1
 	}
 	payload, err := planner.BuildPagePlan(planner.PagePlanRequest{

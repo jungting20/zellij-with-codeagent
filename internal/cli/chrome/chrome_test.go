@@ -105,6 +105,7 @@ func TestRunRejectsMissingZellijSession(t *testing.T) {
 }
 
 func TestRunSubmitsGeneratedPlan(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "test-session")
 	cwd := t.TempDir()
 	client := &fakeAgentClient{}
 	var stdout, stderr bytes.Buffer
@@ -139,6 +140,7 @@ func TestRunSubmitsGeneratedPlan(t *testing.T) {
 }
 
 func TestRunNoWatchDryRunPrintsTabNetworkPlan(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "test-session")
 	cwd := t.TempDir()
 	client := &fakeAgentClient{}
 	var stdout, stderr bytes.Buffer
@@ -228,6 +230,7 @@ func TestRunRejectsInvalidCWD(t *testing.T) {
 }
 
 func TestRunSubmitErrorIncludesDaemonHint(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "test-session")
 	cwd := t.TempDir()
 	client := &fakeAgentClient{submitErr: errors.New("dial unix /tmp/agentd.sock: connect: no such file")}
 	var stdout, stderr bytes.Buffer

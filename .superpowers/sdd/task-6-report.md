@@ -87,3 +87,51 @@ Ticket-worker/role propagation is explicitly assigned to Task 7, so this task di
 ## Concerns
 
 The repository-wide suite cannot be green until Task 7 adds Zellij-session propagation to ticket-worker generated plans. No other concern found in the Task 6 scope.
+
+## Review Fix Wave
+
+Commit-wave changes after Task 6 review:
+
+- Added shared `debate.ValidateOptions` validation and invoked it before resolving the physical session in ctl, preserving exit code `2` and established topic/round/agent-timeout errors outside Zellij.
+- Moved planner TUI session resolution after goal, URL, and source validation and immediately before page-plan construction.
+- Restored ctl plan compatibility with both canonical request envelopes and raw execution-plan payloads. Both shapes are strictly decoded, then use flag > file > environment session precedence before semantic validation.
+- Added strict raw-payload decoding through `planner.DecodeExecutionPlanPayload`, including null-object and unknown-field rejection behavior inherited from the shared strict decoder.
+- Added internal planner/ctl CLI regression harnesses for validation ordering, raw compatibility, unknown fields, file-over-environment precedence, and missing-session errors.
+- Added an integration regression for `examples/plans/agent-role-demo.json`.
+- Made work and Chrome success/error-path tests hermetic by explicitly setting their Zellij session rather than inheriting the developer shell.
+
+Focused RED evidence before the review fixes:
+
+```text
+env -u ZELLIJ_SESSION_NAME go test ./internal/cli/planner ./internal/cli/ctl -run 'TestRun(TUIInvalid|DebateInvalid|PlanAcceptsStrictRaw|PlanRejectsUnknownRaw)' -count=1
+```
+
+Observed failures:
+
+- planner TUI returned exit `1` with the missing-session resolver error instead of exit `2` with URL validation;
+- ctl debate returned exit `1` with the missing-session resolver error instead of exit `2` with debate validation;
+- ctl plan rejected a raw payload as an envelope with unknown field `session`.
+
+Required hermetic verification command:
+
+```text
+env -u ZELLIJ_SESSION_NAME go test ./internal/cli/work ./internal/cli/chrome ./internal/cli/planner ./internal/cli/ctl ./internal/debate -count=1
+```
+
+Exact passing output:
+
+```text
+ok  	zellij-with-codeagent/internal/cli/work	0.582s
+ok  	zellij-with-codeagent/internal/cli/chrome	0.732s
+ok  	zellij-with-codeagent/internal/cli/planner	0.902s
+ok  	zellij-with-codeagent/internal/cli/ctl	1.081s
+ok  	zellij-with-codeagent/internal/debate	1.253s
+```
+
+Additional compatibility verification:
+
+```text
+env -u ZELLIJ_SESSION_NAME go test ./cmd/agent-planner ./cmd/agentctl ./internal/cli/work ./internal/cli/chrome ./internal/cli/planner ./internal/cli/ctl ./internal/debate ./internal/planner -count=1
+```
+
+Result: PASS for every listed package.

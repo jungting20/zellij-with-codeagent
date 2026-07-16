@@ -722,6 +722,24 @@ func TestRunPlanAcceptsCanonicalBadgeCategoryEnvelope(t *testing.T) {
 	}
 }
 
+func TestRunPlanAcceptsAgentRoleDemoRawPayload(t *testing.T) {
+	client := &fakeAgentClient{}
+	var stdout, stderr bytes.Buffer
+	planPath := filepath.Join("..", "..", "examples", "plans", "agent-role-demo.json")
+
+	code := run([]string{"plan", "--file", planPath, "--request-id", "req_agent_role_demo"}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if client.planRequestID != "req_agent_role_demo" || client.planPayload.Session != "zellij-with-code-agent" {
+		t.Fatalf("request=%q payload=%#v, want raw agent-role demo", client.planRequestID, client.planPayload)
+	}
+	if client.planPayload.ZellijSession != "test-session" {
+		t.Fatalf("payload.ZellijSession = %q, want test-session", client.planPayload.ZellijSession)
+	}
+}
+
 func TestRunEventsPassesFilters(t *testing.T) {
 	client := &fakeAgentClient{
 		eventsResponse: transport.RecentEventsResponse{

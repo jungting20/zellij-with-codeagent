@@ -54,18 +54,25 @@ func IsValidationError(err error) bool {
 	return errors.As(err, &validationErr)
 }
 
-func Run(ctx context.Context, client Client, opts Options) (Result, error) {
+func ValidateOptions(opts Options) error {
 	if strings.TrimSpace(opts.Topic) == "" {
-		return Result{}, ValidationError{Message: "debate requires --topic <text>"}
+		return ValidationError{Message: "debate requires --topic <text>"}
 	}
 	if len(opts.Agents) == 0 {
-		return Result{}, ValidationError{Message: "debate requires at least one agent"}
+		return ValidationError{Message: "debate requires at least one agent"}
 	}
 	if opts.Rounds < 1 || opts.Rounds > 3 {
-		return Result{}, ValidationError{Message: "debate requires --rounds between 1 and 3"}
+		return ValidationError{Message: "debate requires --rounds between 1 and 3"}
 	}
 	if opts.AgentTimeout <= 0 {
-		return Result{}, ValidationError{Message: "debate requires --agent-timeout greater than 0"}
+		return ValidationError{Message: "debate requires --agent-timeout greater than 0"}
+	}
+	return nil
+}
+
+func Run(ctx context.Context, client Client, opts Options) (Result, error) {
+	if err := ValidateOptions(opts); err != nil {
+		return Result{}, err
 	}
 
 	roleCommand := roleCommand(opts.AgentRoleBin)
