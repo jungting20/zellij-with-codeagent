@@ -20,6 +20,9 @@ func TestLoadConfigAppliesDefaults(t *testing.T) {
 	if got.MaxWorkers != 3 || got.PollInterval != 30*time.Second {
 		t.Fatalf("defaults = %d %s", got.MaxWorkers, got.PollInterval)
 	}
+	if got.Worker.CompleteTimeout != 30*time.Second {
+		t.Fatalf("complete timeout = %s, want 30s", got.Worker.CompleteTimeout)
+	}
 }
 
 func TestLoadConfigRejectsExplicitZeroMaxWorkers(t *testing.T) {
@@ -68,6 +71,10 @@ func TestLoadConfigValidatesRequiredValues(t *testing.T) {
 		"blank command element":  "version: 1\nworker:\n  command: [worker, '  ']\n  completion_marker: DONE\n",
 		"padded marker":          "version: 1\nworker:\n  command: [worker]\n  completion_marker: ' DONE '\n",
 		"carriage return marker": "version: 1\nworker:\n  command: [worker]\n  completion_marker: \"DONE\\rAGAIN\"\n",
+		"empty complete command": "version: 1\nworker:\n  command: [worker]\n  completion_marker: DONE\n  complete_command: []\n",
+		"blank complete command": "version: 1\nworker:\n  command: [worker]\n  completion_marker: DONE\n  complete_command: [ticket, '  ']\n",
+		"zero complete timeout":  "version: 1\nworker:\n  command: [worker]\n  completion_marker: DONE\n  complete_timeout: 0s\n",
+		"bad complete timeout":   "version: 1\nworker:\n  command: [worker]\n  completion_marker: DONE\n  complete_timeout: soon\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -81,7 +88,7 @@ func TestLoadConfigValidatesRequiredValues(t *testing.T) {
 
 func TestLoadConfigReadsExplicitValues(t *testing.T) {
 	root := t.TempDir()
-	writeConfig(t, root, "version: 1\nmax_workers: 5\npoll_interval: 2m\nworker:\n  command: [worker, --flag]\n  completion_marker: DONE\n")
+	writeConfig(t, root, "version: 1\nmax_workers: 5\npoll_interval: 2m\nworker:\n  command: [worker, --flag]\n  completion_marker: DONE\n  complete_command: [ticket, complete]\n  complete_timeout: 45s\n")
 
 	got, err := LoadConfig(root)
 	if err != nil {
@@ -92,6 +99,9 @@ func TestLoadConfigReadsExplicitValues(t *testing.T) {
 	}
 	if len(got.Worker.Command) != 2 || got.Worker.Command[1] != "--flag" || got.Worker.CompletionMarker != "DONE" {
 		t.Fatalf("worker config = %+v", got.Worker)
+	}
+	if len(got.Worker.CompleteCommand) != 2 || got.Worker.CompleteCommand[1] != "complete" || got.Worker.CompleteTimeout != 45*time.Second {
+		t.Fatalf("completion config = %+v", got.Worker)
 	}
 }
 
@@ -115,8 +125,15 @@ func TestInitConfigWritesTemplateAndForceReplaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "version: 1\nmax_workers: 3\npoll_interval: 30s\nworker:\n  command: [\"go\", \"run\", \"./cmd/ticket-worker\"]\n  completion_marker: \"ZELLIJ_AGENT_WORKER_DONE\"\n"
+	want := "version: 1\nmax_workers: 3\npoll_interval: 30s\nworker:\n  command: [\"go\", \"run\", \"./cmd/ticket-worker\"]\n  completion_marker: \"ZELLIJ_AGENT_WORKER_DONE\"\n  complete_command: [\"ticket\", \"complete\"]\n  complete_timeout: 30s\n"
 	assertFileContents(t, path, want)
+	loaded, err := LoadConfig(root)
+	if err != nil {
+		t.Fatalf("LoadConfig(initialized) error = %v", err)
+	}
+	if loaded.Worker.CompleteTimeout != 30*time.Second || len(loaded.Worker.CompleteCommand) != 2 {
+		t.Fatalf("initialized completion config = %+v", loaded.Worker)
+	}
 
 	if err := os.WriteFile(path, []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -129,6 +146,9 @@ func TestInitConfigWritesTemplateAndForceReplaces(t *testing.T) {
 		t.Fatalf("path = %q, want %q", gotPath, path)
 	}
 	assertFileContents(t, path, want)
+	if _, err := LoadConfig(root); err != nil {
+		t.Fatalf("LoadConfig(force initialized) error = %v", err)
+	}
 }
 
 func writeConfig(t *testing.T, root, body string) {

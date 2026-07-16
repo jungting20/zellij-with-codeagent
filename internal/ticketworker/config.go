@@ -11,15 +11,18 @@ import (
 )
 
 const (
-	configVersion       = 1
-	defaultMaxWorkers   = 3
-	defaultPollInterval = 30 * time.Second
-	configTemplate      = "version: 1\nmax_workers: 3\npoll_interval: 30s\nworker:\n  command: [\"go\", \"run\", \"./cmd/ticket-worker\"]\n  completion_marker: \"ZELLIJ_AGENT_WORKER_DONE\"\n"
+	configVersion          = 1
+	defaultMaxWorkers      = 3
+	defaultPollInterval    = 30 * time.Second
+	defaultCompleteTimeout = 30 * time.Second
+	configTemplate         = "version: 1\nmax_workers: 3\npoll_interval: 30s\nworker:\n  command: [\"go\", \"run\", \"./cmd/ticket-worker\"]\n  completion_marker: \"ZELLIJ_AGENT_WORKER_DONE\"\n  complete_command: [\"ticket\", \"complete\"]\n  complete_timeout: 30s\n"
 )
 
 type WorkerConfig struct {
-	Command          []string `yaml:"command"`
-	CompletionMarker string   `yaml:"completion_marker"`
+	Command          []string
+	CompletionMarker string
+	CompleteCommand  []string
+	CompleteTimeout  time.Duration
 }
 
 type Config struct {
@@ -29,11 +32,18 @@ type Config struct {
 	Worker       WorkerConfig
 }
 
+type diskWorkerConfig struct {
+	Command          []string  `yaml:"command"`
+	CompletionMarker string    `yaml:"completion_marker"`
+	CompleteCommand  *[]string `yaml:"complete_command"`
+	CompleteTimeout  string    `yaml:"complete_timeout"`
+}
+
 type diskConfig struct {
-	Version      int          `yaml:"version"`
-	MaxWorkers   *int         `yaml:"max_workers"`
-	PollInterval string       `yaml:"poll_interval"`
-	Worker       WorkerConfig `yaml:"worker"`
+	Version      int              `yaml:"version"`
+	MaxWorkers   *int             `yaml:"max_workers"`
+	PollInterval string           `yaml:"poll_interval"`
+	Worker       diskWorkerConfig `yaml:"worker"`
 }
 
 func ConfigPath(root string) string {
@@ -58,10 +68,29 @@ func LoadConfig(root string) (Config, error) {
 	if disk.MaxWorkers != nil {
 		maxWorkers = *disk.MaxWorkers
 	}
+	completeTimeout := defaultCompleteTimeout
+	if disk.Worker.CompleteTimeout != "" {
+		completeTimeout, err = time.ParseDuration(disk.Worker.CompleteTimeout)
+		if err != nil {
+			return Config{}, fmt.Errorf("worker.complete_timeout: %w", err)
+		}
+	}
+	var completeCommand []string
+	if disk.Worker.CompleteCommand != nil {
+		if len(*disk.Worker.CompleteCommand) == 0 {
+			return Config{}, fmt.Errorf("worker.complete_command must not be empty when configured")
+		}
+		completeCommand = append([]string(nil), (*disk.Worker.CompleteCommand)...)
+	}
 	cfg := Config{
 		Version:    disk.Version,
 		MaxWorkers: maxWorkers,
-		Worker:     disk.Worker,
+		Worker: WorkerConfig{
+			Command:          append([]string(nil), disk.Worker.Command...),
+			CompletionMarker: disk.Worker.CompletionMarker,
+			CompleteCommand:  completeCommand,
+			CompleteTimeout:  completeTimeout,
+		},
 	}
 	if disk.PollInterval == "" {
 		cfg.PollInterval = defaultPollInterval
@@ -101,6 +130,14 @@ func validateConfig(cfg Config) error {
 	}
 	if marker == "" {
 		return fmt.Errorf("worker.completion_marker must not be empty")
+	}
+	for i, arg := range cfg.Worker.CompleteCommand {
+		if strings.TrimSpace(arg) == "" {
+			return fmt.Errorf("worker.complete_command[%d] must not be empty", i)
+		}
+	}
+	if cfg.Worker.CompleteTimeout <= 0 {
+		return fmt.Errorf("worker.complete_timeout must be positive")
 	}
 	return nil
 }
