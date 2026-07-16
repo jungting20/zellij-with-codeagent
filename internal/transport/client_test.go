@@ -68,6 +68,45 @@ func TestClientSendMessage(t *testing.T) {
 	}
 }
 
+func TestClientWaitForOutputMarkerDisablesHTTPTimeout(t *testing.T) {
+	service := newFakeRuntimeService()
+	service.markerResponse = rt.WaitForOutputMarkerResponse{
+		PaneID:    "worker-1",
+		Marker:    "DONE",
+		MatchedAt: time.Unix(3, 0),
+	}
+	service.markerBlock = make(chan struct{})
+	baseClient, cleanup := startUnixTransport(t, service)
+	defer cleanup()
+	client := NewClient(ClientOptions{SocketPath: baseClient.socketPath, Timeout: 20 * time.Millisecond})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(service.markerBlock)
+	}()
+	response, err := client.WaitForOutputMarker(context.Background(), "worker-1", WaitForOutputMarkerRequest{Marker: "DONE"})
+	if err != nil {
+		t.Fatalf("WaitForOutputMarker() error = %v", err)
+	}
+	if response.PaneID != "worker-1" || response.Marker != "DONE" || !response.MatchedAt.Equal(time.Unix(3, 0)) {
+		t.Fatalf("WaitForOutputMarker() = %#v, want worker-1 DONE", response)
+	}
+}
+
+func TestClientClosePane(t *testing.T) {
+	service := newFakeRuntimeService()
+	client, cleanup := startUnixTransport(t, service)
+	defer cleanup()
+
+	response, err := client.ClosePane(context.Background(), "worker-1")
+	if err != nil {
+		t.Fatalf("ClosePane() error = %v", err)
+	}
+	if response.Pane.ID != "worker-1" || service.closeReq.PaneID != "worker-1" {
+		t.Fatalf("ClosePane() = %#v request=%#v, want logical worker-1", response, service.closeReq)
+	}
+}
+
 func TestClientStreamsEvents(t *testing.T) {
 	service := newFakeRuntimeService()
 	client, cleanup := startUnixTransport(t, service)

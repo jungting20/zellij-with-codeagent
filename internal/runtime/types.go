@@ -49,6 +49,7 @@ type PaneService interface {
 	ListPanes(context.Context) (ListPanesResponse, error)
 	InspectPane(context.Context, InspectPaneRequest) (InspectPaneResponse, error)
 	SnapshotOutput(context.Context, SnapshotOutputRequest) (SnapshotOutputResponse, error)
+	WaitForOutputMarker(context.Context, WaitForOutputMarkerRequest) (WaitForOutputMarkerResponse, error)
 	ClosePane(context.Context, ClosePaneRequest) (ClosePaneResponse, error)
 }
 
@@ -160,6 +161,17 @@ type SnapshotOutputRequest struct {
 type SnapshotOutputResponse struct {
 	Pane   Pane
 	Output string
+}
+
+type WaitForOutputMarkerRequest struct {
+	PaneID PaneID
+	Marker string
+}
+
+type WaitForOutputMarkerResponse struct {
+	PaneID    PaneID
+	Marker    string
+	MatchedAt time.Time
 }
 
 type InspectRuntimeRequest struct{}

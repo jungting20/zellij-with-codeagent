@@ -116,6 +116,20 @@ func (c *Client) SnapshotOutput(ctx context.Context, paneID string, req Snapshot
 	return response, err
 }
 
+func (c *Client) WaitForOutputMarker(ctx context.Context, paneID string, req WaitForOutputMarkerRequest) (WaitForOutputMarkerResponse, error) {
+	var response WaitForOutputMarkerResponse
+	waitHTTP := *c.http
+	waitHTTP.Timeout = 0
+	err := c.doWithHTTPClient(ctx, &waitHTTP, http.MethodPost, "/v1/panes/"+url.PathEscape(paneID)+"/wait-marker", req, &response)
+	return response, err
+}
+
+func (c *Client) ClosePane(ctx context.Context, paneID string) (ClosePaneResponse, error) {
+	var response ClosePaneResponse
+	err := c.do(ctx, http.MethodPost, "/v1/panes/"+url.PathEscape(paneID)+"/close", struct{}{}, &response)
+	return response, err
+}
+
 func (c *Client) ListPanes(ctx context.Context) (ListPanesResponse, error) {
 	var response ListPanesResponse
 	err := c.do(ctx, http.MethodGet, "/v1/panes", nil, &response)
@@ -230,6 +244,10 @@ func (c *Client) SubmitExecutionPlan(ctx context.Context, requestID string, payl
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, target any) error {
+	return c.doWithHTTPClient(ctx, c.http, method, path, body, target)
+}
+
+func (c *Client) doWithHTTPClient(ctx context.Context, httpClient *http.Client, method, path string, body any, target any) error {
 	var payload []byte
 	if body != nil {
 		var err error
@@ -239,7 +257,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, target a
 		}
 	}
 
-	response, err := c.doHTTP(ctx, method, path, payload, body != nil)
+	response, err := c.doHTTPWithClient(ctx, httpClient, method, path, payload, body != nil)
 	if err != nil {
 		if !c.shouldAutoStart(err) {
 			return err
@@ -247,7 +265,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, target a
 		if startErr := c.ensureDaemon(ctx); startErr != nil {
 			return fmt.Errorf("auto-start daemon: %w", startErr)
 		}
-		response, err = c.doHTTP(ctx, method, path, payload, body != nil)
+		response, err = c.doHTTPWithClient(ctx, httpClient, method, path, payload, body != nil)
 		if err != nil {
 			return err
 		}
@@ -263,7 +281,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, target a
 	return json.NewDecoder(response.Body).Decode(target)
 }
 
-func (c *Client) doHTTP(ctx context.Context, method, path string, payload []byte, hasBody bool) (*http.Response, error) {
+func (c *Client) doHTTPWithClient(ctx context.Context, httpClient *http.Client, method, path string, payload []byte, hasBody bool) (*http.Response, error) {
 	var reader io.Reader
 	if hasBody {
 		reader = bytes.NewReader(payload)
@@ -275,7 +293,7 @@ func (c *Client) doHTTP(ctx context.Context, method, path string, payload []byte
 	if hasBody {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	return c.http.Do(req)
+	return httpClient.Do(req)
 }
 
 func decodeClientError(response *http.Response) error {

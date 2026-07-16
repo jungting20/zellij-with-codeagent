@@ -135,6 +135,127 @@ func TestServerSendInput(t *testing.T) {
 	}
 }
 
+func TestServerWaitForOutputMarker(t *testing.T) {
+	service := newFakeRuntimeService()
+	service.markerResponse = rt.WaitForOutputMarkerResponse{
+		PaneID:    "worker-1",
+		Marker:    "DONE",
+		MatchedAt: time.Unix(3, 0),
+	}
+	server := newTestServer(t, service)
+	request := httptest.NewRequest(http.MethodPost, "/v1/panes/worker-1/wait-marker", strings.NewReader(`{"marker":"DONE"}`))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if service.markerReq.PaneID != "worker-1" || service.markerReq.Marker != "DONE" {
+		t.Fatalf("WaitForOutputMarker request = %#v, want logical worker-1 DONE", service.markerReq)
+	}
+	var decoded WaitForOutputMarkerResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if decoded.PaneID != "worker-1" || decoded.Marker != "DONE" || !decoded.MatchedAt.Equal(time.Unix(3, 0)) {
+		t.Fatalf("response = %#v, want mapped marker response", decoded)
+	}
+}
+
+func TestServerWaitForOutputMarkerBypassesRequestTimeoutAndPropagatesCancellation(t *testing.T) {
+	service := newFakeRuntimeService()
+	service.markerResponse = rt.WaitForOutputMarkerResponse{PaneID: "worker-1", Marker: "DONE", MatchedAt: time.Unix(3, 0)}
+	service.markerBlock = make(chan struct{})
+	server, err := NewServer(ServerOptions{
+		Service:        service,
+		SocketPath:     "unused.sock",
+		RequestTimeout: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	request := httptest.NewRequest(http.MethodPost, "/v1/panes/worker-1/wait-marker", strings.NewReader(`{"marker":"DONE"}`)).WithContext(ctx)
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		server.ServeHTTP(response, request)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatalf("wait-marker returned before release; status=%d body=%s", response.Code, response.Body.String())
+	case <-time.After(30 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case <-service.markerCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("runtime marker context was not canceled with request")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("wait-marker handler did not return after request cancellation")
+	}
+}
+
+func TestServerClosePaneUsesLogicalID(t *testing.T) {
+	service := newFakeRuntimeService()
+	server := newTestServer(t, service)
+	request := httptest.NewRequest(http.MethodPost, "/v1/panes/worker-1/close", strings.NewReader(`{}`))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if service.closeReq.PaneID != "worker-1" {
+		t.Fatalf("ClosePane request = %#v, want logical worker-1", service.closeReq)
+	}
+	var decoded ClosePaneResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if decoded.Pane.ID != "worker-1" {
+		t.Fatalf("response pane = %#v, want worker-1", decoded.Pane)
+	}
+}
+
+func TestServerPaneWaitAndCloseMapNotFound(t *testing.T) {
+	for _, action := range []string{"wait-marker", "close"} {
+		t.Run(action, func(t *testing.T) {
+			service := newFakeRuntimeService()
+			service.markerErr = rt.ErrPaneNotFound
+			service.closeErr = rt.ErrPaneNotFound
+			server := newTestServer(t, service)
+			body := `{}`
+			if action == "wait-marker" {
+				body = `{"marker":"DONE"}`
+			}
+			request := httptest.NewRequest(http.MethodPost, "/v1/panes/missing/"+action, strings.NewReader(body))
+			response := httptest.NewRecorder()
+
+			server.ServeHTTP(response, request)
+
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusNotFound, response.Body.String())
+			}
+			var decoded ErrorResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if decoded.Error.Code != CodeNotFound {
+				t.Fatalf("error = %#v, want not_found", decoded.Error)
+			}
+		})
+	}
+}
+
 func TestServerSendMessage(t *testing.T) {
 	service := newFakeRuntimeService()
 	server := newTestServer(t, service)
@@ -320,12 +441,19 @@ type fakeRuntimeService struct {
 	messageErr      error
 	recentReq       rt.RecentEventsRequest
 	cleanupErr      error
+	markerReq       rt.WaitForOutputMarkerRequest
+	markerResponse  rt.WaitForOutputMarkerResponse
+	markerErr       error
+	markerBlock     chan struct{}
+	markerCanceled  chan struct{}
+	closeReq        rt.ClosePaneRequest
+	closeErr        error
 
 	subs []chan eventbus.Event
 }
 
 func newFakeRuntimeService() *fakeRuntimeService {
-	return &fakeRuntimeService{}
+	return &fakeRuntimeService{markerCanceled: make(chan struct{}, 1)}
 }
 
 func (f *fakeRuntimeService) CreatePane(_ context.Context, req rt.CreatePaneRequest) (rt.CreatePaneResponse, error) {
@@ -386,6 +514,27 @@ func (f *fakeRuntimeService) SnapshotOutput(context.Context, rt.SnapshotOutputRe
 	return rt.SnapshotOutputResponse{Pane: pane, Output: "snapshot"}, nil
 }
 
+func (f *fakeRuntimeService) WaitForOutputMarker(ctx context.Context, req rt.WaitForOutputMarkerRequest) (rt.WaitForOutputMarkerResponse, error) {
+	f.mu.Lock()
+	f.markerReq = req
+	response := f.markerResponse
+	err := f.markerErr
+	block := f.markerBlock
+	f.mu.Unlock()
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			select {
+			case f.markerCanceled <- struct{}{}:
+			default:
+			}
+			return rt.WaitForOutputMarkerResponse{}, ctx.Err()
+		}
+	}
+	return response, err
+}
+
 func (f *fakeRuntimeService) InspectRuntime(context.Context, rt.InspectRuntimeRequest) (rt.InspectRuntimeResponse, error) {
 	pane := fakePane("pane-1")
 	return rt.InspectRuntimeResponse{
@@ -411,8 +560,11 @@ func (f *fakeRuntimeService) RecentEvents(_ context.Context, req rt.RecentEvents
 	}}}, nil
 }
 
-func (f *fakeRuntimeService) ClosePane(context.Context, rt.ClosePaneRequest) (rt.ClosePaneResponse, error) {
-	return rt.ClosePaneResponse{Pane: fakePane("pane-1")}, nil
+func (f *fakeRuntimeService) ClosePane(_ context.Context, req rt.ClosePaneRequest) (rt.ClosePaneResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closeReq = req
+	return rt.ClosePaneResponse{Pane: fakePane(req.PaneID)}, f.closeErr
 }
 
 func (f *fakeRuntimeService) Reconcile(context.Context, rt.ReconcileRequest) (rt.ReconcileResponse, error) {

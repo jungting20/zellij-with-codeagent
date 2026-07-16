@@ -56,6 +56,20 @@ type SnapshotOutputResponse struct {
 	Output string `json:"output"`
 }
 
+type WaitForOutputMarkerRequest struct {
+	Marker string `json:"marker"`
+}
+
+type WaitForOutputMarkerResponse struct {
+	PaneID    string    `json:"pane_id"`
+	Marker    string    `json:"marker"`
+	MatchedAt time.Time `json:"matched_at"`
+}
+
+type ClosePaneResponse struct {
+	Pane Pane `json:"pane"`
+}
+
 type ListPanesResponse struct {
 	Panes []Pane `json:"panes"`
 }

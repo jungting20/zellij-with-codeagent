@@ -83,6 +83,45 @@ func (s *Server) handlePaneAction(w http.ResponseWriter, r *http.Request) {
 			Pane:   PaneFromRuntime(response.Pane),
 			Output: response.Output,
 		})
+	case "wait-marker":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, BadRequest("wait-marker requires POST"), http.StatusMethodNotAllowed)
+			return
+		}
+		var req WaitForOutputMarkerRequest
+		if !decodeRequest(w, r, &req) {
+			return
+		}
+		response, err := s.service.WaitForOutputMarker(r.Context(), rt.WaitForOutputMarkerRequest{
+			PaneID: rt.PaneID(paneID),
+			Marker: req.Marker,
+		})
+		if err != nil {
+			writeRuntimeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, WaitForOutputMarkerResponse{
+			PaneID:    string(response.PaneID),
+			Marker:    response.Marker,
+			MatchedAt: response.MatchedAt,
+		})
+	case "close":
+		if r.Method != http.MethodPost {
+			writeAPIError(w, BadRequest("close requires POST"), http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct{}
+		if !decodeOptionalRequest(w, r, &req) {
+			return
+		}
+		ctx, cancel := s.requestContext(r)
+		defer cancel()
+		response, err := s.service.ClosePane(ctx, rt.ClosePaneRequest{PaneID: rt.PaneID(paneID)})
+		if err != nil {
+			writeRuntimeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, ClosePaneResponse{Pane: PaneFromRuntime(response.Pane)})
 	default:
 		writeAPIError(w, APIError{Code: CodeNotFound, Message: "pane action not found"}, http.StatusNotFound)
 	}
