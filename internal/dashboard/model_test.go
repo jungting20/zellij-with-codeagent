@@ -25,11 +25,14 @@ type fakeClient struct {
 	snapshotRequests int
 	inputPane        string
 	input            transport.SendInputRequest
+	inputCalls       int
 	inputErr         error
 	reconcile        transport.ReconcileResponse
+	reconcileCalls   int
 	reconcileErr     error
 	cleanup          transport.CleanupRequest
 	cleanupResponse  transport.CleanupResponse
+	cleanupCalls     int
 	cleanupErr       error
 }
 
@@ -52,18 +55,97 @@ func (f *fakeClient) SnapshotOutput(_ context.Context, paneID string, _ transpor
 }
 
 func (f *fakeClient) SendInput(_ context.Context, paneID string, req transport.SendInputRequest) error {
+	f.inputCalls++
 	f.inputPane = paneID
 	f.input = req
 	return f.inputErr
 }
 
 func (f *fakeClient) Reconcile(context.Context) (transport.ReconcileResponse, error) {
+	f.reconcileCalls++
 	return f.reconcile, f.reconcileErr
 }
 
 func (f *fakeClient) Cleanup(_ context.Context, req transport.CleanupRequest) (transport.CleanupResponse, error) {
+	f.cleanupCalls++
 	f.cleanup = req
 	return f.cleanupResponse, f.cleanupErr
+}
+
+func TestModelTaskFilterLimitsPanesAndEventsOnRefresh(t *testing.T) {
+	m := NewModel(context.Background(), &fakeClient{}, Options{TaskID: "tickets-1"})
+	m.refreshing = true
+	next, _ := m.Update(refreshResultMsg{
+		status: transport.InspectRuntimeResponse{Panes: []transport.Pane{
+			{ID: "ticket-worker", SessionID: "s", TaskID: "tickets-1", TabID: "tab", Status: "running"},
+			{ID: "other-worker", SessionID: "s", TaskID: "work-2", TabID: "tab", Status: "running"},
+		}},
+		events: transport.RecentEventsResponse{Events: []transport.Event{
+			{Type: "test_passed", TaskID: "tickets-1", PaneID: "ticket-worker"},
+			{Type: "test_failed", TaskID: "work-2", PaneID: "other-worker"},
+		}},
+	})
+	got := next.(Model)
+	if len(got.panes) != 1 || got.panes[0].ID != "ticket-worker" {
+		t.Fatalf("panes = %#v, want only ticket-worker", got.panes)
+	}
+	if len(got.events) != 1 || got.events[0].TaskID != "tickets-1" {
+		t.Fatalf("events = %#v, want only tickets-1", got.events)
+	}
+	if strings.Contains(got.View(), "other-worker") {
+		t.Fatalf("view contains unrelated pane: %q", got.View())
+	}
+}
+
+func TestModelReadOnlyConsumesMutationKeysAndPreservesControls(t *testing.T) {
+	client := &fakeClient{}
+	m := NewModel(context.Background(), client, Options{ReadOnly: true})
+	m = applyRefresh(t, m, transport.InspectRuntimeResponse{Panes: []transport.Pane{
+		{ID: "a", SessionID: "s", TaskID: "tickets-1", TabID: "tab", Status: "running"},
+		{ID: "b", SessionID: "s", TaskID: "tickets-1", TabID: "tab", Status: "running"},
+	}})
+
+	for _, key := range []rune{'i', 'r', 'x'} {
+		next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		m = next.(Model)
+		if cmd != nil || m.mode != "normal" || m.statusText != "read-only dashboard" {
+			t.Fatalf("key %q model=%#v cmd=%v", key, m, cmd)
+		}
+	}
+	if client.inputCalls != 0 || client.reconcileCalls != 0 || client.cleanupCalls != 0 {
+		t.Fatalf("mutation calls input=%d reconcile=%d cleanup=%d", client.inputCalls, client.reconcileCalls, client.cleanupCalls)
+	}
+
+	selected := m.selected
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	if m.selected == selected {
+		t.Fatal("read-only navigation did not move selection")
+	}
+	for i, row := range m.rows {
+		if row.node.pane != nil {
+			m.selected, m.selectedKey = i, row.node.key
+			break
+		}
+	}
+	m.snapshotting = false
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}); cmd == nil {
+		t.Fatal("read-only snapshot command is nil")
+	}
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}}); cmd == nil {
+		t.Fatal("read-only refresh command is nil")
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	if next.(Model).mode != "help" {
+		t.Fatal("read-only help did not open")
+	}
+	next, cmd := next.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd != nil || next.(Model).mode != "normal" {
+		t.Fatal("q did not close read-only help")
+	}
+	if _, cmd := next.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}}); cmd == nil {
+		t.Fatal("read-only quit command is nil")
+	}
 }
 
 func TestModelCoalescesRefreshTriggers(t *testing.T) {

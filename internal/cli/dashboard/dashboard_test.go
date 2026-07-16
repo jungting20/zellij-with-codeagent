@@ -28,6 +28,9 @@ func TestRunForwardsOptionsAndRunsProgram(t *testing.T) {
 		"--timeout", "7s",
 		"--refresh-interval", "3s",
 		"--event-limit", "25",
+		"--task", "tickets-1",
+		"--read-only",
+		"--capacity", "4",
 	}, strings.NewReader(""), &stdout, &stderr, func(socket string, timeout time.Duration) dashboard.Client {
 		gotSocket, gotTimeout = socket, timeout
 		return client
@@ -57,13 +60,24 @@ func TestRunForwardsOptionsAndRunsProgram(t *testing.T) {
 	if gotOptions.RefreshInterval != 3*time.Second || gotOptions.EventLimit != 25 {
 		t.Fatalf("options = %#v", gotOptions)
 	}
+	if gotOptions.TaskID != "tickets-1" || !gotOptions.ReadOnly || gotOptions.Capacity != 4 {
+		t.Fatalf("dashboard options = %#v", gotOptions)
+	}
+}
+
+func TestRunCapacityValidation(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--capacity", "-1"}, strings.NewReader(""), &stdout, &stderr, fakeFactory(&fakeClient{}), Config{})
+	if code != 2 || !strings.Contains(stderr.String(), "--capacity must be non-negative") {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
 }
 
 func TestRunHelpAndValidation(t *testing.T) {
 	for _, args := range [][]string{{"--help"}, {"-h"}, {"help"}} {
 		var stdout, stderr bytes.Buffer
 		code := Run(args, strings.NewReader(""), &stdout, &stderr, fakeFactory(&fakeClient{}), Config{})
-		if code != 0 || !strings.Contains(stdout.String(), "Usage: zellij-agent dashboard") || !strings.Contains(stdout.String(), "--refresh-interval") || stderr.Len() != 0 {
+		if code != 0 || !strings.Contains(stdout.String(), "Usage: zellij-agent dashboard") || !strings.Contains(stdout.String(), "--refresh-interval") || !strings.Contains(stdout.String(), "--task") || !strings.Contains(stdout.String(), "--read-only") || !strings.Contains(stdout.String(), "--capacity") || stderr.Len() != 0 {
 			t.Fatalf("args=%v code=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
 		}
 	}

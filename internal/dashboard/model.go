@@ -40,6 +40,9 @@ type Client interface {
 type Options struct {
 	RefreshInterval time.Duration
 	EventLimit      int
+	TaskID          string
+	ReadOnly        bool
+	Capacity        int
 }
 
 type refreshResultMsg struct {
@@ -245,16 +248,18 @@ func (m Model) handleRefreshResult(msg refreshResultMsg) (tea.Model, tea.Cmd) {
 		if pane := m.selectedPane(); pane != nil {
 			oldPaneID = pane.ID
 		}
-		m.rebuildRows(msg.status.Panes, oldSelected)
-		m.panes = append([]transport.Pane(nil), msg.status.Panes...)
-		m.events = filterSemanticEvents(msg.events.Events)
+		panes := filterPanesByTask(msg.status.Panes, m.opts.TaskID)
+		events := filterEventsByTask(msg.events.Events, m.opts.TaskID)
+		m.rebuildRows(panes, oldSelected)
+		m.panes = panes
+		m.events = filterSemanticEvents(events)
 		m.loaded = true
 		m.lastRefresh = msg.at
 		if m.lastRefresh.IsZero() {
 			m.lastRefresh = time.Now()
 		}
 		m.eventViewport.setContent(len(m.eventLines()), m.panelBodyHeight())
-		m.statusText = fmt.Sprintf("runtime refreshed: panes=%d events=%d", len(msg.status.Panes), len(m.events))
+		m.statusText = fmt.Sprintf("runtime refreshed: panes=%d events=%d", len(m.panes), len(m.events))
 		if pane := m.selectedPane(); pane != nil && (pane.ID != oldPaneID || !hasSnapshot(m.snapshots, pane.ID)) {
 			cmds = append(cmds, m.requestSnapshot(pane.ID))
 		}
@@ -264,6 +269,26 @@ func (m Model) handleRefreshResult(msg refreshResultMsg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.requestRefresh())
 	}
 	return m, tea.Batch(cmds...)
+}
+
+func filterPanesByTask(panes []transport.Pane, taskID string) []transport.Pane {
+	filtered := make([]transport.Pane, 0, len(panes))
+	for _, pane := range panes {
+		if taskID == "" || pane.TaskID == taskID {
+			filtered = append(filtered, pane)
+		}
+	}
+	return filtered
+}
+
+func filterEventsByTask(events []transport.Event, taskID string) []transport.Event {
+	filtered := make([]transport.Event, 0, len(events))
+	for _, event := range events {
+		if taskID == "" || event.TaskID == taskID {
+			filtered = append(filtered, event)
+		}
+	}
+	return filtered
 }
 
 func (m *Model) rebuildRows(panes []transport.Pane, oldSelected int) {

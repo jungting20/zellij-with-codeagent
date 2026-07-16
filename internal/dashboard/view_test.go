@@ -147,3 +147,35 @@ func TestViewRendersInputCleanupAndHelpOverlays(t *testing.T) {
 		}
 	}
 }
+
+func TestViewReadOnlyTaskFilterAndCapacity(t *testing.T) {
+	m := NewModel(context.Background(), &fakeClient{}, Options{TaskID: "tickets-1", ReadOnly: true, Capacity: 4})
+	m.width, m.height, m.loaded = 120, 24, true
+	m = applyRefresh(t, m, transport.InspectRuntimeResponse{Panes: []transport.Pane{
+		{ID: "worker", SessionID: "s", TaskID: "tickets-1", TabID: "tab", Status: "running"},
+	}})
+	view := m.View()
+	for _, want := range []string{"READ ONLY", "task=tickets-1", "active=1/4"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q: %q", want, view)
+		}
+	}
+	for _, unwanted := range []string{"i input", "r reconcile", "x cleanup"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("read-only view contains mutation key %q: %q", unwanted, view)
+		}
+	}
+
+	m.mode = "help"
+	help := m.View()
+	for _, want := range []string{"s snapshot", "R refresh", "? / q / Esc close"} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("read-only help missing %q: %q", want, help)
+		}
+	}
+	for _, unwanted := range []string{"i input", "r reconcile", "x cleanup"} {
+		if strings.Contains(help, unwanted) {
+			t.Fatalf("read-only help contains mutation key %q: %q", unwanted, help)
+		}
+	}
+}

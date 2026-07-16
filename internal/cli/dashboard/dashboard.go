@@ -37,6 +37,9 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 	timeout := fs.Duration("timeout", 10*time.Second, "request timeout")
 	refreshInterval := fs.Duration("refresh-interval", 2*time.Second, "polling refresh interval")
 	eventLimit := fs.Int("event-limit", 100, "number of recent semantic events")
+	taskID := fs.String("task", "", "show only panes and events for this task")
+	readOnly := fs.Bool("read-only", false, "disable dashboard mutation actions")
+	capacity := fs.Int("capacity", 0, "optional worker capacity")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -56,6 +59,10 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 		fmt.Fprintln(stderr, "dashboard --event-limit must be positive")
 		return 2
 	}
+	if *capacity < 0 {
+		fmt.Fprintln(stderr, "dashboard --capacity must be non-negative")
+		return 2
+	}
 
 	newModel := cfg.NewModel
 	if newModel == nil {
@@ -71,7 +78,13 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	client := newClient(*socketPath, *timeout)
-	model := newModel(ctx, client, dashboard.Options{RefreshInterval: *refreshInterval, EventLimit: *eventLimit})
+	model := newModel(ctx, client, dashboard.Options{
+		RefreshInterval: *refreshInterval,
+		EventLimit:      *eventLimit,
+		TaskID:          *taskID,
+		ReadOnly:        *readOnly,
+		Capacity:        *capacity,
+	})
 	if err := runner(ctx, model, stdin, stdout); err != nil {
 		fmt.Fprintf(stderr, "dashboard failed: %v\n", err)
 		return 1
@@ -101,6 +114,12 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "    \tpolling refresh interval (default 2s)")
 	fmt.Fprintln(w, "  --event-limit int")
 	fmt.Fprintln(w, "    \tnumber of recent semantic events (default 100)")
+	fmt.Fprintln(w, "  --task string")
+	fmt.Fprintln(w, "    \tshow only panes and events for this task")
+	fmt.Fprintln(w, "  --read-only")
+	fmt.Fprintln(w, "    \tdisable dashboard mutation actions")
+	fmt.Fprintln(w, "  --capacity int")
+	fmt.Fprintln(w, "    \toptional worker capacity")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Keys: j/k move, enter expand, s snapshot, i input, r reconcile, x cleanup, R refresh, q quit")
 }

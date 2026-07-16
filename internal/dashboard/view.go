@@ -86,7 +86,15 @@ func (m Model) headerView(width int) string {
 		style.Render(marker + " " + connection),
 		fmt.Sprintf("%d panes", len(m.panes)),
 	}
-	if counts.active > 0 {
+	if m.opts.ReadOnly {
+		parts = append(parts, warningStyle.Render("READ ONLY"))
+	}
+	if m.opts.TaskID != "" {
+		parts = append(parts, "task="+m.opts.TaskID)
+	}
+	if m.opts.Capacity > 0 {
+		parts = append(parts, fmt.Sprintf("active=%d/%d", counts.active, m.opts.Capacity))
+	} else if counts.active > 0 {
 		parts = append(parts, fmt.Sprintf("active=%d", counts.active))
 	}
 	if counts.problem > 0 {
@@ -266,6 +274,18 @@ func (m Model) statusView(width int) string {
 }
 
 func (m Model) footerText() string {
+	prefix := ""
+	if m.opts.ReadOnly {
+		prefix = "READ ONLY"
+		if m.opts.TaskID != "" {
+			prefix += " task=" + m.opts.TaskID
+		}
+		prefix += "  "
+		if m.focus == focusDetail {
+			return prefix + "j/k scroll  h/l tab  pgup/pgdn page  g/G ends  tab focus  s snapshot  R refresh  ? help  q quit"
+		}
+		return prefix + "j/k move  enter toggle  tab focus  s snapshot  R refresh  ? help  q quit"
+	}
 	if m.focus == focusDetail {
 		return "j/k scroll  h/l tab  pgup/pgdn page  g/G ends  tab focus  i input  ? help  q quit"
 	}
@@ -283,6 +303,13 @@ func (m Model) overlayView() string {
 			m.taskPaneCount(m.confirmTask),
 		)
 	case "help":
+		if m.opts.ReadOnly {
+			scope := "READ ONLY"
+			if m.opts.TaskID != "" {
+				scope += "  task=" + m.opts.TaskID
+			}
+			return "DASHBOARD HELP  " + scope + "\n\nTab focus panels\nj/k move or scroll\nh/l switch Output and Events\nPgUp/PgDn page  g/G ends\nEnter expand/collapse\ns snapshot  R refresh\n\n? / q / Esc close"
+		}
 		return "DASHBOARD HELP\n\nTab focus panels\nj/k move or scroll\nh/l switch Output and Events\nPgUp/PgDn page  g/G ends\nEnter expand/collapse\ns snapshot  i input\nr reconcile  x cleanup  R refresh\n\n? / q / Esc close"
 	default:
 		return ""

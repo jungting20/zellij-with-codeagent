@@ -33,6 +33,13 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateActionOrNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.opts.ReadOnly {
+		switch msg.String() {
+		case "i", "r", "x":
+			m.statusText = "read-only dashboard"
+			return m, nil
+		}
+	}
 	switch msg.String() {
 	case "?":
 		if m.actionInFlight {
