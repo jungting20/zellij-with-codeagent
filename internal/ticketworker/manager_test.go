@@ -208,6 +208,37 @@ func TestManagerCompletionFailureIsNotRetriedAndManualCloseRefills(t *testing.T)
 	runner.assertRequestCount(t, 1)
 }
 
+func TestManagerStructuredCloseFailureCanBeManuallyReconciled(t *testing.T) {
+	client := newFakeManagerClient()
+	client.setDefaultInspection(workerInspection("ticket-worker-slot-1-0001"))
+	client.failClose("ticket-worker-slot-1-0001")
+	runner := newFakeCompletionRunner()
+	ticks := make(chan time.Time, 2)
+	manager := newCompletionTestManager(t, client, ticks, runner)
+	events := newManagerEventBarrier(manager)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go manager.Run(ctx)
+
+	client.waitForCreates(t, 1)
+	client.matchStructured("ticket-worker-slot-1-0001", "DONE ticket_id=TICKET-123")
+	runner.waitForRequest(t)
+	events.wait(t)
+	runner.respond(CompletionResult{})
+	client.waitForCloses(t, 1)
+	events.wait(t)
+
+	ticks <- time.Unix(101, 0)
+	events.wait(t)
+	client.assertCreateCount(t, 1)
+	runner.assertRequestCount(t, 1)
+
+	client.setDefaultInspection(validAnchorInspection())
+	ticks <- time.Unix(102, 0)
+	client.waitForCreates(t, 2)
+	runner.assertRequestCount(t, 1)
+}
+
 func TestManagerMalformedCompletionLineDoesNotRunOrClose(t *testing.T) {
 	client := newFakeManagerClient()
 	runner := newFakeCompletionRunner()
@@ -244,6 +275,30 @@ func TestManagerCompletionTimeoutPreservesPane(t *testing.T) {
 	if got := manager.slots[0].state; got != slotCompletionFailed {
 		t.Fatalf("slot state = %v, want completion failed", got)
 	}
+}
+
+func TestManagerCancellationDuringCompletionPreservesPane(t *testing.T) {
+	client := newFakeManagerClient()
+	runner := newFakeCompletionRunner()
+	manager := newCompletionTestManager(t, client, make(chan time.Time), runner)
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() { runDone <- manager.Run(ctx) }()
+
+	client.waitForCreates(t, 1)
+	client.matchStructured("ticket-worker-slot-1-0001", "DONE ticket_id=TICKET-123")
+	runner.waitForRequest(t)
+	cancel()
+
+	select {
+	case err := <-runDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("manager did not stop after cancellation")
+	}
+	client.assertCloseCount(t, 0)
 }
 
 func TestManagerReconcilesOnlyActiveFailedWorkerIdentity(t *testing.T) {
@@ -597,6 +652,22 @@ func TestNewManagerRejectsNegativeStartupTimeout(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "startup timeout must not be negative") {
 		t.Fatalf("NewManager() error = %v, want negative startup timeout error", err)
+	}
+}
+
+func TestNewManagerRejectsNonPositiveCompletionTimeout(t *testing.T) {
+	for _, timeout := range []time.Duration{0, -time.Second} {
+		_, err := NewManager(ManagerOptions{
+			Client: newFakeManagerClient(),
+			Config: Config{MaxWorkers: 1, PollInterval: time.Second, Worker: WorkerConfig{
+				Command: []string{"worker"}, CompletionMarker: "DONE",
+				CompleteCommand: []string{"ticket", "complete"}, CompleteTimeout: timeout,
+			}},
+			TaskID: "tickets", AnchorPaneID: "ticket-worker-manager", ZellijSession: "physical-a",
+		})
+		if err == nil || !strings.Contains(err.Error(), "complete_timeout must be positive") {
+			t.Fatalf("NewManager(timeout=%s) error = %v", timeout, err)
+		}
 	}
 }
 

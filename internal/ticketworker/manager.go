@@ -350,9 +350,6 @@ func (m *Manager) handleWatchResult(ctx context.Context, result watchResult) {
 
 func (m *Manager) runCompletion(ctx context.Context, slotNumber int, paneID, ticketID string, matchedAt time.Time) {
 	timeout := m.config.Worker.CompleteTimeout
-	if timeout <= 0 {
-		timeout = defaultCompleteTimeout
-	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	result := m.completionRunner.Run(runCtx, CompletionRequest{
@@ -395,7 +392,11 @@ func (m *Manager) closeCompletedSlot(ctx context.Context, slot *workerSlot, matc
 		return
 	}
 	if _, err := m.client.ClosePane(ctx, slot.paneID); err != nil {
-		slot.state = slotOccupied
+		if slot.ticketID != "" {
+			slot.state = slotCompletionFailed
+		} else {
+			slot.state = slotOccupied
+		}
 		slot.lastError = err.Error()
 		m.logf("close failed slot=%d pane=%s error=%v", slot.number, slot.paneID, err)
 		response, inspectErr := m.client.InspectRuntime(ctx)
@@ -492,8 +493,8 @@ func validateManagerConfig(cfg Config) error {
 			return fmt.Errorf("worker.complete_command[%d] must not be empty", i)
 		}
 	}
-	if len(cfg.Worker.CompleteCommand) > 0 && cfg.Worker.CompleteTimeout < 0 {
-		return fmt.Errorf("worker.complete_timeout must not be negative")
+	if len(cfg.Worker.CompleteCommand) > 0 && cfg.Worker.CompleteTimeout <= 0 {
+		return fmt.Errorf("worker.complete_timeout must be positive")
 	}
 	return nil
 }

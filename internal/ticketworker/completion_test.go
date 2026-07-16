@@ -79,6 +79,15 @@ func TestExecCompletionRunnerReportsExitAndBoundsOutput(t *testing.T) {
 	}
 }
 
+func TestExecCompletionRunnerReportsStartFailure(t *testing.T) {
+	result := (ExecCompletionRunner{}).Run(context.Background(), CompletionRequest{
+		Command: []string{"definitely-missing-ticket-command"}, TicketID: "TICKET-123", CWD: t.TempDir(),
+	})
+	if result.Err == nil {
+		t.Fatal("Run() error = nil, want start failure")
+	}
+}
+
 func TestExecCompletionRunnerHonorsCancellation(t *testing.T) {
 	dir := t.TempDir()
 	writeExecutable(t, dir, "fake-ticket", "#!/bin/sh\nsleep 5\n")
