@@ -259,10 +259,11 @@ service := runtime.NewService(runtime.Options{
 })
 
 created, err := service.CreatePane(ctx, runtime.CreatePaneRequest{
-    ID:      "pane-1",
-    TaskID:  "task-1",
-    Role:    runtime.PaneRoleTest,
-    Command: []string{"go", "test", "./..."},
+    ID:            "pane-1",
+    TaskID:        "task-1",
+    ZellijSession: "physical-a",
+    Role:          runtime.PaneRoleTest,
+    Command:       []string{"go", "test", "./..."},
 })
 ```
 

@@ -55,10 +55,13 @@ In another terminal:
 ## 5. Submit The Sample Plan
 
 ```bash
-./bin/agentctl plan --socket /tmp/agentd.sock --file examples/plans/agent-role-demo.json
+./bin/agentctl plan --socket /tmp/agentd.sock --zellij-session agentd-smoke --file examples/plans/agent-role-demo.json
 ```
 
-The plan creates managed panes for `coder`, `network-tracker`, `console-tracker`, and `editor`.
+The explicit `--zellij-session` targets the physical session from this client
+terminal; the daemon process's environment is not used to resolve the request.
+The plan creates managed panes for `coder`, `network-tracker`,
+`console-tracker`, and `editor`.
 
 ## 6. Inspect Runtime State And Events
 
