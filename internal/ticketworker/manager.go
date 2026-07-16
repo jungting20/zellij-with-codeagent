@@ -2,6 +2,7 @@ package ticketworker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -14,34 +15,37 @@ type ManagerClient interface {
 	CreatePane(context.Context, transport.CreatePaneRequest) (transport.CreatePaneResponse, error)
 	WaitForOutputMarker(context.Context, string, transport.WaitForOutputMarkerRequest) (transport.WaitForOutputMarkerResponse, error)
 	ClosePane(context.Context, string) (transport.ClosePaneResponse, error)
+	InspectRuntime(context.Context) (transport.InspectRuntimeResponse, error)
 }
 
 type ManagerOptions struct {
-	Client        ManagerClient
-	Config        Config
-	TaskID        string
-	AnchorPaneID  string
-	CWD           string
-	ZellijSession string
-	Tick          <-chan time.Time
-	Now           func() time.Time
-	Log           io.Writer
+	Client         ManagerClient
+	Config         Config
+	TaskID         string
+	AnchorPaneID   string
+	CWD            string
+	ZellijSession  string
+	StartupTimeout time.Duration
+	Tick           <-chan time.Time
+	Now            func() time.Time
+	Log            io.Writer
 }
 
 type Manager struct {
-	client        ManagerClient
-	config        Config
-	taskID        string
-	anchorPaneID  string
-	cwd           string
-	zellijSession string
-	tick          <-chan time.Time
-	now           func() time.Time
-	log           io.Writer
-	slots         []workerSlot
-	watchResults  chan watchResult
-	beforeClose   func()
-	afterEvent    func()
+	client         ManagerClient
+	config         Config
+	taskID         string
+	anchorPaneID   string
+	cwd            string
+	zellijSession  string
+	startupTimeout time.Duration
+	tick           <-chan time.Time
+	now            func() time.Time
+	log            io.Writer
+	slots          []workerSlot
+	watchResults   chan watchResult
+	beforeClose    func()
+	afterEvent     func()
 }
 
 type slotState uint8
@@ -85,6 +89,13 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	if zellijSession == "" {
 		return nil, fmt.Errorf("ticket-worker manager zellij session is required")
 	}
+	startupTimeout := opts.StartupTimeout
+	if startupTimeout < 0 {
+		return nil, fmt.Errorf("ticket-worker manager startup timeout must not be negative")
+	}
+	if startupTimeout == 0 {
+		startupTimeout = 15 * time.Second
+	}
 
 	now := opts.Now
 	if now == nil {
@@ -100,21 +111,26 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	}
 
 	return &Manager{
-		client:        opts.Client,
-		config:        opts.Config,
-		taskID:        opts.TaskID,
-		anchorPaneID:  opts.AnchorPaneID,
-		cwd:           opts.CWD,
-		zellijSession: zellijSession,
-		tick:          opts.Tick,
-		now:           now,
-		log:           log,
-		slots:         slots,
-		watchResults:  make(chan watchResult, opts.Config.MaxWorkers),
+		client:         opts.Client,
+		config:         opts.Config,
+		taskID:         opts.TaskID,
+		anchorPaneID:   opts.AnchorPaneID,
+		cwd:            opts.CWD,
+		zellijSession:  zellijSession,
+		startupTimeout: startupTimeout,
+		tick:           opts.Tick,
+		now:            now,
+		log:            log,
+		slots:          slots,
+		watchResults:   make(chan watchResult, opts.Config.MaxWorkers),
 	}, nil
 }
 
 func (m *Manager) Run(ctx context.Context) error {
+	if err := m.waitForAnchor(ctx); err != nil {
+		return err
+	}
+
 	ticks := m.tick
 	var ticker *time.Ticker
 	if ticks == nil {
@@ -143,6 +159,50 @@ func (m *Manager) Run(ctx context.Context) error {
 			m.notifyEventProcessed()
 		}
 	}
+}
+
+func (m *Manager) waitForAnchor(ctx context.Context) error {
+	readyCtx, cancel := context.WithTimeout(ctx, m.startupTimeout)
+	defer cancel()
+	poll := time.NewTicker(50 * time.Millisecond)
+	defer poll.Stop()
+
+	var lastInspectionErr error
+	for {
+		response, err := m.client.InspectRuntime(readyCtx)
+		if err != nil {
+			lastInspectionErr = err
+		} else if m.runtimeHasPane(response, m.anchorPaneID, "starting", "running") {
+			return nil
+		}
+
+		select {
+		case <-readyCtx.Done():
+			anchorErr := fmt.Errorf("ticket-worker manager anchor not ready: %w", readyCtx.Err())
+			if lastInspectionErr != nil {
+				return errors.Join(anchorErr, lastInspectionErr)
+			}
+			return anchorErr
+		case <-poll.C:
+		}
+	}
+}
+
+func (m *Manager) runtimeHasPane(response transport.InspectRuntimeResponse, paneID string, statuses ...string) bool {
+	for _, pane := range response.Panes {
+		if pane.ID != paneID || pane.TaskID != m.taskID || pane.SessionID != m.zellijSession {
+			continue
+		}
+		if len(statuses) == 0 {
+			return true
+		}
+		for _, status := range statuses {
+			if pane.Status == status {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (m *Manager) fillEmptySlots(ctx context.Context) {
@@ -228,14 +288,28 @@ func (m *Manager) handleWatchResult(ctx context.Context, result watchResult) {
 	if _, err := m.client.ClosePane(ctx, slot.paneID); err != nil {
 		slot.lastError = err.Error()
 		m.logf("close failed slot=%d pane=%s error=%v", slot.number, slot.paneID, err)
+		response, inspectErr := m.client.InspectRuntime(ctx)
+		if inspectErr != nil {
+			m.logf("close reconciliation failed slot=%d pane=%s error=%v", slot.number, slot.paneID, inspectErr)
+			return
+		}
+		if m.runtimeHasPane(response, slot.paneID) {
+			return
+		}
+		m.logf("already closed slot=%d pane=%s", slot.number, slot.paneID)
+		m.completeSlot(slot, result.response.MatchedAt)
 		return
 	}
 
-	slot.completedAt = result.response.MatchedAt
+	m.logf("closed slot=%d pane=%s", slot.number, slot.paneID)
+	m.completeSlot(slot, result.response.MatchedAt)
+}
+
+func (m *Manager) completeSlot(slot *workerSlot, matchedAt time.Time) {
+	slot.completedAt = matchedAt
 	if slot.completedAt.IsZero() {
 		slot.completedAt = m.now()
 	}
-	m.logf("closed slot=%d pane=%s", slot.number, slot.paneID)
 	slot.paneID = ""
 	slot.state = slotEmpty
 	slot.lastError = ""
