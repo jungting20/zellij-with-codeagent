@@ -93,17 +93,19 @@ func (s *Server) handlePaneAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		response, err := s.service.WaitForOutputMarker(r.Context(), rt.WaitForOutputMarkerRequest{
-			PaneID: rt.PaneID(paneID),
-			Marker: req.Marker,
+			PaneID:      rt.PaneID(paneID),
+			Marker:      req.Marker,
+			MatchPrefix: req.MatchPrefix,
 		})
 		if err != nil {
 			writeRuntimeError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, WaitForOutputMarkerResponse{
-			PaneID:    string(response.PaneID),
-			Marker:    response.Marker,
-			MatchedAt: response.MatchedAt,
+			PaneID:      string(response.PaneID),
+			Marker:      response.Marker,
+			MatchedLine: response.MatchedLine,
+			MatchedAt:   response.MatchedAt,
 		})
 	case "close":
 		if r.Method != http.MethodPost {

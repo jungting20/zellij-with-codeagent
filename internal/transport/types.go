@@ -58,13 +58,15 @@ type SnapshotOutputResponse struct {
 }
 
 type WaitForOutputMarkerRequest struct {
-	Marker string `json:"marker"`
+	Marker      string `json:"marker"`
+	MatchPrefix bool   `json:"match_prefix,omitempty"`
 }
 
 type WaitForOutputMarkerResponse struct {
-	PaneID    string    `json:"pane_id"`
-	Marker    string    `json:"marker"`
-	MatchedAt time.Time `json:"matched_at"`
+	PaneID      string    `json:"pane_id"`
+	Marker      string    `json:"marker"`
+	MatchedLine string    `json:"matched_line,omitempty"`
+	MatchedAt   time.Time `json:"matched_at"`
 }
 
 type ClosePaneResponse struct {

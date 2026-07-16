@@ -166,14 +166,16 @@ type SnapshotOutputResponse struct {
 }
 
 type WaitForOutputMarkerRequest struct {
-	PaneID PaneID
-	Marker string
+	PaneID      PaneID
+	Marker      string
+	MatchPrefix bool
 }
 
 type WaitForOutputMarkerResponse struct {
-	PaneID    PaneID
-	Marker    string
-	MatchedAt time.Time
+	PaneID      PaneID
+	Marker      string
+	MatchedLine string
+	MatchedAt   time.Time
 }
 
 type InspectRuntimeRequest struct{}

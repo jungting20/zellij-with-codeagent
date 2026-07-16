@@ -142,12 +142,13 @@ func TestServerSendInput(t *testing.T) {
 func TestServerWaitForOutputMarker(t *testing.T) {
 	service := newFakeRuntimeService()
 	service.markerResponse = rt.WaitForOutputMarkerResponse{
-		PaneID:    "worker-1",
-		Marker:    "DONE",
-		MatchedAt: time.Unix(3, 0),
+		PaneID:      "worker-1",
+		Marker:      "DONE ",
+		MatchedLine: "DONE ticket_id=TICKET-123",
+		MatchedAt:   time.Unix(3, 0),
 	}
 	server := newTestServer(t, service)
-	request := httptest.NewRequest(http.MethodPost, "/v1/panes/worker-1/wait-marker", strings.NewReader(`{"marker":"DONE"}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/panes/worker-1/wait-marker", strings.NewReader(`{"marker":"DONE ","match_prefix":true}`))
 	response := httptest.NewRecorder()
 
 	server.ServeHTTP(response, request)
@@ -155,14 +156,14 @@ func TestServerWaitForOutputMarker(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
 	}
-	if service.markerReq.PaneID != "worker-1" || service.markerReq.Marker != "DONE" {
-		t.Fatalf("WaitForOutputMarker request = %#v, want logical worker-1 DONE", service.markerReq)
+	if service.markerReq.PaneID != "worker-1" || service.markerReq.Marker != "DONE " || !service.markerReq.MatchPrefix {
+		t.Fatalf("WaitForOutputMarker request = %#v, want logical worker-1 prefix", service.markerReq)
 	}
 	var decoded WaitForOutputMarkerResponse
 	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if decoded.PaneID != "worker-1" || decoded.Marker != "DONE" || !decoded.MatchedAt.Equal(time.Unix(3, 0)) {
+	if decoded.PaneID != "worker-1" || decoded.Marker != "DONE " || decoded.MatchedLine != "DONE ticket_id=TICKET-123" || !decoded.MatchedAt.Equal(time.Unix(3, 0)) {
 		t.Fatalf("response = %#v, want mapped marker response", decoded)
 	}
 }

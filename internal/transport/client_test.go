@@ -72,9 +72,10 @@ func TestClientSendMessage(t *testing.T) {
 func TestClientWaitForOutputMarkerDisablesHTTPTimeout(t *testing.T) {
 	service := newFakeRuntimeService()
 	service.markerResponse = rt.WaitForOutputMarkerResponse{
-		PaneID:    "worker-1",
-		Marker:    "DONE",
-		MatchedAt: time.Unix(3, 0),
+		PaneID:      "worker-1",
+		Marker:      "DONE ",
+		MatchedLine: "DONE ticket_id=TICKET-123",
+		MatchedAt:   time.Unix(3, 0),
 	}
 	service.markerBlock = make(chan struct{})
 	baseClient, cleanup := startUnixTransport(t, service)
@@ -85,12 +86,12 @@ func TestClientWaitForOutputMarkerDisablesHTTPTimeout(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		close(service.markerBlock)
 	}()
-	response, err := client.WaitForOutputMarker(context.Background(), "worker-1", WaitForOutputMarkerRequest{Marker: "DONE"})
+	response, err := client.WaitForOutputMarker(context.Background(), "worker-1", WaitForOutputMarkerRequest{Marker: "DONE ", MatchPrefix: true})
 	if err != nil {
 		t.Fatalf("WaitForOutputMarker() error = %v", err)
 	}
-	if response.PaneID != "worker-1" || response.Marker != "DONE" || !response.MatchedAt.Equal(time.Unix(3, 0)) {
-		t.Fatalf("WaitForOutputMarker() = %#v, want worker-1 DONE", response)
+	if response.PaneID != "worker-1" || response.Marker != "DONE " || response.MatchedLine != "DONE ticket_id=TICKET-123" || !response.MatchedAt.Equal(time.Unix(3, 0)) {
+		t.Fatalf("WaitForOutputMarker() = %#v, want structured marker", response)
 	}
 }
 

@@ -28,11 +28,12 @@ func (s *Service) WaitForOutputMarker(ctx context.Context, req WaitForOutputMark
 	if err != nil {
 		return WaitForOutputMarkerResponse{}, err
 	}
-	if containsExactLine(inspected.Pane.LastOutput, req.Marker) {
+	if line, ok := findMarkerLine(inspected.Pane.LastOutput, req.Marker, req.MatchPrefix); ok {
 		return WaitForOutputMarkerResponse{
-			PaneID:    req.PaneID,
-			Marker:    req.Marker,
-			MatchedAt: time.Now(),
+			PaneID:      req.PaneID,
+			Marker:      req.Marker,
+			MatchedLine: line,
+			MatchedAt:   time.Now(),
 		}, nil
 	}
 
@@ -47,24 +48,30 @@ func (s *Service) WaitForOutputMarker(ctx context.Context, req WaitForOutputMark
 				}
 				return WaitForOutputMarkerResponse{}, errors.New("runtime: event subscription closed")
 			}
-			if event.Type != eventbus.TypeRawOutput || event.PaneID != string(req.PaneID) || !containsExactLine(event.Message, req.Marker) {
+			if event.Type != eventbus.TypeRawOutput || event.PaneID != string(req.PaneID) {
+				continue
+			}
+			line, ok := findMarkerLine(event.Message, req.Marker, req.MatchPrefix)
+			if !ok {
 				continue
 			}
 			return WaitForOutputMarkerResponse{
-				PaneID:    req.PaneID,
-				Marker:    req.Marker,
-				MatchedAt: event.Time,
+				PaneID:      req.PaneID,
+				Marker:      req.Marker,
+				MatchedLine: line,
+				MatchedAt:   event.Time,
 			}, nil
 		}
 	}
 }
 
-func containsExactLine(text, marker string) bool {
+func findMarkerLine(text, marker string, matchPrefix bool) (string, bool) {
 	scanner := bufio.NewScanner(strings.NewReader(text))
 	for scanner.Scan() {
-		if strings.TrimSpace(scanner.Text()) == marker {
-			return true
+		line := strings.TrimSpace(scanner.Text())
+		if (!matchPrefix && line == marker) || (matchPrefix && strings.HasPrefix(line, marker)) {
+			return line, true
 		}
 	}
-	return false
+	return "", false
 }

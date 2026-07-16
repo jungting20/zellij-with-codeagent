@@ -43,7 +43,7 @@ func TestWaitForOutputMarkerMatchesExactTrimmedLineForRequestedPane(t *testing.T
 		if got.err != nil {
 			t.Fatalf("WaitForOutputMarker() error = %v", got.err)
 		}
-		if got.response.PaneID != "worker-1" || got.response.Marker != "DONE" || !got.response.MatchedAt.Equal(matchedAt) {
+		if got.response.PaneID != "worker-1" || got.response.Marker != "DONE" || got.response.MatchedLine != "DONE" || !got.response.MatchedAt.Equal(matchedAt) {
 			t.Fatalf("WaitForOutputMarker() = %#v, want worker-1 DONE at %v", got.response, matchedAt)
 		}
 	case <-ctx.Done():
@@ -66,11 +66,55 @@ func TestWaitForOutputMarkerMatchesAlreadyVisibleOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WaitForOutputMarker() error = %v", err)
 	}
-	if response.PaneID != "worker-1" || response.Marker != "DONE" {
+	if response.PaneID != "worker-1" || response.Marker != "DONE" || response.MatchedLine != "DONE" {
 		t.Fatalf("WaitForOutputMarker() = %#v, want worker-1 DONE", response)
 	}
 	if response.MatchedAt.Before(before) || response.MatchedAt.After(after) {
 		t.Fatalf("MatchedAt = %v, want between %v and %v", response.MatchedAt, before, after)
+	}
+}
+
+func TestWaitForOutputMarkerMatchesPrefixAndReturnsFullLine(t *testing.T) {
+	service, bus := newMarkerWatchService(t, "worker-1")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	result := make(chan struct {
+		response WaitForOutputMarkerResponse
+		err      error
+	}, 1)
+	go func() {
+		response, err := service.WaitForOutputMarker(ctx, WaitForOutputMarkerRequest{
+			PaneID:      "worker-1",
+			Marker:      "ZELLIJ_AGENT_WORKER_DONE ",
+			MatchPrefix: true,
+		})
+		result <- struct {
+			response WaitForOutputMarkerResponse
+			err      error
+		}{response: response, err: err}
+	}()
+
+	assertMarkerWaitPending(t, result)
+	bus.Publish(eventbus.Event{Type: eventbus.TypeRawOutput, PaneID: "worker-2", Message: "ZELLIJ_AGENT_WORKER_DONE ticket_id=OTHER"})
+	assertMarkerWaitPending(t, result)
+	bus.Publish(eventbus.Event{Type: eventbus.TypeRawOutput, PaneID: "worker-1", Message: "ZELLIJ_AGENT_WORKER_DONE"})
+	assertMarkerWaitPending(t, result)
+
+	matchedAt := time.Unix(4, 0)
+	line := "ZELLIJ_AGENT_WORKER_DONE ticket_id=TICKET-123"
+	bus.Publish(eventbus.Event{Type: eventbus.TypeRawOutput, PaneID: "worker-1", Message: "log\n  " + line + "  \n", Time: matchedAt})
+
+	select {
+	case got := <-result:
+		if got.err != nil {
+			t.Fatalf("WaitForOutputMarker() error = %v", got.err)
+		}
+		if got.response.PaneID != "worker-1" || got.response.Marker != "ZELLIJ_AGENT_WORKER_DONE " || got.response.MatchedLine != line || !got.response.MatchedAt.Equal(matchedAt) {
+			t.Fatalf("WaitForOutputMarker() = %#v", got.response)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for prefix marker")
 	}
 }
 
