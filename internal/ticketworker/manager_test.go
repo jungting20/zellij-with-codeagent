@@ -41,6 +41,7 @@ func TestManagerCompletesAndRefillsOnNextTick(t *testing.T) {
 	client := newFakeManagerClient()
 	ticks := make(chan time.Time, 1)
 	manager := newTestManager(t, client, ticks, 2)
+	events := newManagerEventBarrier(manager)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go manager.Run(ctx)
@@ -48,6 +49,7 @@ func TestManagerCompletesAndRefillsOnNextTick(t *testing.T) {
 	client.waitForCreates(t, 2)
 	client.match("ticket-worker-slot-1-0001")
 	client.waitForCloses(t, 1)
+	events.wait(t)
 	client.assertCreateCount(t, 2)
 
 	ticks <- time.Unix(101, 0)
@@ -83,6 +85,7 @@ func TestManagerCloseFailurePreservesCapacity(t *testing.T) {
 	client := newFakeManagerClient()
 	ticks := make(chan time.Time, 1)
 	manager := newTestManager(t, client, ticks, 1)
+	events := newManagerEventBarrier(manager)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go manager.Run(ctx)
@@ -91,7 +94,9 @@ func TestManagerCloseFailurePreservesCapacity(t *testing.T) {
 	client.failClose("ticket-worker-slot-1-0001")
 	client.match("ticket-worker-slot-1-0001")
 	client.waitForCloses(t, 1)
+	events.wait(t)
 	ticks <- time.Unix(101, 0)
+	events.wait(t)
 	client.assertCreateCount(t, 1)
 }
 
@@ -99,6 +104,7 @@ func TestManagerWatchFailurePreservesCapacity(t *testing.T) {
 	client := newFakeManagerClient()
 	ticks := make(chan time.Time, 1)
 	manager := newTestManager(t, client, ticks, 1)
+	events := newManagerEventBarrier(manager)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go manager.Run(ctx)
@@ -106,7 +112,9 @@ func TestManagerWatchFailurePreservesCapacity(t *testing.T) {
 	client.waitForCreates(t, 1)
 	client.failWatch("ticket-worker-slot-1-0001")
 	client.waitForWatchReturns(t, 1)
+	events.wait(t)
 	ticks <- time.Unix(101, 0)
+	events.wait(t)
 	client.assertCreateCount(t, 1)
 	client.assertCloseCount(t, 0)
 }
@@ -147,6 +155,35 @@ func TestManagerCanceledContextDoesNotCloseReadyCompletion(t *testing.T) {
 		response:   transport.WaitForOutputMarkerResponse{PaneID: "ticket-worker-slot-1-0001", Marker: "DONE"},
 	})
 
+	client.assertCloseCount(t, 0)
+}
+
+func TestManagerCancellationBeforeCloseDispatchDoesNotClose(t *testing.T) {
+	client := newFakeManagerClient()
+	manager := newTestManager(t, client, make(chan time.Time), 1)
+	manager.slots[0].state = slotOccupied
+	manager.slots[0].paneID = "ticket-worker-slot-1-0001"
+	beforeClose := make(chan struct{})
+	releaseClose := make(chan struct{})
+	manager.beforeClose = func() {
+		close(beforeClose)
+		<-releaseClose
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		manager.handleWatchResult(ctx, watchResult{
+			slotNumber: 1,
+			paneID:     "ticket-worker-slot-1-0001",
+			response:   transport.WaitForOutputMarkerResponse{PaneID: "ticket-worker-slot-1-0001", Marker: "DONE"},
+		})
+		close(done)
+	}()
+
+	<-beforeClose
+	cancel()
+	close(releaseClose)
+	<-done
 	client.assertCloseCount(t, 0)
 }
 
@@ -191,6 +228,23 @@ func newTestManager(t *testing.T, client ManagerClient, ticks <-chan time.Time, 
 		t.Fatal(err)
 	}
 	return manager
+}
+
+type managerEventBarrier chan struct{}
+
+func newManagerEventBarrier(manager *Manager) managerEventBarrier {
+	barrier := make(managerEventBarrier, 2)
+	manager.afterEvent = func() { barrier <- struct{}{} }
+	return barrier
+}
+
+func (b managerEventBarrier) wait(t *testing.T) {
+	t.Helper()
+	select {
+	case <-b:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager event loop")
+	}
 }
 
 type fakeWatchResult struct {
@@ -316,7 +370,6 @@ func (f *fakeManagerClient) waitForWatches(t *testing.T, count int) {
 
 func (f *fakeManagerClient) assertCreateCount(t *testing.T, want int) {
 	t.Helper()
-	time.Sleep(20 * time.Millisecond)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if got := len(f.creates); got != want {
@@ -326,7 +379,6 @@ func (f *fakeManagerClient) assertCreateCount(t *testing.T, want int) {
 
 func (f *fakeManagerClient) assertCloseCount(t *testing.T, want int) {
 	t.Helper()
-	time.Sleep(20 * time.Millisecond)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if got := len(f.closes); got != want {

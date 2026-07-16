@@ -38,6 +38,8 @@ type Manager struct {
 	log          io.Writer
 	slots        []workerSlot
 	watchResults chan watchResult
+	beforeClose  func()
+	afterEvent   func()
 }
 
 type slotState uint8
@@ -128,8 +130,10 @@ func (m *Manager) Run(ctx context.Context) error {
 				continue
 			}
 			m.fillEmptySlots(ctx)
+			m.notifyEventProcessed()
 		case result := <-m.watchResults:
 			m.handleWatchResult(ctx, result)
+			m.notifyEventProcessed()
 		}
 	}
 }
@@ -207,6 +211,12 @@ func (m *Manager) handleWatchResult(ctx context.Context, result watchResult) {
 	}
 
 	m.logf("close slot=%d pane=%s", slot.number, slot.paneID)
+	if m.beforeClose != nil {
+		m.beforeClose()
+	}
+	if ctx.Err() != nil {
+		return
+	}
 	if _, err := m.client.ClosePane(ctx, slot.paneID); err != nil {
 		slot.lastError = err.Error()
 		m.logf("close failed slot=%d pane=%s error=%v", slot.number, slot.paneID, err)
@@ -225,6 +235,12 @@ func (m *Manager) handleWatchResult(ctx context.Context, result watchResult) {
 
 func (m *Manager) logf(format string, args ...any) {
 	fmt.Fprintf(m.log, "ticket-worker: "+format+"\n", args...)
+}
+
+func (m *Manager) notifyEventProcessed() {
+	if m.afterEvent != nil {
+		m.afterEvent()
+	}
 }
 
 func validateManagerConfig(cfg Config) error {
