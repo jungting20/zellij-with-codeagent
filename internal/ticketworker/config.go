@@ -31,7 +31,7 @@ type Config struct {
 
 type diskConfig struct {
 	Version      int          `yaml:"version"`
-	MaxWorkers   int          `yaml:"max_workers"`
+	MaxWorkers   *int         `yaml:"max_workers"`
 	PollInterval string       `yaml:"poll_interval"`
 	Worker       WorkerConfig `yaml:"worker"`
 }
@@ -54,13 +54,14 @@ func LoadConfig(root string) (Config, error) {
 		return Config{}, fmt.Errorf("decode ticket-worker config: %w", err)
 	}
 
+	maxWorkers := defaultMaxWorkers
+	if disk.MaxWorkers != nil {
+		maxWorkers = *disk.MaxWorkers
+	}
 	cfg := Config{
 		Version:    disk.Version,
-		MaxWorkers: disk.MaxWorkers,
+		MaxWorkers: maxWorkers,
 		Worker:     disk.Worker,
-	}
-	if cfg.MaxWorkers == 0 {
-		cfg.MaxWorkers = defaultMaxWorkers
 	}
 	if disk.PollInterval == "" {
 		cfg.PollInterval = defaultPollInterval
@@ -95,7 +96,7 @@ func validateConfig(cfg Config) error {
 	if marker != strings.TrimSpace(marker) {
 		return fmt.Errorf("worker.completion_marker must not have surrounding whitespace")
 	}
-	if strings.ContainsAny(marker, "\r\n") || strings.Contains(marker, `\r`) || strings.Contains(marker, `\n`) {
+	if strings.ContainsAny(marker, "\r\n") {
 		return fmt.Errorf("worker.completion_marker must be a single line")
 	}
 	if marker == "" {

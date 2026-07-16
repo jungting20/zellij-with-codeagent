@@ -22,10 +22,19 @@ func TestLoadConfigAppliesDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsExplicitZeroMaxWorkers(t *testing.T) {
+	root := t.TempDir()
+	writeConfig(t, root, "version: 1\nmax_workers: 0\nworker:\n  command: [worker]\n  completion_marker: DONE\n")
+
+	if _, err := LoadConfig(root); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
 func TestLoadConfigRejectsUnknownFieldAndMultilineMarker(t *testing.T) {
 	for name, body := range map[string]string{
 		"unknown": "version: 1\nextra: true\nworker:\n  command: [worker]\n  completion_marker: DONE\n",
-		"marker":  "version: 1\nworker:\n  command: [worker]\n  completion_marker: 'DONE\\nAGAIN'\n",
+		"marker":  "version: 1\nworker:\n  command: [worker]\n  completion_marker: \"DONE\\nAGAIN\"\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -34,6 +43,19 @@ func TestLoadConfigRejectsUnknownFieldAndMultilineMarker(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestLoadConfigAcceptsLiteralBackslashNMarker(t *testing.T) {
+	root := t.TempDir()
+	writeConfig(t, root, "version: 1\nworker:\n  command: [worker]\n  completion_marker: 'DONE\\nAGAIN'\n")
+
+	got, err := LoadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Worker.CompletionMarker != `DONE\nAGAIN` {
+		t.Fatalf("completion marker = %q", got.Worker.CompletionMarker)
 	}
 }
 
