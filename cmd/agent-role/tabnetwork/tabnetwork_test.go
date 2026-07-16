@@ -18,6 +18,7 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 
+	"zellij-with-codeagent/internal/cli"
 	"zellij-with-codeagent/internal/transport"
 )
 
@@ -58,19 +59,20 @@ func TestParseOptionsAcceptsFiltersAndNoLaunch(t *testing.T) {
 	}
 }
 
-func TestParseOptionsAcceptsSpawnOptions(t *testing.T) {
+func TestParseOptionsAcceptsZellijSessionForSpawnOptions(t *testing.T) {
 	opts, err := parseOptions([]string{
 		"--port", "9333",
 		"--socket", "/tmp/custom.sock",
 		"--role-bin", "/tmp/bin/zellij-agent",
 		"--session", "chrome-task",
+		"--zellij-session", " physical-a ",
 		"--spawn-on-new-tab",
 	})
 	if err != nil {
 		t.Fatalf("parseOptions() error = %v", err)
 	}
 
-	if opts.SocketPath != "/tmp/custom.sock" || opts.RoleBin != "/tmp/bin/zellij-agent" || opts.Session != "chrome-task" || !opts.SpawnOnNewTab {
+	if opts.SocketPath != "/tmp/custom.sock" || opts.RoleBin != "/tmp/bin/zellij-agent" || opts.Session != "chrome-task" || opts.ZellijSession != "physical-a" || !opts.SpawnOnNewTab {
 		t.Fatalf("options = %#v, want spawn options", opts)
 	}
 
@@ -81,16 +83,31 @@ func TestParseOptionsAcceptsSpawnOptions(t *testing.T) {
 	if opts.SpawnOnNewTab {
 		t.Fatalf("SpawnOnNewTab = true, want false after --no-spawn-on-new-tab")
 	}
+
+	t.Setenv("ZELLIJ_SESSION_NAME", "")
+	opts, err = parseOptions([]string{"--list", "--spawn-on-new-tab"})
+	if err != nil {
+		t.Fatalf("parseOptions() list mode error = %v", err)
+	}
 }
 
-func TestBuildChildPaneRequestTargetsParentZellijTab(t *testing.T) {
+func TestParseOptionsRejectsMissingZellijSessionWhenSpawning(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "")
+	_, err := parseOptions([]string{"--spawn-on-new-tab"})
+	if !errors.Is(err, cli.ErrZellijSessionRequired) {
+		t.Fatalf("parseOptions() error = %v, want %v", err, cli.ErrZellijSessionRequired)
+	}
+}
+
+func TestBuildChildPaneRequestPreservesZellijSessionInParentTab(t *testing.T) {
 	tabID := 7
 	cfg := trackerConfig{
-		Port:        9333,
-		RoleBin:     "/tmp/bin/zellij-agent",
-		Session:     "chrome-task",
-		UserDataDir: defaultUserDataDir,
-		MaxRows:     defaultMaxRows,
+		Port:          9333,
+		RoleBin:       "/tmp/bin/zellij-agent",
+		Session:       "chrome-task",
+		UserDataDir:   defaultUserDataDir,
+		MaxRows:       defaultMaxRows,
+		ZellijSession: "physical-a",
 	}
 
 	req := buildChildPaneRequest(cfg, PageTarget{ID: "ABCDEF1234567890", Type: "page"}, tabID, "/repo")
@@ -98,10 +115,13 @@ func TestBuildChildPaneRequestTargetsParentZellijTab(t *testing.T) {
 	if req.ID != "chrome-tab-network-ABCDEF123456" || req.Role != "tab-network" || req.TaskID != "chrome-task" || req.CWD != "/repo" {
 		t.Fatalf("request = %#v, want child tab-network pane request", req)
 	}
+	if req.ZellijSession != "physical-a" {
+		t.Fatalf("ZellijSession = %q, want physical-a", req.ZellijSession)
+	}
 	if req.ZellijTabID == nil || *req.ZellijTabID != tabID {
 		t.Fatalf("ZellijTabID = %v, want %d", req.ZellijTabID, tabID)
 	}
-	wantCommand := []string{"/tmp/bin/zellij-agent", "role", "tab-network", "--port", "9333", "--no-launch", "--target-id", "ABCDEF1234567890", "--no-spawn-on-new-tab"}
+	wantCommand := []string{"/tmp/bin/zellij-agent", "role", "tab-network", "--port", "9333", "--no-launch", "--target-id", "ABCDEF1234567890", "--no-spawn-on-new-tab", "--zellij-session", "physical-a"}
 	if !reflect.DeepEqual(req.Command, wantCommand) {
 		t.Fatalf("command = %#v, want %#v", req.Command, wantCommand)
 	}
@@ -110,12 +130,12 @@ func TestBuildChildPaneRequestTargetsParentZellijTab(t *testing.T) {
 func TestResolveOwnManagedPaneFindsZellijTab(t *testing.T) {
 	client := &fakePaneClient{runtime: transport.InspectRuntimeResponse{
 		Panes: []transport.Pane{
-			{ID: "other", ZellijPaneID: "terminal_1"},
-			{ID: "parent", ZellijPaneID: "terminal_42", ZellijTabID: intPtr(9), CWD: "/repo"},
+			{ID: "other", SessionID: "physical-a", ZellijPaneID: "terminal_1"},
+			{ID: "parent", SessionID: "physical-a", ZellijPaneID: "terminal_42", ZellijTabID: intPtr(9), CWD: "/repo"},
 		},
 	}}
 
-	pane, err := resolveOwnManagedPane(context.Background(), client, "terminal_42")
+	pane, err := resolveOwnManagedPane(context.Background(), client, "physical-a", "terminal_42")
 	if err != nil {
 		t.Fatalf("resolveOwnManagedPane() error = %v", err)
 	}
@@ -124,12 +144,29 @@ func TestResolveOwnManagedPaneFindsZellijTab(t *testing.T) {
 	}
 }
 
-func TestResolveOwnManagedPaneNormalizesNumericZellijPaneID(t *testing.T) {
+func TestResolveOwnManagedPaneUsesZellijSessionForCollidingPaneIDs(t *testing.T) {
 	client := &fakePaneClient{runtime: transport.InspectRuntimeResponse{
-		Panes: []transport.Pane{{ID: "parent", ZellijPaneID: "terminal_42", ZellijTabID: intPtr(9)}},
+		Panes: []transport.Pane{
+			{ID: "wrong", SessionID: "physical-b", ZellijPaneID: "terminal_42", ZellijTabID: intPtr(7), CWD: "/wrong"},
+			{ID: "parent", SessionID: "physical-a", ZellijPaneID: "terminal_42", ZellijTabID: intPtr(9), CWD: "/repo"},
+		},
 	}}
 
-	pane, err := resolveOwnManagedPane(context.Background(), client, "42")
+	pane, err := resolveOwnManagedPane(context.Background(), client, "physical-a", "terminal_42")
+	if err != nil {
+		t.Fatalf("resolveOwnManagedPane() error = %v", err)
+	}
+	if pane.ID != "parent" || pane.ZellijTabID == nil || *pane.ZellijTabID != 9 || pane.CWD != "/repo" {
+		t.Fatalf("pane = %#v, want physical-a parent pane", pane)
+	}
+}
+
+func TestResolveOwnManagedPaneNormalizesNumericZellijPaneID(t *testing.T) {
+	client := &fakePaneClient{runtime: transport.InspectRuntimeResponse{
+		Panes: []transport.Pane{{ID: "parent", SessionID: "physical-a", ZellijPaneID: "terminal_42", ZellijTabID: intPtr(9)}},
+	}}
+
+	pane, err := resolveOwnManagedPane(context.Background(), client, "physical-a", "42")
 	if err != nil {
 		t.Fatalf("resolveOwnManagedPane() error = %v", err)
 	}
@@ -140,10 +177,10 @@ func TestResolveOwnManagedPaneNormalizesNumericZellijPaneID(t *testing.T) {
 
 func TestResolveOwnManagedPaneRejectsMissingTabID(t *testing.T) {
 	client := &fakePaneClient{runtime: transport.InspectRuntimeResponse{
-		Panes: []transport.Pane{{ID: "parent", ZellijPaneID: "terminal_42"}},
+		Panes: []transport.Pane{{ID: "parent", SessionID: "physical-a", ZellijPaneID: "terminal_42"}},
 	}}
 
-	_, err := resolveOwnManagedPane(context.Background(), client, "terminal_42")
+	_, err := resolveOwnManagedPane(context.Background(), client, "physical-a", "terminal_42")
 	if err == nil || !strings.Contains(err.Error(), "missing zellij tab id") {
 		t.Fatalf("resolveOwnManagedPane() error = %v, want missing tab id", err)
 	}
@@ -152,10 +189,10 @@ func TestResolveOwnManagedPaneRejectsMissingTabID(t *testing.T) {
 func TestWaitForOwnManagedPaneRetriesUntilPaneIsRegistered(t *testing.T) {
 	client := &fakePaneClient{runtimeResponses: []transport.InspectRuntimeResponse{
 		{},
-		{Panes: []transport.Pane{{ID: "parent", ZellijPaneID: "terminal_42", ZellijTabID: intPtr(9)}}},
+		{Panes: []transport.Pane{{ID: "parent", SessionID: "physical-a", ZellijPaneID: "terminal_42", ZellijTabID: intPtr(9)}}},
 	}}
 
-	pane, err := waitForOwnManagedPane(context.Background(), client, "42", time.Second, time.Millisecond)
+	pane, err := waitForOwnManagedPane(context.Background(), client, "physical-a", "42", time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("waitForOwnManagedPane() error = %v", err)
 	}

@@ -60,6 +60,7 @@ type trackerConfig struct {
 	SocketPath    string
 	RoleBin       string
 	Session       string
+	ZellijSession string
 	SpawnOnNewTab bool
 	MaxRows       int
 }
@@ -123,6 +124,7 @@ func parseOptionsWithOutput(args []string, output io.Writer) (trackerConfig, err
 	fs.StringVar(&opts.SocketPath, "socket", opts.SocketPath, "agentd Unix socket path")
 	fs.StringVar(&opts.RoleBin, "role-bin", opts.RoleBin, "executable used to run zellij-agent roles")
 	fs.StringVar(&opts.Session, "session", opts.Session, "execution session/task id for generated tab panes")
+	fs.StringVar(&opts.ZellijSession, "zellij-session", "", "target Zellij session name")
 	fs.BoolVar(&opts.SpawnOnNewTab, "spawn-on-new-tab", false, "request a daemon pane in the same Zellij tab when a new Chrome tab opens")
 	fs.IntVar(&opts.MaxRows, "max-rows", opts.MaxRows, "maximum network rows to retain; 0 keeps all rows")
 	noSpawn := fs.Bool("no-spawn-on-new-tab", false, "disable daemon pane requests for newly opened Chrome tabs")
@@ -142,6 +144,15 @@ func parseOptionsWithOutput(args []string, output io.Writer) (trackerConfig, err
 	opts.LaunchChrome = !*noLaunch
 	if *noSpawn {
 		opts.SpawnOnNewTab = false
+	}
+	if opts.SpawnOnNewTab && !opts.ListTargets {
+		zellijSession, err := cli.ResolveZellijSession(opts.ZellijSession)
+		if err != nil {
+			return trackerConfig{}, err
+		}
+		opts.ZellijSession = zellijSession
+	} else {
+		opts.ZellijSession = strings.TrimSpace(opts.ZellijSession)
 	}
 	opts.TargetID = strings.TrimSpace(opts.TargetID)
 	opts.Filter.Method = strings.ToUpper(strings.TrimSpace(opts.Filter.Method))
@@ -498,7 +509,7 @@ func startTargetPaneSpawner(ctx context.Context, opts trackerConfig, stdout, std
 	}
 
 	client := transport.NewClient(transport.ClientOptions{SocketPath: opts.SocketPath, Timeout: 10 * time.Second})
-	parent, err := waitForOwnManagedPane(ctx, client, zellijPaneID, 5*time.Second, 100*time.Millisecond)
+	parent, err := waitForOwnManagedPane(ctx, client, opts.ZellijSession, zellijPaneID, 5*time.Second, 100*time.Millisecond)
 	if err != nil {
 		fmt.Fprintf(stderr, "spawn-on-new-tab disabled: %v\n", err)
 		return
@@ -539,14 +550,14 @@ func startTargetPaneSpawner(ctx context.Context, opts trackerConfig, stdout, std
 	}()
 }
 
-func resolveOwnManagedPane(ctx context.Context, client paneClient, zellijPaneID string) (transport.Pane, error) {
+func resolveOwnManagedPane(ctx context.Context, client paneClient, zellijSession, zellijPaneID string) (transport.Pane, error) {
 	response, err := client.InspectRuntime(ctx)
 	if err != nil {
 		return transport.Pane{}, err
 	}
 	zellijPaneID = normalizeZellijPaneID(zellijPaneID)
 	for _, pane := range response.Panes {
-		if pane.ZellijPaneID != zellijPaneID {
+		if pane.SessionID != zellijSession || pane.ZellijPaneID != zellijPaneID {
 			continue
 		}
 		if pane.ZellijTabID == nil {
@@ -554,10 +565,10 @@ func resolveOwnManagedPane(ctx context.Context, client paneClient, zellijPaneID 
 		}
 		return pane, nil
 	}
-	return transport.Pane{}, fmt.Errorf("managed pane with zellij pane id %s not found", zellijPaneID)
+	return transport.Pane{}, fmt.Errorf("managed pane with zellij pane id %s in session %s not found", zellijPaneID, zellijSession)
 }
 
-func waitForOwnManagedPane(ctx context.Context, client paneClient, zellijPaneID string, timeout, interval time.Duration) (transport.Pane, error) {
+func waitForOwnManagedPane(ctx context.Context, client paneClient, zellijSession, zellijPaneID string, timeout, interval time.Duration) (transport.Pane, error) {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
@@ -569,7 +580,7 @@ func waitForOwnManagedPane(ctx context.Context, client paneClient, zellijPaneID 
 
 	var lastErr error
 	for {
-		pane, err := resolveOwnManagedPane(ctx, client, zellijPaneID)
+		pane, err := resolveOwnManagedPane(ctx, client, zellijSession, zellijPaneID)
 		if err == nil {
 			return pane, nil
 		}
@@ -614,18 +625,21 @@ func buildChildPaneRequest(config trackerConfig, target PageTarget, tabID int, c
 		"--target-id",
 		target.ID,
 		"--no-spawn-on-new-tab",
+		"--zellij-session",
+		config.ZellijSession,
 	}
 	if config.MaxRows != defaultMaxRows {
 		command = append(command, "--max-rows", strconv.Itoa(config.MaxRows))
 	}
 	return transport.CreatePaneRequest{
-		ID:          paneID,
-		TaskID:      config.Session,
-		Role:        "tab-network",
-		Name:        paneID,
-		ZellijTabID: &tabID,
-		CWD:         cwd,
-		Command:     command,
+		ID:            paneID,
+		TaskID:        config.Session,
+		Role:          "tab-network",
+		Name:          paneID,
+		ZellijTabID:   &tabID,
+		CWD:           cwd,
+		Command:       command,
+		ZellijSession: config.ZellijSession,
 	}
 }
 

@@ -17,29 +17,31 @@ type ManagerClient interface {
 }
 
 type ManagerOptions struct {
-	Client       ManagerClient
-	Config       Config
-	TaskID       string
-	AnchorPaneID string
-	CWD          string
-	Tick         <-chan time.Time
-	Now          func() time.Time
-	Log          io.Writer
+	Client        ManagerClient
+	Config        Config
+	TaskID        string
+	AnchorPaneID  string
+	CWD           string
+	ZellijSession string
+	Tick          <-chan time.Time
+	Now           func() time.Time
+	Log           io.Writer
 }
 
 type Manager struct {
-	client       ManagerClient
-	config       Config
-	taskID       string
-	anchorPaneID string
-	cwd          string
-	tick         <-chan time.Time
-	now          func() time.Time
-	log          io.Writer
-	slots        []workerSlot
-	watchResults chan watchResult
-	beforeClose  func()
-	afterEvent   func()
+	client        ManagerClient
+	config        Config
+	taskID        string
+	anchorPaneID  string
+	cwd           string
+	zellijSession string
+	tick          <-chan time.Time
+	now           func() time.Time
+	log           io.Writer
+	slots         []workerSlot
+	watchResults  chan watchResult
+	beforeClose   func()
+	afterEvent    func()
 }
 
 type slotState uint8
@@ -79,6 +81,10 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	if strings.TrimSpace(opts.AnchorPaneID) == "" {
 		return nil, fmt.Errorf("ticket-worker manager anchor pane ID is required")
 	}
+	zellijSession := strings.TrimSpace(opts.ZellijSession)
+	if zellijSession == "" {
+		return nil, fmt.Errorf("ticket-worker manager zellij session is required")
+	}
 
 	now := opts.Now
 	if now == nil {
@@ -94,16 +100,17 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	}
 
 	return &Manager{
-		client:       opts.Client,
-		config:       opts.Config,
-		taskID:       opts.TaskID,
-		anchorPaneID: opts.AnchorPaneID,
-		cwd:          opts.CWD,
-		tick:         opts.Tick,
-		now:          now,
-		log:          log,
-		slots:        slots,
-		watchResults: make(chan watchResult, opts.Config.MaxWorkers),
+		client:        opts.Client,
+		config:        opts.Config,
+		taskID:        opts.TaskID,
+		anchorPaneID:  opts.AnchorPaneID,
+		cwd:           opts.CWD,
+		zellijSession: zellijSession,
+		tick:          opts.Tick,
+		now:           now,
+		log:           log,
+		slots:         slots,
+		watchResults:  make(chan watchResult, opts.Config.MaxWorkers),
 	}, nil
 }
 
@@ -160,6 +167,7 @@ func (m *Manager) launchSlot(ctx context.Context, slot *workerSlot) {
 		SameTabAsPaneID: m.anchorPaneID,
 		Command:         append([]string(nil), m.config.Worker.Command...),
 		CWD:             m.cwd,
+		ZellijSession:   m.zellijSession,
 	}
 	m.logf("create slot=%d pane=%s", slot.number, paneID)
 	if _, err := m.client.CreatePane(ctx, req); err != nil {

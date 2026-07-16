@@ -5,17 +5,19 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestBuildPlanCreatesManagerAndMonitorInOneTicketWorkerTab(t *testing.T) {
+func TestBuildPlanPreservesZellijSessionInManagerCommand(t *testing.T) {
 	payload, err := BuildPlan(PlanRequest{
-		CWD:        "/repo",
-		ConfigPath: "/repo/.zellij-agent/worker/config.yaml",
-		Session:    "ticket-session",
-		Executable: []string{"/tmp/bin/zellij-agent"},
-		Config:     Config{MaxWorkers: 3},
+		CWD:           "/repo",
+		ConfigPath:    "/repo/.zellij-agent/worker/config.yaml",
+		Session:       "ticket-session",
+		ZellijSession: " physical-a ",
+		Executable:    []string{"/tmp/bin/zellij-agent"},
+		Config:        Config{MaxWorkers: 3},
 	})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
@@ -23,6 +25,9 @@ func TestBuildPlanCreatesManagerAndMonitorInOneTicketWorkerTab(t *testing.T) {
 
 	if payload.Session != "ticket-session" || payload.Layout != "triple-horizontal" {
 		t.Fatalf("session/layout = %q/%q, want ticket-session/triple-horizontal", payload.Session, payload.Layout)
+	}
+	if payload.ZellijSession != "physical-a" {
+		t.Fatalf("payload.ZellijSession = %q, want physical-a", payload.ZellijSession)
 	}
 	if len(payload.Tabs) != 1 || payload.Tabs[0].Name != "ticket-worker" {
 		t.Fatalf("tabs = %#v, want one ticket-worker tab", payload.Tabs)
@@ -43,6 +48,7 @@ func TestBuildPlanCreatesManagerAndMonitorInOneTicketWorkerTab(t *testing.T) {
 		"--config", "/repo/.zellij-agent/worker/config.yaml",
 		"--task", "ticket-session",
 		"--anchor", "ticket-worker-manager",
+		"--zellij-session", "physical-a",
 	}
 	if !reflect.DeepEqual(panes[0].Command, wantManager) {
 		t.Fatalf("manager command = %#v, want %#v", panes[0].Command, wantManager)
@@ -58,6 +64,19 @@ func TestBuildPlanCreatesManagerAndMonitorInOneTicketWorkerTab(t *testing.T) {
 	}
 }
 
+func TestBuildPlanRejectsMissingZellijSession(t *testing.T) {
+	_, err := BuildPlan(PlanRequest{
+		CWD:           "/repo",
+		ConfigPath:    "/repo/config.yaml",
+		ZellijSession: "   ",
+		Executable:    []string{"zellij-agent"},
+		Config:        Config{MaxWorkers: 1},
+	})
+	if err == nil || !strings.Contains(err.Error(), "zellij session is required") {
+		t.Fatalf("BuildPlan() error = %v, want missing zellij session error", err)
+	}
+}
+
 func TestSessionIDIncludesUTCTimestampAndCWDHash(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 34, 56, 0, time.FixedZone("KST", 9*60*60))
 	hash := sha256.Sum256([]byte("/repo"))
@@ -69,9 +88,10 @@ func TestSessionIDIncludesUTCTimestampAndCWDHash(t *testing.T) {
 
 func TestBuildPlanDerivesCollisionResistantSession(t *testing.T) {
 	payload, err := BuildPlan(PlanRequest{
-		CWD:        "/repo",
-		ConfigPath: "/repo/config.yaml",
-		Executable: []string{"zellij-agent"},
+		CWD:           "/repo",
+		ConfigPath:    "/repo/config.yaml",
+		ZellijSession: "physical-a",
+		Executable:    []string{"zellij-agent"},
 		Config: Config{
 			Version:      1,
 			MaxWorkers:   1,

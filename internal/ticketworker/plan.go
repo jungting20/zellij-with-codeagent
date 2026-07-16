@@ -15,12 +15,13 @@ import (
 var ErrInvalidPlanRequest = errors.New("ticket-worker: invalid plan request")
 
 type PlanRequest struct {
-	CWD        string
-	ConfigPath string
-	Session    string
-	Executable []string
-	SocketPath string
-	Config     Config
+	CWD           string
+	ConfigPath    string
+	Session       string
+	ZellijSession string
+	Executable    []string
+	SocketPath    string
+	Config        Config
 }
 
 func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
@@ -39,6 +40,10 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 	if req.Config.MaxWorkers <= 0 {
 		return transport.ExecutionPlanPayload{}, fmt.Errorf("%w: max_workers must be positive", ErrInvalidPlanRequest)
 	}
+	zellijSession := strings.TrimSpace(req.ZellijSession)
+	if zellijSession == "" {
+		return transport.ExecutionPlanPayload{}, fmt.Errorf("%w: zellij session is required", ErrInvalidPlanRequest)
+	}
 
 	session := strings.TrimSpace(req.Session)
 	if session == "" {
@@ -50,6 +55,7 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 		"--config", configPath,
 		"--task", session,
 		"--anchor", "ticket-worker-manager",
+		"--zellij-session", zellijSession,
 	)
 	monitorCommand := append(append([]string{}, executable...),
 		"dashboard",
@@ -63,8 +69,9 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 	}
 
 	return transport.ExecutionPlanPayload{
-		Session: session,
-		Layout:  "triple-horizontal",
+		Session:       session,
+		ZellijSession: zellijSession,
+		Layout:        "triple-horizontal",
 		Tabs: []transport.ExecutionPlanTab{{
 			Name: "ticket-worker",
 			Panes: []transport.ExecutionPlanPane{

@@ -49,13 +49,13 @@ func TestRunInitCreatesConfigAndForceReplacesIt(t *testing.T) {
 	}
 }
 
-func TestRunStartDryRunPrintsValidatedPlanWithExplicitMaxWorkers(t *testing.T) {
+func TestRunStartDryRunPreservesZellijSessionWithExplicitMaxWorkers(t *testing.T) {
 	root := t.TempDir()
 	writeValidConfig(t, root)
 	client := &fakeClient{}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"start", "--dry-run", "--max-workers", "5"}, strings.NewReader(""), &stdout, &stderr, testCLIConfig(root, client))
+	code := Run([]string{"start", "--dry-run", "--max-workers", "5", "--zellij-session", "physical-a"}, strings.NewReader(""), &stdout, &stderr, testCLIConfig(root, client))
 
 	if code != 0 {
 		t.Fatalf("start --dry-run code = %d, stderr=%q", code, stderr.String())
@@ -74,6 +74,9 @@ func TestRunStartDryRunPrintsValidatedPlanWithExplicitMaxWorkers(t *testing.T) {
 	if payload.Session != "ticket-worker-20260716-033456-"+cwdHash(root) {
 		t.Fatalf("session = %q, want deterministic session", payload.Session)
 	}
+	if payload.ZellijSession != "physical-a" {
+		t.Fatalf("payload.ZellijSession = %q, want physical-a", payload.ZellijSession)
+	}
 	if len(payload.Tabs) != 1 || len(payload.Tabs[0].Panes) != 2 {
 		t.Fatalf("payload = %#v, want two-pane plan", payload)
 	}
@@ -83,6 +86,9 @@ func TestRunStartDryRunPrintsValidatedPlanWithExplicitMaxWorkers(t *testing.T) {
 	}
 	if !containsAdjacent(manager.Command, "--max-workers", "5") {
 		t.Fatalf("manager command = %#v, want capacity override", manager.Command)
+	}
+	if !containsAdjacent(manager.Command, "--zellij-session", "physical-a") {
+		t.Fatalf("manager command = %#v, want physical zellij session", manager.Command)
 	}
 	if !containsAdjacent(monitor.Command, "--capacity", "5") {
 		t.Fatalf("monitor command = %#v, want capacity override", monitor.Command)
@@ -94,7 +100,7 @@ func TestRunStartPreservesConfiguredMaxWorkersWithoutOverride(t *testing.T) {
 	writeValidConfig(t, root)
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"start", "--dry-run", "--session", "tickets"}, strings.NewReader(""), &stdout, &stderr, testCLIConfig(root, &fakeClient{}))
+	code := Run([]string{"start", "--dry-run", "--session", "tickets", "--zellij-session", "physical-a"}, strings.NewReader(""), &stdout, &stderr, testCLIConfig(root, &fakeClient{}))
 	if code != 0 {
 		t.Fatalf("start code = %d, stderr=%q", code, stderr.String())
 	}
@@ -158,7 +164,7 @@ func TestRunStartSubmitsPlan(t *testing.T) {
 	}}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"start", "--session", "tickets", "--socket", "/tmp/custom.sock", "--timeout", "5s"}, strings.NewReader(""), &stdout, &stderr, testCLIConfig(root, client))
+	code := Run([]string{"start", "--session", "tickets", "--socket", "/tmp/custom.sock", "--timeout", "5s", "--zellij-session", "physical-a"}, strings.NewReader(""), &stdout, &stderr, testCLIConfig(root, client))
 
 	if code != 0 {
 		t.Fatalf("code = %d, stderr=%q", code, stderr.String())
@@ -174,7 +180,7 @@ func TestRunStartSubmitsPlan(t *testing.T) {
 	}
 }
 
-func TestRunManagerTreatsContextCancellationAsSuccessWithoutCleanup(t *testing.T) {
+func TestRunManagerPreservesZellijSessionOnContextCancellation(t *testing.T) {
 	root := t.TempDir()
 	writeValidConfig(t, root)
 	fake := &fakeManager{err: context.Canceled}
@@ -191,6 +197,7 @@ func TestRunManagerTreatsContextCancellationAsSuccessWithoutCleanup(t *testing.T
 		"--config", ticketworker.ConfigPath(root),
 		"--task", "tickets",
 		"--anchor", "ticket-worker-manager",
+		"--zellij-session", "physical-a",
 	}, strings.NewReader(""), &stdout, &stderr, cfg)
 
 	if code != 0 {
@@ -201,6 +208,9 @@ func TestRunManagerTreatsContextCancellationAsSuccessWithoutCleanup(t *testing.T
 	}
 	if gotOptions.TaskID != "tickets" || gotOptions.AnchorPaneID != "ticket-worker-manager" || gotOptions.CWD != root {
 		t.Fatalf("manager options = %#v", gotOptions)
+	}
+	if gotOptions.ZellijSession != "physical-a" {
+		t.Fatalf("manager zellij session = %q, want physical-a", gotOptions.ZellijSession)
 	}
 	if !reflect.DeepEqual(gotOptions.Config.Worker.Command, []string{"go", "run", "./cmd/ticket-worker"}) {
 		t.Fatalf("worker command = %#v, want direct project argv", gotOptions.Config.Worker.Command)
@@ -222,6 +232,7 @@ func TestRunManagerAppliesExplicitMaxWorkersOverride(t *testing.T) {
 		"manager", "--cwd", root,
 		"--config", ticketworker.ConfigPath(root),
 		"--task", "tickets", "--anchor", "ticket-worker-manager",
+		"--zellij-session", "physical-a",
 		"--max-workers", "5",
 	}, strings.NewReader(""), &stdout, &stderr, cfg)
 
@@ -230,6 +241,32 @@ func TestRunManagerAppliesExplicitMaxWorkersOverride(t *testing.T) {
 	}
 	if gotOptions.Config.MaxWorkers != 5 {
 		t.Fatalf("manager max workers = %d, want 5", gotOptions.Config.MaxWorkers)
+	}
+}
+
+func TestRunManagerRejectsMissingZellijSession(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "physical-from-environment")
+	root := t.TempDir()
+	writeValidConfig(t, root)
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"manager", "--cwd", root,
+		"--config", ticketworker.ConfigPath(root),
+		"--task", "tickets", "--anchor", "ticket-worker-manager",
+	}, strings.NewReader(""), &stdout, &stderr, testCLIConfig(root, &fakeClient{}))
+	if code != 1 || !strings.Contains(stderr.String(), "zellij session is required") {
+		t.Fatalf("manager code = %d stderr = %q, want missing zellij session error", code, stderr.String())
+	}
+}
+
+func TestRunStartRejectsMissingZellijSession(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "")
+	root := t.TempDir()
+	writeValidConfig(t, root)
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"start", "--dry-run"}, strings.NewReader(""), &stdout, &stderr, testCLIConfig(root, &fakeClient{}))
+	if code != 1 || !strings.Contains(stderr.String(), "zellij session is required") {
+		t.Fatalf("start code = %d stderr = %q, want missing zellij session error", code, stderr.String())
 	}
 }
 

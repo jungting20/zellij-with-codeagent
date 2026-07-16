@@ -32,15 +32,16 @@ type PageTarget struct {
 }
 
 type watcherConfig struct {
-	Port         int
-	SocketPath   string
-	CWD          string
-	Session      string
-	RoleBin      string
-	ChromePath   string
-	UserDataDir  string
-	LaunchChrome bool
-	PollInterval time.Duration
+	Port          int
+	SocketPath    string
+	CWD           string
+	Session       string
+	ZellijSession string
+	RoleBin       string
+	ChromePath    string
+	UserDataDir   string
+	LaunchChrome  bool
+	PollInterval  time.Duration
 }
 
 type planSubmitter interface {
@@ -119,6 +120,7 @@ func parseOptionsWithOutput(args []string, output io.Writer) (watcherConfig, err
 	fs.StringVar(&opts.SocketPath, "socket", opts.SocketPath, "agentd Unix socket path")
 	fs.StringVar(&opts.CWD, "cwd", "", "working directory for generated tab-network panes")
 	fs.StringVar(&opts.Session, "session", opts.Session, "execution session/task id for generated tab panes")
+	fs.StringVar(&opts.ZellijSession, "zellij-session", "", "target Zellij session name")
 	fs.StringVar(&opts.RoleBin, "role-bin", opts.RoleBin, "executable used to run zellij-agent roles")
 	fs.StringVar(&opts.ChromePath, "chrome-path", "", "Chrome executable path")
 	fs.StringVar(&opts.UserDataDir, "user-data-dir", opts.UserDataDir, "Chrome user data directory used when launching Chrome")
@@ -136,6 +138,11 @@ func parseOptionsWithOutput(args []string, output io.Writer) (watcherConfig, err
 	if opts.PollInterval <= 0 {
 		return watcherConfig{}, fmt.Errorf("--poll-interval must be positive")
 	}
+	zellijSession, err := cli.ResolveZellijSession(opts.ZellijSession)
+	if err != nil {
+		return watcherConfig{}, err
+	}
+	opts.ZellijSession = zellijSession
 	opts.LaunchChrome = !*noLaunch
 	if opts.CWD != "" {
 		abs, err := filepath.Abs(opts.CWD)
@@ -159,10 +166,13 @@ func buildTargetPlan(cfg watcherConfig, target PageTarget) (string, transport.Ex
 		"--no-launch",
 		"--target-id",
 		target.ID,
+		"--zellij-session",
+		cfg.ZellijSession,
 	}
 	payload := transport.ExecutionPlanPayload{
-		Session: cfg.Session,
-		Layout:  "single-tab",
+		Session:       cfg.Session,
+		ZellijSession: cfg.ZellijSession,
+		Layout:        "single-tab",
 		Tabs: []transport.ExecutionPlanTab{{
 			Name: "chrome:" + shortID,
 			Panes: []transport.ExecutionPlanPane{{

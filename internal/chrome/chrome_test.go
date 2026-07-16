@@ -50,6 +50,7 @@ func TestBuildPlanCreatesChromeTabNetworkSupervisorPaneByDefault(t *testing.T) {
 		"--session", "chrome-debug",
 		"--role-bin", "/tmp/bin/zellij-agent",
 		"--spawn-on-new-tab",
+		"--zellij-session", "physical-a",
 	}
 	if !reflect.DeepEqual(pane.Command, wantCommand) {
 		t.Fatalf("pane.Command = %#v, want %#v", pane.Command, wantCommand)
@@ -61,6 +62,7 @@ func TestBuildPlanNoWatchCreatesChromeTabNetworkPane(t *testing.T) {
 
 	payload, err := BuildPlan(PlanRequest{
 		CWD:            "/repo",
+		ZellijSession:  "physical-a",
 		Session:        "chrome-debug",
 		RoleCommand:    []string{"zellij-agent", "role"},
 		TabNetworkArgs: []string{"--port", "9333", "--no-launch"},
@@ -90,6 +92,7 @@ func TestBuildPlanPassesSupervisorChromeArgs(t *testing.T) {
 
 	payload, err := BuildPlan(PlanRequest{
 		CWD:            "/repo",
+		ZellijSession:  "physical-a",
 		SocketPath:     "/tmp/agentd.sock",
 		Session:        "chrome-debug",
 		RoleCommand:    []string{"zellij-agent", "role"},
@@ -107,6 +110,7 @@ func TestBuildPlanPassesSupervisorChromeArgs(t *testing.T) {
 		"--session", "chrome-debug",
 		"--role-bin", "zellij-agent",
 		"--spawn-on-new-tab",
+		"--zellij-session", "physical-a",
 		"--port", "9333",
 		"--no-launch",
 	}

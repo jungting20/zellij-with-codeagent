@@ -61,6 +61,7 @@ func TestRunDryRunPrintsChromeExecutionPlanEnvelope(t *testing.T) {
 		"--session", "chrome-debug",
 		"--role-bin", "/tmp/bin/zellij-agent",
 		"--spawn-on-new-tab",
+		"--zellij-session", "flag-session",
 		"--port", "9333",
 		"--no-launch",
 	}

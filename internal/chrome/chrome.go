@@ -44,6 +44,10 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 	if req.NoWatch {
 		command = append(command, req.TabNetworkArgs...)
 	} else {
+		zellijSession := strings.TrimSpace(req.ZellijSession)
+		if zellijSession == "" {
+			return transport.ExecutionPlanPayload{}, fmt.Errorf("%w: zellij session is required", ErrInvalidPlanRequest)
+		}
 		if req.SocketPath != "" {
 			command = append(command, "--socket", req.SocketPath)
 		}
@@ -51,6 +55,7 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 			"--session", session,
 			"--role-bin", roleCommand[0],
 			"--spawn-on-new-tab",
+			"--zellij-session", zellijSession,
 		)
 		command = append(command, req.TabNetworkArgs...)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,7 +12,7 @@ import (
 	"zellij-with-codeagent/internal/transport"
 )
 
-func TestManagerInitialFillUsesBoundedUniquePaneRequests(t *testing.T) {
+func TestManagerInitialFillPreservesZellijSession(t *testing.T) {
 	client := newFakeManagerClient()
 	manager := newTestManager(t, client, make(chan time.Time), 2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -23,6 +24,9 @@ func TestManagerInitialFillUsesBoundedUniquePaneRequests(t *testing.T) {
 		t.Fatalf("pane IDs = %v, want %v", got, want)
 	}
 	for _, req := range creates {
+		if req.ZellijSession != "physical-a" {
+			t.Fatalf("worker zellij session = %q, want physical-a", req.ZellijSession)
+		}
 		if req.TaskID != "tickets" || req.Role != "ticket-worker" || req.SameTabAsPaneID != "ticket-worker-manager" {
 			t.Fatalf("unexpected pane identity request: %+v", req)
 		}
@@ -216,18 +220,31 @@ func TestManagerRejectsMismatchedWatchResponse(t *testing.T) {
 func newTestManager(t *testing.T, client ManagerClient, ticks <-chan time.Time, maxWorkers int) *Manager {
 	t.Helper()
 	manager, err := NewManager(ManagerOptions{
-		Client:       client,
-		Config:       Config{MaxWorkers: maxWorkers, PollInterval: time.Second, Worker: WorkerConfig{Command: []string{"worker", "--once"}, CompletionMarker: "DONE"}},
-		TaskID:       "tickets",
-		AnchorPaneID: "ticket-worker-manager",
-		CWD:          "/repo",
-		Tick:         ticks,
-		Now:          func() time.Time { return time.Unix(100, 0) },
+		Client:        client,
+		Config:        Config{MaxWorkers: maxWorkers, PollInterval: time.Second, Worker: WorkerConfig{Command: []string{"worker", "--once"}, CompletionMarker: "DONE"}},
+		TaskID:        "tickets",
+		AnchorPaneID:  "ticket-worker-manager",
+		CWD:           "/repo",
+		ZellijSession: " physical-a ",
+		Tick:          ticks,
+		Now:           func() time.Time { return time.Unix(100, 0) },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return manager
+}
+
+func TestNewManagerRejectsMissingZellijSession(t *testing.T) {
+	_, err := NewManager(ManagerOptions{
+		Client:       newFakeManagerClient(),
+		Config:       Config{MaxWorkers: 1, PollInterval: time.Second, Worker: WorkerConfig{Command: []string{"worker"}, CompletionMarker: "DONE"}},
+		TaskID:       "tickets",
+		AnchorPaneID: "ticket-worker-manager",
+	})
+	if err == nil || !strings.Contains(err.Error(), "zellij session is required") {
+		t.Fatalf("NewManager() error = %v, want missing zellij session error", err)
+	}
 }
 
 type managerEventBarrier chan struct{}

@@ -10,10 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"zellij-with-codeagent/internal/cli"
 	"zellij-with-codeagent/internal/transport"
 )
 
 func TestParseOptionsDefaults(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "physical-a")
 	opts, err := parseOptions(nil)
 	if err != nil {
 		t.Fatalf("parseOptions(nil) error = %v", err)
@@ -26,6 +28,9 @@ func TestParseOptionsDefaults(t *testing.T) {
 	}
 	if opts.Session != "chrome-tabs" {
 		t.Fatalf("Session = %q, want chrome-tabs", opts.Session)
+	}
+	if opts.ZellijSession != "physical-a" {
+		t.Fatalf("ZellijSession = %q, want physical-a", opts.ZellijSession)
 	}
 	if opts.RoleBin != "zellij-agent" {
 		t.Fatalf("RoleBin = %q, want zellij-agent", opts.RoleBin)
@@ -41,12 +46,13 @@ func TestParseOptionsDefaults(t *testing.T) {
 	}
 }
 
-func TestParseOptionsAcceptsCustomValues(t *testing.T) {
+func TestParseOptionsAcceptsZellijSessionAndCustomValues(t *testing.T) {
 	opts, err := parseOptions([]string{
 		"--port", "9333",
 		"--socket", "/tmp/custom.sock",
 		"--cwd", "/repo",
 		"--session", "chrome-debug",
+		"--zellij-session", " physical-a ",
 		"--role-bin", "/tmp/bin/zellij-agent",
 		"--chrome-path", "/Applications/Chrome",
 		"--user-data-dir", "/tmp/profile",
@@ -59,6 +65,9 @@ func TestParseOptionsAcceptsCustomValues(t *testing.T) {
 	if opts.Port != 9333 || opts.SocketPath != "/tmp/custom.sock" || opts.CWD != "/repo" || opts.Session != "chrome-debug" {
 		t.Fatalf("options = %#v, want custom port/socket/cwd/session", opts)
 	}
+	if opts.ZellijSession != "physical-a" {
+		t.Fatalf("ZellijSession = %q, want physical-a", opts.ZellijSession)
+	}
 	if opts.RoleBin != "/tmp/bin/zellij-agent" || opts.ChromePath != "/Applications/Chrome" || opts.UserDataDir != "/tmp/profile" {
 		t.Fatalf("options = %#v, want custom executable paths", opts)
 	}
@@ -70,13 +79,22 @@ func TestParseOptionsAcceptsCustomValues(t *testing.T) {
 	}
 }
 
-func TestBuildTargetPlanCreatesTabNetworkPaneForTarget(t *testing.T) {
+func TestParseOptionsRejectsMissingZellijSession(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "")
+	_, err := parseOptions(nil)
+	if !errors.Is(err, cli.ErrZellijSessionRequired) {
+		t.Fatalf("parseOptions() error = %v, want %v", err, cli.ErrZellijSessionRequired)
+	}
+}
+
+func TestBuildTargetPlanPreservesZellijSessionForTarget(t *testing.T) {
 	cfg := watcherConfig{
-		Port:       9333,
-		CWD:        "/repo",
-		Session:    "chrome-tabs",
-		RoleBin:    "/tmp/bin/zellij-agent",
-		SocketPath: "/tmp/agentd.sock",
+		Port:          9333,
+		CWD:           "/repo",
+		Session:       "chrome-tabs",
+		RoleBin:       "/tmp/bin/zellij-agent",
+		SocketPath:    "/tmp/agentd.sock",
+		ZellijSession: "physical-a",
 	}
 
 	requestID, payload := buildTargetPlan(cfg, PageTarget{ID: "ABCDEF1234567890", Type: "page", URL: "https://example.com"})
@@ -87,6 +105,9 @@ func TestBuildTargetPlanCreatesTabNetworkPaneForTarget(t *testing.T) {
 	if payload.Session != "chrome-tabs" || payload.Layout != "single-tab" || len(payload.Tabs) != 1 {
 		t.Fatalf("payload = %#v, want one-tab chrome-tabs plan", payload)
 	}
+	if payload.ZellijSession != "physical-a" {
+		t.Fatalf("payload.ZellijSession = %q, want physical-a", payload.ZellijSession)
+	}
 	if payload.Tabs[0].Name != "chrome:ABCDEF123456" {
 		t.Fatalf("tab name = %q, want chrome:ABCDEF123456", payload.Tabs[0].Name)
 	}
@@ -94,7 +115,7 @@ func TestBuildTargetPlanCreatesTabNetworkPaneForTarget(t *testing.T) {
 	if pane.ID != "chrome-tab-network-ABCDEF123456" || pane.Role != "tab-network" || pane.CWD != "/repo" {
 		t.Fatalf("pane = %#v, want deterministic tab-network pane in cwd", pane)
 	}
-	wantCommand := []string{"/tmp/bin/zellij-agent", "role", "tab-network", "--port", "9333", "--no-launch", "--target-id", "ABCDEF1234567890"}
+	wantCommand := []string{"/tmp/bin/zellij-agent", "role", "tab-network", "--port", "9333", "--no-launch", "--target-id", "ABCDEF1234567890", "--zellij-session", "physical-a"}
 	if !reflect.DeepEqual(pane.Command, wantCommand) {
 		t.Fatalf("command = %#v, want %#v", pane.Command, wantCommand)
 	}

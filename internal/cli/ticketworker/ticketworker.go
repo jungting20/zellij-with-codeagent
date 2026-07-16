@@ -96,6 +96,7 @@ func runStart(args []string, stdout, stderr io.Writer, cfg Config) int {
 	cwdFlag := fs.String("cwd", "", "project root")
 	configFlag := fs.String("config", "", "ticket-worker config path")
 	sessionFlag := fs.String("session", "", "execution session/task id override")
+	zellijSessionFlag := fs.String("zellij-session", "", "target Zellij session name")
 	maxWorkers := fs.Int("max-workers", 0, "override configured worker capacity")
 	dryRun := fs.Bool("dry-run", false, "print the /v1/requests envelope without submitting it")
 	if err := fs.Parse(args); err != nil {
@@ -129,6 +130,11 @@ func runStart(args []string, stdout, stderr io.Writer, cfg Config) int {
 	if maxWorkersSet {
 		workerConfig.MaxWorkers = *maxWorkers
 	}
+	zellijSession, err := cli.ResolveZellijSession(*zellijSessionFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "resolve zellij session: %v\n", err)
+		return 1
+	}
 
 	session := strings.TrimSpace(*sessionFlag)
 	if session == "" {
@@ -144,7 +150,8 @@ func runStart(args []string, stdout, stderr io.Writer, cfg Config) int {
 	}
 	payload, err := ticketworker.BuildPlan(ticketworker.PlanRequest{
 		CWD: cwd, ConfigPath: configPath, Session: session,
-		Executable: executable, SocketPath: nonDefaultSocket(*socketPath), Config: workerConfig,
+		ZellijSession: zellijSession,
+		Executable:    executable, SocketPath: nonDefaultSocket(*socketPath), Config: workerConfig,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "build ticket-worker plan: %v\n", err)
@@ -203,6 +210,7 @@ func runManager(args []string, stdout, stderr io.Writer, cfg Config) int {
 	configFlag := fs.String("config", "", "ticket-worker config path")
 	taskID := fs.String("task", "", "ticket-worker task/session id")
 	anchor := fs.String("anchor", "", "manager logical pane id")
+	zellijSession := fs.String("zellij-session", "", "target Zellij session name")
 	maxWorkers := fs.Int("max-workers", 0, "override configured worker capacity")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -230,6 +238,11 @@ func runManager(args []string, stdout, stderr io.Writer, cfg Config) int {
 			workerConfig.MaxWorkers = *maxWorkers
 		}
 	})
+	*zellijSession = strings.TrimSpace(*zellijSession)
+	if *zellijSession == "" {
+		fmt.Fprintln(stderr, "ticket-worker manager zellij session is required")
+		return 1
+	}
 
 	client := transport.NewClient(transport.ClientOptions{
 		SocketPath: *socketPath,
@@ -245,6 +258,7 @@ func runManager(args []string, stdout, stderr io.Writer, cfg Config) int {
 	manager, err := newManager(ticketworker.ManagerOptions{
 		Client: client, Config: workerConfig,
 		TaskID: *taskID, AnchorPaneID: *anchor, CWD: cwd, Log: stdout,
+		ZellijSession: *zellijSession,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "create ticket-worker manager: %v\n", err)
