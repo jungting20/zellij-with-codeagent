@@ -87,6 +87,11 @@ Use `zellij-agent ctl` as the thin command-line client for the local socket:
 ./bin/zellij-agent work "implement the mixed work command"
 ```
 
+`--zellij-session` selects the physical Zellij session. When omitted, the CLI
+uses its own `ZELLIJ_SESSION_NAME`. The logical `--session` flag remains the
+execution task ID. Commands fail before submission when neither source names a
+physical Zellij session.
+
 The command creates one Zellij tab with five panes:
 
 - `coder`: interactive Codex session through `zellij-agent role coding-agent <cwd>`, with the goal prefilled for review; press Enter to submit it.
@@ -102,12 +107,21 @@ Project detection reads only known marker files in the selected working-director
 Useful options:
 
 ```bash
-./bin/zellij-agent work --dry-run "implement the mixed work command"
-./bin/zellij-agent work --session work-command "implement the mixed work command"
+./bin/zellij-agent work --dry-run --session work-command --zellij-session physical-a "implement the mixed work command"
+./bin/zellij-agent work --session work-command --zellij-session physical-a "implement the mixed work command"
 ./bin/zellij-agent work --cwd /path/to/repo "implement the mixed work command"
 ./bin/zellij-agent work --socket /tmp/agentd.sock "implement the mixed work command"
 ./bin/zellij-agent work --timeout 30s "implement the mixed work command"
 ./bin/zellij-agent work --auto-test "implement the mixed work command"
+```
+
+The dry-run envelope makes the distinction visible in its payload:
+
+```json
+{
+  "session": "work-command",
+  "zellij_session": "physical-a"
+}
 ```
 
 The daemon must be running before non-dry-run submission:
@@ -116,6 +130,31 @@ The daemon must be running before non-dry-run submission:
 ./bin/zellij-agent daemon serve
 ```
 
+### Chrome Tab Watcher
+
+`zellij-agent chrome` submits a watcher pane that tracks newly opened Chrome
+tabs. `--zellij-session` selects the physical Zellij session. When omitted, the
+CLI uses its own `ZELLIJ_SESSION_NAME`. The logical `--session` flag remains the
+execution task ID. Commands fail before submission when neither source names a
+physical Zellij session.
+
+Use a dry run to inspect both values without contacting the daemon:
+
+```bash
+./bin/zellij-agent chrome --dry-run --session chrome-debug --zellij-session physical-a
+```
+
+```json
+{
+  "session": "chrome-debug",
+  "zellij_session": "physical-a"
+}
+```
+
+Arguments after `--` configure the watcher, for example `--port 9333
+--no-launch`. Use `--no-watch` before `--` to create one `tab-network` pane
+instead of watching for new tabs.
+
 ### Ticket Worker Pool
 
 `zellij-agent ticket-worker` launches a project-configured pool of identical worker commands. Initialize the project-local configuration from the project root:
@@ -123,6 +162,11 @@ The daemon must be running before non-dry-run submission:
 ```bash
 ./bin/zellij-agent ticket-worker init
 ```
+
+For `ticket-worker start`, `--zellij-session` selects the physical Zellij
+session. When omitted, the CLI uses its own `ZELLIJ_SESSION_NAME`. The logical
+`--session` flag remains the execution task ID. Commands fail before submission
+when neither source names a physical Zellij session.
 
 This creates `.zellij-agent/worker/config.yaml` and refuses to overwrite an existing file. Use `ticket-worker init --force` to replace it, or `--cwd /path/to/project` to select another project root. The version-1 configuration is:
 
@@ -147,10 +191,26 @@ After replacing the example command with the project's worker entrypoint, start 
 `start` validates the complete configuration before submitting a new `ticket-worker` tab. The initial plan contains exactly two bootstrap panes: the deterministic worker manager and a read-only dashboard monitor. The manager then creates up to `max_workers` worker panes in that same tab. A one-run capacity override does not change the file:
 
 ```bash
-./bin/zellij-agent ticket-worker start --max-workers 5
+./bin/zellij-agent ticket-worker start --max-workers 5 --session tickets --zellij-session physical-a
 ```
 
-Use `--dry-run` to print the `/v1/requests` execution-plan envelope without contacting the daemon or creating panes. `--cwd`, `--config`, `--session`, `--socket`, and `--timeout` are also available; run `ticket-worker start --help` for their exact forms.
+Use `--dry-run` to print the `/v1/requests` execution-plan envelope without
+contacting the daemon or creating panes:
+
+```bash
+./bin/zellij-agent ticket-worker start --dry-run --session tickets --zellij-session physical-a
+```
+
+```json
+{
+  "session": "tickets",
+  "zellij_session": "physical-a"
+}
+```
+
+`--cwd`, `--config`, `--session`, `--zellij-session`, `--socket`, and
+`--timeout` are also available; run `ticket-worker start --help` for their exact
+forms.
 
 The project worker command owns the ticket workflow. It must atomically claim its own next ticket, invoke the coding agent or project-specific ticket skill, implement and verify the change, update the ticket system, and only then print the configured completion marker. If no ticket is available, the project command also decides whether and when to print the marker. The manager has no ticket-system knowledge and does not claim tickets, interpret ticket IDs, or infer success from process exit or idle output.
 
@@ -162,10 +222,30 @@ Canceling or closing the manager stops marker watches and future creation but pe
 
 The initial release also has known limitations around repeated starts, dashboard capacity display, malformed marker error mapping, multi-document YAML, and real-Zellij end-to-end coverage. See [`docs/ticket-worker-known-issues.md`](docs/ticket-worker-known-issues.md) for reproduction conditions and follow-up directions.
 
+### Planner Commands
+
 `zellij-agent ctl plan` accepts either a raw execution plan payload or a full `/v1/requests` envelope.
 `zellij-agent planner page` is a mock planner path for URL-based page inspection. It uses a built-in mock source by default, generates a canonical `/v1/requests` `execution_plan`, and submits panes for editor, LSP, network, and console inspection. Add `--dry-run` to print the envelope without contacting `agentd`.
 `zellij-agent planner tui` provides the same mock planner path through a single chat-style prompt. Include the URL in the natural-language request, for example `localhost:8000/example/aa 페이지 소스 열고 네트워크/콘솔 확인해줘`; the mock source and cwd default from the current repo, and generated panes call back into `zellij-agent role`.
 `zellij-agent planner validate` and `zellij-agent planner submit` accept AI-generated JSON files, require the canonical `/v1/requests` envelope, and reject legacy or unknown payload fields before submission.
+
+For planner commands that submit or generate plans, `--zellij-session` selects
+the physical Zellij session. When omitted, the CLI uses its own
+`ZELLIJ_SESSION_NAME`. The logical `--session` flag remains the execution task
+ID. Commands fail before submission when neither source names a physical Zellij
+session. A page dry run shows the generated logical session alongside the
+explicit physical target:
+
+```bash
+./bin/zellij-agent planner page --url http://localhost:8000/example/aa --dry-run --zellij-session physical-a
+```
+
+```json
+{
+  "session": "page-example-aa",
+  "zellij_session": "physical-a"
+}
+```
 
 ## Runtime Service Shape
 
@@ -220,6 +300,7 @@ Requests and responses use logical daemon IDs (`pane_id`, `task_id`, `agent_id`)
   "request_id": "req_123",
   "payload": {
     "session": "feature-auth",
+    "zellij_session": "physical-a",
     "layout": "triple-horizontal",
     "tabs": [
       {
@@ -234,9 +315,18 @@ Requests and responses use logical daemon IDs (`pane_id`, `task_id`, `agent_id`)
 }
 ```
 
-In v1, `session` is used as `task_id`; a tab name defaults to the session when omitted. `layout` is validated metadata (`triple-horizontal` today); physical layout forcing is deferred.
+In v1, `session` is used as `task_id`; `zellij_session` selects the physical
+Zellij session; and a tab name defaults to the logical session when omitted.
+`layout` is validated metadata (`triple-horizontal` today); physical layout
+forcing is deferred.
 
 ## Zellij Session Selection
+
+Each execution plan carries its physical Zellij target as `zellij_session`.
+At the CLI boundary, explicit `--zellij-session` wins; otherwise the CLI reads
+its own `ZELLIJ_SESSION_NAME`. A missing physical session is rejected before
+submission. The plan's logical `session` remains the daemon task ID and does
+not select a Zellij instance.
 
 `zellij.NewBackend(zellij.Options{Session: "name"})` adds `--session name` to Zellij CLI calls. Tests also honor `ZELLIJ_SESSION_NAME` for real-Zellij integration and E2E runs:
 
@@ -244,7 +334,7 @@ In v1, `session` is used as `task_id`; a tab name defaults to the session when o
 ZELLIJ_SESSION_NAME=my-session AGENTD_ZELLIJ_INTEGRATION=1 go test ./internal/runtime -run '^TestIntegration' -v -count=1
 ```
 
-When no session is configured, the backend lets Zellij use its default session behavior.
+Runtime pane creation rejects requests that omit the physical Zellij session.
 
 ## Manual Verification
 

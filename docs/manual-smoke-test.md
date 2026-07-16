@@ -2,6 +2,11 @@
 
 This flow verifies the current `agentd` + `agentctl` CLI path against a real Zellij session.
 
+`--zellij-session` selects the physical Zellij session. When omitted, the CLI
+uses its own `ZELLIJ_SESSION_NAME`. The logical `--session` flag remains the
+execution task ID. Commands fail before submission when neither source names a
+physical Zellij session.
+
 ## Prerequisites
 
 - Go 1.22 or newer
@@ -95,6 +100,75 @@ scripts/smoke-agentctl.sh
 ```
 
 Run it inside a Zellij session or set `ZELLIJ_SESSION_NAME` before invoking the script.
+
+## Two-Session Targeting Smoke
+
+Build and register the unified binary, then start two named Zellij sessions in
+two terminals:
+
+```bash
+go build -o bin/zellij-agent ./cmd/zellij-agent
+cp bin/zellij-agent ~/.config/custom-cli
+```
+
+```bash
+zellij -s physical-a
+```
+
+```bash
+zellij -s physical-b
+```
+
+Keep both sessions open. In a third terminal, start one daemon:
+
+```bash
+zellij-agent daemon serve --socket /tmp/agentd.sock
+```
+
+From a shell attached to `physical-a`, inspect and submit one plan. The CLI
+uses that shell's `ZELLIJ_SESSION_NAME` because `--zellij-session` is omitted:
+
+```bash
+zellij-agent work --dry-run --socket /tmp/agentd.sock --session task-a "verify physical-a targeting"
+zellij-agent work --socket /tmp/agentd.sock --session task-a "verify physical-a targeting"
+```
+
+Confirm the dry-run payload contains both values:
+
+```json
+{
+  "session": "task-a",
+  "zellij_session": "physical-a"
+}
+```
+
+From a shell attached to `physical-b`, inspect and submit the second plan:
+
+```bash
+zellij-agent work --dry-run --socket /tmp/agentd.sock --session task-b "verify physical-b targeting"
+zellij-agent work --socket /tmp/agentd.sock --session task-b "verify physical-b targeting"
+```
+
+Confirm its dry-run payload contains `"session": "task-b"` and
+`"zellij_session": "physical-b"`.
+
+Check the daemon-owned state from either terminal:
+
+```bash
+zellij-agent ctl status --socket /tmp/agentd.sock
+```
+
+Confirm `task-a` and `task-b` are both present. Inspect each physical Zellij
+session and confirm `physical-a` received only the `task-a` tab and its panes,
+while `physical-b` received only the `task-b` tab and its panes. No tab or pane
+from either logical task should appear in the other physical session.
+
+Clean up the two logical tasks when finished:
+
+```bash
+zellij-agent ctl cleanup --socket /tmp/agentd.sock --task task-a
+zellij-agent ctl cleanup --socket /tmp/agentd.sock --task task-b
+```
 
 ## Runtime Dashboard Smoke
 
