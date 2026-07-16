@@ -124,6 +124,96 @@ func TestCreatePaneTargetsTabZero(t *testing.T) {
 	}
 }
 
+func TestCreatePaneSameTabAsActiveLogicalAnchor(t *testing.T) {
+	anchorTabID := registry.ZellijTabID(7)
+	backend := &fakeBackend{
+		createID:  "terminal_worker",
+		listPanes: []zellij.Pane{{ID: "terminal_worker", TabID: 7, TabName: "tickets"}},
+	}
+	service := newTestService(backend)
+	if _, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "manager",
+		ZellijPaneID: "terminal_manager",
+		ZellijTabID:  &anchorTabID,
+		Status:       registry.PaneStatusRunning,
+	}); err != nil {
+		t.Fatalf("RegisterPane(anchor) error = %v", err)
+	}
+
+	response, err := service.CreatePane(context.Background(), CreatePaneRequest{
+		ID:              "worker-1",
+		TaskID:          "ticket-session",
+		Role:            "ticket-worker",
+		SameTabAsPaneID: "manager",
+		Command:         []string{"worker"},
+		CWD:             "/repo",
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+
+	want := zellij.CreatePaneRequest{
+		CWD:     "/repo",
+		TabID:   zellijTabID(7),
+		Command: []string{"worker"},
+	}
+	if len(backend.createRequests) != 1 || !reflect.DeepEqual(backend.createRequests[0], want) {
+		t.Fatalf("backend CreatePane requests = %#v, want %#v", backend.createRequests, []zellij.CreatePaneRequest{want})
+	}
+	if response.Pane.ZellijTabID == nil || *response.Pane.ZellijTabID != 7 {
+		t.Fatalf("CreatePane() pane = %#v, want Zellij tab 7", response.Pane)
+	}
+}
+
+func TestCreatePaneSameTabAsRejectsInvalidAnchor(t *testing.T) {
+	tests := []struct {
+		name      string
+		anchor    bool
+		status    registry.PaneStatus
+		anchorTab *registry.ZellijTabID
+		newTab    bool
+		targetTab *ZellijTabID
+		wantErr   error
+	}{
+		{name: "missing anchor", wantErr: ErrPaneNotFound},
+		{name: "closed anchor", anchor: true, status: registry.PaneStatusClosed, anchorTab: registryZellijTabID(7), wantErr: ErrInvalidPaneTarget},
+		{name: "anchor without Zellij tab ID", anchor: true, status: registry.PaneStatusRunning, wantErr: ErrInvalidPaneTarget},
+		{name: "new tab", anchor: true, status: registry.PaneStatusRunning, anchorTab: registryZellijTabID(7), newTab: true, wantErr: ErrInvalidPaneTarget},
+		{name: "explicit Zellij tab ID", anchor: true, status: registry.PaneStatusRunning, anchorTab: registryZellijTabID(7), targetTab: runtimeZellijTabID(8), wantErr: ErrInvalidPaneTarget},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend := &fakeBackend{createID: "terminal_worker"}
+			service := newTestService(backend)
+			if tt.anchor {
+				if _, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+					ID:           "manager",
+					ZellijPaneID: "terminal_manager",
+					ZellijTabID:  tt.anchorTab,
+					Status:       tt.status,
+				}); err != nil {
+					t.Fatalf("RegisterPane(anchor) error = %v", err)
+				}
+			}
+
+			_, err := service.CreatePane(context.Background(), CreatePaneRequest{
+				ID:              "worker-1",
+				SameTabAsPaneID: "manager",
+				NewTab:          tt.newTab,
+				ZellijTabID:     tt.targetTab,
+				Command:         []string{"worker"},
+			})
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("CreatePane() error = %v, want %v", err, tt.wantErr)
+			}
+			if len(backend.createRequests) != 0 || len(backend.createTabRequests) != 0 {
+				t.Fatalf("backend create calls = panes %#v, tabs %#v; want none", backend.createRequests, backend.createTabRequests)
+			}
+		})
+	}
+}
+
 func TestCreatePaneCreatesNewTabAndRegistersTabMetadata(t *testing.T) {
 	backend := &fakeBackend{
 		createTabID: 9,
@@ -568,6 +658,14 @@ func newTestService(backend *fakeBackend) *Service {
 }
 
 func zellijTabID(id zellij.TabID) *zellij.TabID {
+	return &id
+}
+
+func registryZellijTabID(id registry.ZellijTabID) *registry.ZellijTabID {
+	return &id
+}
+
+func runtimeZellijTabID(id ZellijTabID) *ZellijTabID {
 	return &id
 }
 

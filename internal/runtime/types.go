@@ -10,12 +10,13 @@ import (
 )
 
 var (
-	ErrPaneNotFound    = errors.New("runtime pane not found")
-	ErrMissingPaneID   = errors.New("runtime pane id is required")
-	ErrCleanupPartial  = errors.New("runtime cleanup partially failed")
-	ErrSessionNotFound = errors.New("runtime session not found")
-	ErrTabNotFound     = errors.New("runtime tab not found")
-	ErrInvalidMessage  = errors.New("runtime: invalid message")
+	ErrPaneNotFound      = errors.New("runtime pane not found")
+	ErrMissingPaneID     = errors.New("runtime pane id is required")
+	ErrCleanupPartial    = errors.New("runtime cleanup partially failed")
+	ErrSessionNotFound   = errors.New("runtime session not found")
+	ErrTabNotFound       = errors.New("runtime tab not found")
+	ErrInvalidMessage    = errors.New("runtime: invalid message")
+	ErrInvalidPaneTarget = errors.New("runtime: invalid pane target")
 )
 
 type (
@@ -107,9 +108,10 @@ type CreatePaneRequest struct {
 	TabName string
 	// ZellijTabID targets an existing tab. When NewTab is true, the created tab
 	// ID is returned on the Pane instead.
-	ZellijTabID *ZellijTabID
-	Command     []string
-	CWD         string
+	ZellijTabID     *ZellijTabID
+	SameTabAsPaneID PaneID
+	Command         []string
+	CWD             string
 }
 
 type CreatePaneResponse struct {

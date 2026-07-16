@@ -10,16 +10,17 @@ import (
 )
 
 type CreatePaneRequest struct {
-	ID          string   `json:"id,omitempty"`
-	TaskID      string   `json:"task_id,omitempty"`
-	AgentID     string   `json:"agent_id,omitempty"`
-	Role        string   `json:"role,omitempty"`
-	Name        string   `json:"name,omitempty"`
-	NewTab      bool     `json:"new_tab,omitempty"`
-	TabName     string   `json:"tab_name,omitempty"`
-	ZellijTabID *int     `json:"zellij_tab_id,omitempty"`
-	Command     []string `json:"command,omitempty"`
-	CWD         string   `json:"cwd,omitempty"`
+	ID              string   `json:"id,omitempty"`
+	TaskID          string   `json:"task_id,omitempty"`
+	AgentID         string   `json:"agent_id,omitempty"`
+	Role            string   `json:"role,omitempty"`
+	Name            string   `json:"name,omitempty"`
+	NewTab          bool     `json:"new_tab,omitempty"`
+	TabName         string   `json:"tab_name,omitempty"`
+	ZellijTabID     *int     `json:"zellij_tab_id,omitempty"`
+	SameTabAsPaneID string   `json:"same_tab_as_pane_id,omitempty"`
+	Command         []string `json:"command,omitempty"`
+	CWD             string   `json:"cwd,omitempty"`
 }
 
 type CreatePaneResponse struct {
@@ -210,16 +211,17 @@ func (req CreatePaneRequest) ToRuntime() rt.CreatePaneRequest {
 		tabID = &value
 	}
 	return rt.CreatePaneRequest{
-		ID:          rt.PaneID(req.ID),
-		TaskID:      rt.TaskID(req.TaskID),
-		AgentID:     rt.AgentID(req.AgentID),
-		Role:        req.Role,
-		Name:        req.Name,
-		NewTab:      req.NewTab,
-		TabName:     req.TabName,
-		ZellijTabID: tabID,
-		Command:     cloneStrings(req.Command),
-		CWD:         req.CWD,
+		ID:              rt.PaneID(req.ID),
+		TaskID:          rt.TaskID(req.TaskID),
+		AgentID:         rt.AgentID(req.AgentID),
+		Role:            req.Role,
+		Name:            req.Name,
+		NewTab:          req.NewTab,
+		TabName:         req.TabName,
+		ZellijTabID:     tabID,
+		SameTabAsPaneID: rt.PaneID(req.SameTabAsPaneID),
+		Command:         cloneStrings(req.Command),
+		CWD:             req.CWD,
 	}
 }
 

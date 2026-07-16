@@ -81,6 +81,12 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 		return CreatePaneResponse{}, ErrMissingPaneID
 	}
 
+	var err error
+	req, err = s.resolveCreatePaneTarget(req)
+	if err != nil {
+		return CreatePaneResponse{}, err
+	}
+
 	zellijID, tabID, tabName, cleanup, err := s.createBackendPane(ctx, req)
 	if err != nil {
 		return CreatePaneResponse{}, errors.Join(err, cleanup(ctx))
@@ -115,6 +121,30 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 	}
 
 	return CreatePaneResponse{Pane: paneFromRecord(record), record: record}, nil
+}
+
+func (s *Service) resolveCreatePaneTarget(req CreatePaneRequest) (CreatePaneRequest, error) {
+	if req.SameTabAsPaneID == "" {
+		return req, nil
+	}
+	if req.NewTab || req.ZellijTabID != nil {
+		return req, ErrInvalidPaneTarget
+	}
+
+	anchor, err := s.lookupPane(req.SameTabAsPaneID)
+	if err != nil {
+		return req, err
+	}
+	if anchor.Status != registry.PaneStatusStarting && anchor.Status != registry.PaneStatusRunning {
+		return req, fmt.Errorf("%w: anchor %s is %s", ErrInvalidPaneTarget, anchor.ID, anchor.Status)
+	}
+	if anchor.ZellijTabID == nil {
+		return req, fmt.Errorf("%w: anchor %s has no tab", ErrInvalidPaneTarget, anchor.ID)
+	}
+
+	tabID := ZellijTabID(*anchor.ZellijTabID)
+	req.ZellijTabID = &tabID
+	return req, nil
 }
 
 // SubscribeEvents exposes in-process runtime observations published by the daemon.

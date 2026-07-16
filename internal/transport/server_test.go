@@ -23,7 +23,7 @@ func TestServerCreatePane(t *testing.T) {
 	service := newFakeRuntimeService()
 	server := newTestServer(t, service)
 
-	body := strings.NewReader(`{"id":"pane-1","task_id":"task-1","agent_id":"agent-1","role":"test","new_tab":true,"tab_name":"agentd-test","command":["go","test"],"cwd":"."}`)
+	body := strings.NewReader(`{"id":"pane-1","task_id":"task-1","agent_id":"agent-1","role":"test","same_tab_as_pane_id":"manager","new_tab":true,"tab_name":"agentd-test","command":["go","test"],"cwd":"."}`)
 	request := httptest.NewRequest(http.MethodPost, "/v1/panes", body)
 	response := httptest.NewRecorder()
 
@@ -34,6 +34,9 @@ func TestServerCreatePane(t *testing.T) {
 	}
 	if service.createReq.ID != "pane-1" || service.createReq.TaskID != "task-1" || !service.createReq.NewTab {
 		t.Fatalf("CreatePane request = %#v, want decoded logical request", service.createReq)
+	}
+	if service.createReq.SameTabAsPaneID != "manager" {
+		t.Fatalf("CreatePane request SameTabAsPaneID = %q, want manager", service.createReq.SameTabAsPaneID)
 	}
 	var decoded CreatePaneResponse
 	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
