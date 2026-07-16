@@ -19,33 +19,36 @@ type ManagerClient interface {
 }
 
 type ManagerOptions struct {
-	Client         ManagerClient
-	Config         Config
-	TaskID         string
-	AnchorPaneID   string
-	CWD            string
-	ZellijSession  string
-	StartupTimeout time.Duration
-	Tick           <-chan time.Time
-	Now            func() time.Time
-	Log            io.Writer
+	Client           ManagerClient
+	Config           Config
+	TaskID           string
+	AnchorPaneID     string
+	CWD              string
+	ZellijSession    string
+	StartupTimeout   time.Duration
+	Tick             <-chan time.Time
+	Now              func() time.Time
+	Log              io.Writer
+	CompletionRunner CompletionRunner
 }
 
 type Manager struct {
-	client         ManagerClient
-	config         Config
-	taskID         string
-	anchorPaneID   string
-	cwd            string
-	zellijSession  string
-	startupTimeout time.Duration
-	tick           <-chan time.Time
-	now            func() time.Time
-	log            io.Writer
-	slots          []workerSlot
-	watchResults   chan watchResult
-	beforeClose    func()
-	afterEvent     func()
+	client            ManagerClient
+	config            Config
+	taskID            string
+	anchorPaneID      string
+	cwd               string
+	zellijSession     string
+	startupTimeout    time.Duration
+	tick              <-chan time.Time
+	now               func() time.Time
+	log               io.Writer
+	slots             []workerSlot
+	watchResults      chan watchResult
+	completionRunner  CompletionRunner
+	completionResults chan completionRunResult
+	beforeClose       func()
+	afterEvent        func()
 }
 
 type slotState uint8
@@ -53,6 +56,8 @@ type slotState uint8
 const (
 	slotEmpty slotState = iota
 	slotOccupied
+	slotCompleting
+	slotCompletionFailed
 )
 
 type workerSlot struct {
@@ -63,6 +68,7 @@ type workerSlot struct {
 	startedAt   time.Time
 	completedAt time.Time
 	lastError   string
+	ticketID    string
 }
 
 type watchResult struct {
@@ -70,6 +76,14 @@ type watchResult struct {
 	paneID     string
 	response   transport.WaitForOutputMarkerResponse
 	err        error
+}
+
+type completionRunResult struct {
+	slotNumber int
+	paneID     string
+	ticketID   string
+	matchedAt  time.Time
+	result     CompletionResult
 }
 
 func NewManager(opts ManagerOptions) (*Manager, error) {
@@ -105,24 +119,30 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	if log == nil {
 		log = io.Discard
 	}
+	completionRunner := opts.CompletionRunner
+	if completionRunner == nil {
+		completionRunner = ExecCompletionRunner{}
+	}
 	slots := make([]workerSlot, opts.Config.MaxWorkers)
 	for i := range slots {
 		slots[i].number = i + 1
 	}
 
 	return &Manager{
-		client:         opts.Client,
-		config:         opts.Config,
-		taskID:         opts.TaskID,
-		anchorPaneID:   opts.AnchorPaneID,
-		cwd:            opts.CWD,
-		zellijSession:  zellijSession,
-		startupTimeout: startupTimeout,
-		tick:           opts.Tick,
-		now:            now,
-		log:            log,
-		slots:          slots,
-		watchResults:   make(chan watchResult, opts.Config.MaxWorkers),
+		client:            opts.Client,
+		config:            opts.Config,
+		taskID:            opts.TaskID,
+		anchorPaneID:      opts.AnchorPaneID,
+		cwd:               opts.CWD,
+		zellijSession:     zellijSession,
+		startupTimeout:    startupTimeout,
+		tick:              opts.Tick,
+		now:               now,
+		log:               log,
+		slots:             slots,
+		watchResults:      make(chan watchResult, opts.Config.MaxWorkers),
+		completionRunner:  completionRunner,
+		completionResults: make(chan completionRunResult, opts.Config.MaxWorkers),
 	}, nil
 }
 
@@ -152,10 +172,14 @@ func (m *Manager) Run(ctx context.Context) error {
 				ticks = nil
 				continue
 			}
+			m.reconcileFailedSlots(ctx)
 			m.fillEmptySlots(ctx)
 			m.notifyEventProcessed()
 		case result := <-m.watchResults:
 			m.handleWatchResult(ctx, result)
+			m.notifyEventProcessed()
+		case result := <-m.completionResults:
+			m.handleCompletionResult(ctx, result)
 			m.notifyEventProcessed()
 		}
 	}
@@ -254,13 +278,24 @@ func (m *Manager) launchSlot(ctx context.Context, slot *workerSlot) {
 	slot.startedAt = m.now()
 	slot.completedAt = time.Time{}
 	slot.lastError = ""
-	m.logf("watch slot=%d pane=%s marker=%q", slot.number, paneID, m.config.Worker.CompletionMarker)
+	slot.ticketID = ""
+	marker := m.config.Worker.CompletionMarker
+	matchPrefix := len(m.config.Worker.CompleteCommand) > 0
+	if matchPrefix {
+		marker += " "
+	}
+	m.logf("watch slot=%d pane=%s marker=%q", slot.number, paneID, marker)
 	go m.watch(ctx, slot.number, paneID)
 }
 
 func (m *Manager) watch(ctx context.Context, slotNumber int, paneID string) {
+	marker := m.config.Worker.CompletionMarker
+	matchPrefix := len(m.config.Worker.CompleteCommand) > 0
+	if matchPrefix {
+		marker += " "
+	}
 	response, err := m.client.WaitForOutputMarker(ctx, paneID, transport.WaitForOutputMarkerRequest{
-		Marker: m.config.Worker.CompletionMarker,
+		Marker: marker, MatchPrefix: matchPrefix,
 	})
 	result := watchResult{slotNumber: slotNumber, paneID: paneID, response: response, err: err}
 	select {
@@ -285,12 +320,73 @@ func (m *Manager) handleWatchResult(ctx context.Context, result watchResult) {
 		m.logf("watch failed slot=%d pane=%s error=%v", slot.number, slot.paneID, result.err)
 		return
 	}
-	if result.response.PaneID != result.paneID || result.response.Marker != m.config.Worker.CompletionMarker {
+	expectedMarker := m.config.Worker.CompletionMarker
+	structured := len(m.config.Worker.CompleteCommand) > 0
+	if structured {
+		expectedMarker += " "
+	}
+	if result.response.PaneID != result.paneID || result.response.Marker != expectedMarker {
 		slot.lastError = fmt.Sprintf("unexpected watch response pane=%q marker=%q", result.response.PaneID, result.response.Marker)
 		m.logf("watch rejected slot=%d pane=%s response_pane=%q marker=%q", slot.number, slot.paneID, result.response.PaneID, result.response.Marker)
 		return
 	}
+	if structured {
+		ticketID, err := parseCompletionLine(m.config.Worker.CompletionMarker, result.response.MatchedLine)
+		if err != nil {
+			slot.state = slotCompletionFailed
+			slot.lastError = err.Error()
+			m.logf("completion rejected slot=%d pane=%s error=%v", slot.number, slot.paneID, err)
+			return
+		}
+		slot.state = slotCompleting
+		slot.ticketID = ticketID
+		m.logf("complete ticket slot=%d pane=%s ticket=%s", slot.number, slot.paneID, ticketID)
+		go m.runCompletion(ctx, slot.number, slot.paneID, ticketID, result.response.MatchedAt)
+		return
+	}
 
+	m.closeCompletedSlot(ctx, slot, result.response.MatchedAt)
+}
+
+func (m *Manager) runCompletion(ctx context.Context, slotNumber int, paneID, ticketID string, matchedAt time.Time) {
+	timeout := m.config.Worker.CompleteTimeout
+	if timeout <= 0 {
+		timeout = defaultCompleteTimeout
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	result := m.completionRunner.Run(runCtx, CompletionRequest{
+		Command: append([]string(nil), m.config.Worker.CompleteCommand...), TicketID: ticketID, CWD: m.cwd,
+	})
+	completed := completionRunResult{slotNumber: slotNumber, paneID: paneID, ticketID: ticketID, matchedAt: matchedAt, result: result}
+	select {
+	case m.completionResults <- completed:
+	case <-ctx.Done():
+	}
+}
+
+func (m *Manager) handleCompletionResult(ctx context.Context, completed completionRunResult) {
+	if ctx.Err() != nil || completed.slotNumber < 1 || completed.slotNumber > len(m.slots) {
+		return
+	}
+	slot := &m.slots[completed.slotNumber-1]
+	if slot.state != slotCompleting || slot.paneID != completed.paneID || slot.ticketID != completed.ticketID {
+		return
+	}
+	if completed.result.Err != nil {
+		slot.state = slotCompletionFailed
+		slot.lastError = completed.result.Err.Error()
+		if completed.result.Output != "" {
+			slot.lastError += ": " + completed.result.Output
+		}
+		m.logf("complete ticket failed slot=%d pane=%s ticket=%s error=%s", slot.number, slot.paneID, slot.ticketID, slot.lastError)
+		return
+	}
+	m.logf("complete ticket succeeded slot=%d pane=%s ticket=%s", slot.number, slot.paneID, slot.ticketID)
+	m.closeCompletedSlot(ctx, slot, completed.matchedAt)
+}
+
+func (m *Manager) closeCompletedSlot(ctx context.Context, slot *workerSlot, matchedAt time.Time) {
 	m.logf("close slot=%d pane=%s", slot.number, slot.paneID)
 	if m.beforeClose != nil {
 		m.beforeClose()
@@ -299,6 +395,7 @@ func (m *Manager) handleWatchResult(ctx context.Context, result watchResult) {
 		return
 	}
 	if _, err := m.client.ClosePane(ctx, slot.paneID); err != nil {
+		slot.state = slotOccupied
 		slot.lastError = err.Error()
 		m.logf("close failed slot=%d pane=%s error=%v", slot.number, slot.paneID, err)
 		response, inspectErr := m.client.InspectRuntime(ctx)
@@ -310,12 +407,38 @@ func (m *Manager) handleWatchResult(ctx context.Context, result watchResult) {
 			return
 		}
 		m.logf("already closed slot=%d pane=%s", slot.number, slot.paneID)
-		m.completeSlot(slot, result.response.MatchedAt)
+		m.completeSlot(slot, matchedAt)
 		return
 	}
 
 	m.logf("closed slot=%d pane=%s", slot.number, slot.paneID)
-	m.completeSlot(slot, result.response.MatchedAt)
+	m.completeSlot(slot, matchedAt)
+}
+
+func (m *Manager) reconcileFailedSlots(ctx context.Context) {
+	hasFailed := false
+	for i := range m.slots {
+		if m.slots[i].state == slotCompletionFailed {
+			hasFailed = true
+			break
+		}
+	}
+	if !hasFailed || ctx.Err() != nil {
+		return
+	}
+	response, err := m.client.InspectRuntime(ctx)
+	if err != nil {
+		m.logf("completion reconciliation failed error=%v", err)
+		return
+	}
+	for i := range m.slots {
+		slot := &m.slots[i]
+		if slot.state != slotCompletionFailed || m.runtimeHasPane(response, slot.paneID, "starting", "running") {
+			continue
+		}
+		m.logf("completion manually reconciled slot=%d pane=%s ticket=%s", slot.number, slot.paneID, slot.ticketID)
+		m.completeSlot(slot, time.Time{})
+	}
 }
 
 func (m *Manager) completeSlot(slot *workerSlot, matchedAt time.Time) {
@@ -326,6 +449,7 @@ func (m *Manager) completeSlot(slot *workerSlot, matchedAt time.Time) {
 	slot.paneID = ""
 	slot.state = slotEmpty
 	slot.lastError = ""
+	slot.ticketID = ""
 }
 
 func (m *Manager) logf(format string, args ...any) {
@@ -362,6 +486,14 @@ func validateManagerConfig(cfg Config) error {
 	}
 	if marker == "" {
 		return fmt.Errorf("worker.completion_marker must not be empty")
+	}
+	for i, arg := range cfg.Worker.CompleteCommand {
+		if strings.TrimSpace(arg) == "" {
+			return fmt.Errorf("worker.complete_command[%d] must not be empty", i)
+		}
+	}
+	if len(cfg.Worker.CompleteCommand) > 0 && cfg.Worker.CompleteTimeout < 0 {
+		return fmt.Errorf("worker.complete_timeout must not be negative")
 	}
 	return nil
 }

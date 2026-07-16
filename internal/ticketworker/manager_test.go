@@ -156,6 +156,127 @@ func TestManagerCompletesAndRefillsOnNextTick(t *testing.T) {
 	}
 }
 
+func TestManagerRunsCompletionCommandBeforeClose(t *testing.T) {
+	client := newFakeManagerClient()
+	runner := newFakeCompletionRunner()
+	manager := newCompletionTestManager(t, client, make(chan time.Time), runner)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go manager.Run(ctx)
+
+	client.waitForCreates(t, 1)
+	client.waitForWatches(t, 1)
+	client.assertPrefixWatch(t, "ticket-worker-slot-1-0001", "DONE ")
+	client.matchStructured("ticket-worker-slot-1-0001", "DONE ticket_id=TICKET-123")
+
+	req := runner.waitForRequest(t)
+	if !reflect.DeepEqual(req.Command, []string{"ticket", "complete"}) || req.TicketID != "TICKET-123" || req.CWD != "/repo" {
+		t.Fatalf("completion request = %+v", req)
+	}
+	client.assertCloseCount(t, 0)
+	runner.respond(CompletionResult{})
+	client.waitForCloses(t, 1)
+}
+
+func TestManagerCompletionFailureIsNotRetriedAndManualCloseRefills(t *testing.T) {
+	client := newFakeManagerClient()
+	client.setDefaultInspection(workerInspection("ticket-worker-slot-1-0001"))
+	runner := newFakeCompletionRunner()
+	ticks := make(chan time.Time, 2)
+	manager := newCompletionTestManager(t, client, ticks, runner)
+	events := newManagerEventBarrier(manager)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go manager.Run(ctx)
+
+	client.waitForCreates(t, 1)
+	client.matchStructured("ticket-worker-slot-1-0001", "DONE ticket_id=TICKET-123")
+	runner.waitForRequest(t)
+	events.wait(t)
+	runner.respond(CompletionResult{Output: "ticket API failed", Err: errors.New("exit status 1")})
+	events.wait(t)
+	client.assertCloseCount(t, 0)
+
+	ticks <- time.Unix(101, 0)
+	events.wait(t)
+	runner.assertRequestCount(t, 1)
+	client.assertCreateCount(t, 1)
+
+	client.setDefaultInspection(validAnchorInspection())
+	ticks <- time.Unix(102, 0)
+	client.waitForCreates(t, 2)
+	runner.assertRequestCount(t, 1)
+}
+
+func TestManagerMalformedCompletionLineDoesNotRunOrClose(t *testing.T) {
+	client := newFakeManagerClient()
+	runner := newFakeCompletionRunner()
+	manager := newCompletionTestManager(t, client, make(chan time.Time), runner)
+	events := newManagerEventBarrier(manager)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go manager.Run(ctx)
+
+	client.waitForCreates(t, 1)
+	client.matchStructured("ticket-worker-slot-1-0001", "DONE ticket_id=BAD ID")
+	events.wait(t)
+	runner.assertRequestCount(t, 0)
+	client.assertCloseCount(t, 0)
+}
+
+func TestManagerCompletionTimeoutPreservesPane(t *testing.T) {
+	client := newFakeManagerClient()
+	runner := newFakeCompletionRunner()
+	manager := newCompletionTestManager(t, client, make(chan time.Time), runner)
+	manager.config.Worker.CompleteTimeout = 25 * time.Millisecond
+	events := newManagerEventBarrier(manager)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go manager.Run(ctx)
+
+	client.waitForCreates(t, 1)
+	client.matchStructured("ticket-worker-slot-1-0001", "DONE ticket_id=TICKET-123")
+	runner.waitForRequest(t)
+	events.wait(t)
+	events.wait(t)
+
+	client.assertCloseCount(t, 0)
+	if got := manager.slots[0].state; got != slotCompletionFailed {
+		t.Fatalf("slot state = %v, want completion failed", got)
+	}
+}
+
+func TestManagerReconcilesOnlyActiveFailedWorkerIdentity(t *testing.T) {
+	tests := []struct {
+		name       string
+		inspection transport.InspectRuntimeResponse
+		wantState  slotState
+	}{
+		{name: "active", inspection: workerInspection("ticket-worker-slot-1-0001"), wantState: slotCompletionFailed},
+		{name: "absent", inspection: validAnchorInspection(), wantState: slotEmpty},
+		{name: "closed", inspection: failedWorkerInspection("tickets", "physical-a", "closed"), wantState: slotEmpty},
+		{name: "exited", inspection: failedWorkerInspection("tickets", "physical-a", "exited"), wantState: slotEmpty},
+		{name: "wrong task", inspection: failedWorkerInspection("other", "physical-a", "running"), wantState: slotEmpty},
+		{name: "wrong session", inspection: failedWorkerInspection("tickets", "other", "running"), wantState: slotEmpty},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := newFakeManagerClient()
+			client.setDefaultInspection(test.inspection)
+			manager := newCompletionTestManager(t, client, make(chan time.Time), newFakeCompletionRunner())
+			manager.slots[0].state = slotCompletionFailed
+			manager.slots[0].paneID = "ticket-worker-slot-1-0001"
+			manager.slots[0].ticketID = "TICKET-123"
+
+			manager.reconcileFailedSlots(context.Background())
+
+			if got := manager.slots[0].state; got != test.wantState {
+				t.Fatalf("slot state = %v, want %v", got, test.wantState)
+			}
+		})
+	}
+}
+
 func TestManagerRetriesCreateFailureOnTickWithNewID(t *testing.T) {
 	client := newFakeManagerClient()
 	client.failNextCreates(1)
@@ -405,6 +526,26 @@ func newTestManager(t *testing.T, client ManagerClient, ticks <-chan time.Time, 
 	return manager
 }
 
+func newCompletionTestManager(t *testing.T, client ManagerClient, ticks <-chan time.Time, runner CompletionRunner) *Manager {
+	t.Helper()
+	manager, err := NewManager(ManagerOptions{
+		Client: client,
+		Config: Config{MaxWorkers: 1, PollInterval: time.Second, Worker: WorkerConfig{
+			Command:          []string{"worker", "--once"},
+			CompletionMarker: "DONE",
+			CompleteCommand:  []string{"ticket", "complete"},
+			CompleteTimeout:  time.Second,
+		}},
+		TaskID: "tickets", AnchorPaneID: "ticket-worker-manager", CWD: "/repo",
+		ZellijSession: "physical-a", Tick: ticks,
+		Now: func() time.Time { return time.Unix(100, 0) }, CompletionRunner: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manager
+}
+
 func validAnchorInspection() transport.InspectRuntimeResponse {
 	return transport.InspectRuntimeResponse{Panes: []transport.Pane{{
 		ID:        "ticket-worker-manager",
@@ -421,6 +562,14 @@ func workerInspection(paneID string) transport.InspectRuntimeResponse {
 		TaskID:    "tickets",
 		SessionID: "physical-a",
 		Status:    "running",
+	})
+	return response
+}
+
+func failedWorkerInspection(taskID, sessionID, status string) transport.InspectRuntimeResponse {
+	response := validAnchorInspection()
+	response.Panes = append(response.Panes, transport.Pane{
+		ID: "ticket-worker-slot-1-0001", TaskID: taskID, SessionID: sessionID, Status: status,
 	})
 	return response
 }
@@ -476,6 +625,54 @@ type fakeWatchResult struct {
 type fakeInspectionResult struct {
 	response transport.InspectRuntimeResponse
 	err      error
+}
+
+type fakeCompletionRunner struct {
+	mu       sync.Mutex
+	requests []CompletionRequest
+	request  chan CompletionRequest
+	results  chan CompletionResult
+}
+
+func newFakeCompletionRunner() *fakeCompletionRunner {
+	return &fakeCompletionRunner{request: make(chan CompletionRequest, 4), results: make(chan CompletionResult, 4)}
+}
+
+func (f *fakeCompletionRunner) Run(ctx context.Context, req CompletionRequest) CompletionResult {
+	f.mu.Lock()
+	f.requests = append(f.requests, req)
+	f.mu.Unlock()
+	f.request <- req
+	select {
+	case result := <-f.results:
+		return result
+	case <-ctx.Done():
+		return CompletionResult{Err: ctx.Err()}
+	}
+}
+
+func (f *fakeCompletionRunner) waitForRequest(t *testing.T) CompletionRequest {
+	t.Helper()
+	select {
+	case req := <-f.request:
+		return req
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for completion request")
+		return CompletionRequest{}
+	}
+}
+
+func (f *fakeCompletionRunner) respond(result CompletionResult) {
+	f.results <- result
+}
+
+func (f *fakeCompletionRunner) assertRequestCount(t *testing.T, want int) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if got := len(f.requests); got != want {
+		t.Fatalf("completion request count = %d, want %d", got, want)
+	}
 }
 
 type fakeManagerClient struct {
@@ -614,6 +811,12 @@ func (f *fakeManagerClient) match(paneID string) {
 	f.sendWatch(paneID, fakeWatchResult{response: transport.WaitForOutputMarkerResponse{PaneID: paneID, Marker: "DONE", MatchedAt: time.Unix(100, 0)}})
 }
 
+func (f *fakeManagerClient) matchStructured(paneID, line string) {
+	f.sendWatch(paneID, fakeWatchResult{response: transport.WaitForOutputMarkerResponse{
+		PaneID: paneID, Marker: "DONE ", MatchedLine: line, MatchedAt: time.Unix(100, 0),
+	}})
+}
+
 func (f *fakeManagerClient) failWatch(paneID string) {
 	f.sendWatch(paneID, fakeWatchResult{err: errors.New("watch failed")})
 }
@@ -687,6 +890,16 @@ func (f *fakeManagerClient) assertWatchMarker(t *testing.T, paneID, want string)
 	requests := f.watchRequests[paneID]
 	if len(requests) != 1 || requests[0].Marker != want {
 		t.Fatalf("watch requests for %s = %+v, want one request with marker %q", paneID, requests, want)
+	}
+}
+
+func (f *fakeManagerClient) assertPrefixWatch(t *testing.T, paneID, want string) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	requests := f.watchRequests[paneID]
+	if len(requests) != 1 || requests[0].Marker != want || !requests[0].MatchPrefix {
+		t.Fatalf("watch requests for %s = %+v, want one prefix request with marker %q", paneID, requests, want)
 	}
 }
 
