@@ -1,7 +1,9 @@
 package chrome
 
 import (
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -116,6 +118,27 @@ func TestBuildPlanPassesSupervisorChromeArgs(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("command = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildPlanRejectsForwardedZellijSessionOverride(t *testing.T) {
+	for _, args := range [][]string{
+		{"--port", "9333", "--zellij-session", "physical-b", "--no-launch"},
+		{"--port", "9333", "--zellij-session=physical-b", "--no-launch"},
+		{"--port", "9333", "-zellij-session", "physical-b", "--no-launch"},
+		{"--port", "9333", "-zellij-session=physical-b", "--no-launch"},
+	} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			_, err := BuildPlan(PlanRequest{
+				CWD:            "/repo",
+				ZellijSession:  "physical-a",
+				RoleCommand:    []string{"zellij-agent", "role"},
+				TabNetworkArgs: args,
+			})
+			if !errors.Is(err, ErrInvalidPlanRequest) || !strings.Contains(err.Error(), "--zellij-session") {
+				t.Fatalf("BuildPlan() error = %v, want reserved zellij-session error", err)
+			}
+		})
 	}
 }
 

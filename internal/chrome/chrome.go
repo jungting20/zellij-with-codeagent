@@ -27,6 +27,9 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 	if cwd == "" {
 		return transport.ExecutionPlanPayload{}, fmt.Errorf("%w: cwd is required", ErrInvalidPlanRequest)
 	}
+	if err := validateTabNetworkArgs(req.TabNetworkArgs); err != nil {
+		return transport.ExecutionPlanPayload{}, err
+	}
 
 	session := strings.TrimSpace(req.Session)
 	if session == "" {
@@ -78,6 +81,16 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 			},
 		},
 	}, nil
+}
+
+func validateTabNetworkArgs(args []string) error {
+	for _, arg := range args {
+		if arg == "--zellij-session" || strings.HasPrefix(arg, "--zellij-session=") ||
+			arg == "-zellij-session" || strings.HasPrefix(arg, "-zellij-session=") {
+			return fmt.Errorf("%w: tab-network args may not set --zellij-session", ErrInvalidPlanRequest)
+		}
+	}
+	return nil
 }
 
 func RequestID(session string) string {
