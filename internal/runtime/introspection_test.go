@@ -18,17 +18,19 @@ func TestInspectRuntimeGroupsPanesAndOutputSummaries(t *testing.T) {
 	service := newIntrospectionTestService(backend, nil)
 
 	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{
-		ID:      "pane-a",
-		TaskID:  "task-1",
-		Role:    "coder",
-		Command: []string{"bash"},
+		ID:            "pane-a",
+		ZellijSession: "test-session",
+		TaskID:        "task-1",
+		Role:          "coder",
+		Command:       []string{"bash"},
 	}); err != nil {
 		t.Fatalf("CreatePane(pane-a) error = %v", err)
 	}
 	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{
-		ID:     "pane-b",
-		TaskID: "task-2",
-		Role:   "test",
+		ID:            "pane-b",
+		ZellijSession: "test-session",
+		TaskID:        "task-2",
+		Role:          "test",
 	}); err != nil {
 		t.Fatalf("CreatePane(pane-b) error = %v", err)
 	}

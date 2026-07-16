@@ -73,6 +73,11 @@ func NewService(opts Options) *Service {
 }
 
 func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (CreatePaneResponse, error) {
+	req.ZellijSession = strings.TrimSpace(req.ZellijSession)
+	if req.ZellijSession == "" {
+		return CreatePaneResponse{}, ErrZellijSessionRequired
+	}
+
 	id := req.ID
 	if id == "" {
 		id = s.newPaneID()
@@ -101,7 +106,7 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 
 	record, err := s.registry.RegisterPane(registry.RegisterPaneRequest{
 		ID:           registry.PaneID(id),
-		SessionID:    registry.SessionID(s.backend.Session()),
+		SessionID:    registry.SessionID(req.ZellijSession),
 		TabID:        regTabID,
 		TaskID:       registry.TaskID(req.TaskID),
 		AgentID:      registry.AgentID(req.AgentID),
@@ -141,6 +146,9 @@ func (s *Service) resolveCreatePaneTarget(req CreatePaneRequest) (CreatePaneRequ
 	if anchor.Status != registry.PaneStatusStarting && anchor.Status != registry.PaneStatusRunning {
 		return req, fmt.Errorf("%w: anchor %s is %s", ErrInvalidPaneTarget, anchor.ID, anchor.Status)
 	}
+	if string(anchor.SessionID) != req.ZellijSession {
+		return req, fmt.Errorf("%w: anchor %s belongs to zellij session %q", ErrInvalidPaneTarget, anchor.ID, anchor.SessionID)
+	}
 	if anchor.ZellijTabID == nil {
 		return req, fmt.Errorf("%w: anchor %s has no tab", ErrInvalidPaneTarget, anchor.ID)
 	}
@@ -162,6 +170,7 @@ func (s *Service) SubscribeEvents(ctx context.Context) (<-chan eventbus.Event, f
 func (s *Service) createBackendPane(ctx context.Context, req CreatePaneRequest) (zellij.PaneID, *zellij.TabID, string, func(context.Context) error, error) {
 	if req.NewTab {
 		tabID, err := s.backend.CreateTab(ctx, zellij.CreateTabRequest{
+			Session: req.ZellijSession,
 			Name:    req.TabName,
 			CWD:     req.CWD,
 			Command: cloneStrings(req.Command),
@@ -170,10 +179,10 @@ func (s *Service) createBackendPane(ctx context.Context, req CreatePaneRequest) 
 			return "", nil, "", nilCleanup, err
 		}
 
-		pane, err := s.findPaneInTab(ctx, tabID)
+		pane, err := s.findPaneInTab(ctx, req.ZellijSession, tabID)
 		if err != nil {
 			return "", nil, "", func(ctx context.Context) error {
-				return s.backend.CloseTab(ctx, zellij.CloseTabRequest{TabID: &tabID})
+				return s.backend.CloseTab(ctx, zellij.CloseTabRequest{Session: req.ZellijSession, TabID: &tabID})
 			}, err
 		}
 
@@ -183,7 +192,7 @@ func (s *Service) createBackendPane(ctx context.Context, req CreatePaneRequest) 
 		}
 
 		return pane.ID, &tabID, tabName, func(ctx context.Context) error {
-			return s.backend.CloseTab(ctx, zellij.CloseTabRequest{TabID: &tabID})
+			return s.backend.CloseTab(ctx, zellij.CloseTabRequest{Session: req.ZellijSession, TabID: &tabID})
 		}, nil
 	}
 
@@ -194,6 +203,7 @@ func (s *Service) createBackendPane(ctx context.Context, req CreatePaneRequest) 
 	}
 
 	zellijID, err := s.backend.CreatePane(ctx, zellij.CreatePaneRequest{
+		Session: req.ZellijSession,
 		Name:    req.Name,
 		CWD:     req.CWD,
 		TabID:   targetTabID,
@@ -205,14 +215,14 @@ func (s *Service) createBackendPane(ctx context.Context, req CreatePaneRequest) 
 
 	tabID := targetTabID
 	tabName := req.TabName
-	if pane, err := s.findPaneByID(ctx, zellijID); err == nil {
+	if pane, err := s.findPaneByID(ctx, req.ZellijSession, zellijID); err == nil {
 		discoveredTabID := zellij.TabID(pane.TabID)
 		tabID = &discoveredTabID
 		tabName = pane.TabName
 	}
 
 	return zellijID, tabID, tabName, func(ctx context.Context) error {
-		return s.backend.ClosePane(ctx, zellij.ClosePaneRequest{PaneID: zellijID})
+		return s.backend.ClosePane(ctx, zellij.ClosePaneRequest{Session: req.ZellijSession, PaneID: zellijID})
 	}, nil
 }
 
@@ -396,8 +406,8 @@ func formatPaneMessage(from registry.PaneID, messageType, body string) string {
 	return text
 }
 
-func (s *Service) findPaneByID(ctx context.Context, paneID zellij.PaneID) (zellij.Pane, error) {
-	panes, err := s.backend.ListPanes(ctx, zellij.ListPanesRequest{})
+func (s *Service) findPaneByID(ctx context.Context, session string, paneID zellij.PaneID) (zellij.Pane, error) {
+	panes, err := s.backend.ListPanes(ctx, zellij.ListPanesRequest{Session: session})
 	if err != nil {
 		return zellij.Pane{}, err
 	}
@@ -409,8 +419,8 @@ func (s *Service) findPaneByID(ctx context.Context, paneID zellij.PaneID) (zelli
 	return zellij.Pane{}, ErrPaneNotFound
 }
 
-func (s *Service) findPaneInTab(ctx context.Context, tabID zellij.TabID) (zellij.Pane, error) {
-	panes, err := s.backend.ListPanes(ctx, zellij.ListPanesRequest{})
+func (s *Service) findPaneInTab(ctx context.Context, session string, tabID zellij.TabID) (zellij.Pane, error) {
+	panes, err := s.backend.ListPanes(ctx, zellij.ListPanesRequest{Session: session})
 	if err != nil {
 		return zellij.Pane{}, err
 	}

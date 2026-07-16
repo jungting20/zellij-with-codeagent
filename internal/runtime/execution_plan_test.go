@@ -13,6 +13,45 @@ import (
 	"zellij-with-codeagent/internal/zellij"
 )
 
+func TestApplyExecutionPlanRequiresZellijSession(t *testing.T) {
+	service := newTestService(&fakeBackend{})
+
+	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
+		Session: "logical-session",
+		Tabs:    []ExecutionPlanTabSpec{{Panes: []ExecutionPlanPaneSpec{{ID: "pane-a"}}}},
+	})
+	if !errors.Is(err, ErrZellijSessionRequired) {
+		t.Fatalf("ApplyExecutionPlan() error = %v, want %v", err, ErrZellijSessionRequired)
+	}
+}
+
+func TestApplyExecutionPlanPropagatesZellijSession(t *testing.T) {
+	backend := &fakeBackend{
+		createTabID: 11,
+		listPanes: []zellij.Pane{
+			{ID: "terminal_11a", TabID: 11},
+			{ID: "terminal_11b", TabID: 11},
+		},
+		createIDs: []zellij.PaneID{"terminal_11b"},
+	}
+	service := newTestService(backend)
+
+	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
+		Session:       "logical-session",
+		ZellijSession: "session-a",
+		Tabs: []ExecutionPlanTabSpec{{Panes: []ExecutionPlanPaneSpec{
+			{ID: "pane-a"},
+			{ID: "pane-b"},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backend.createTabRequests[0].Session != "session-a" || backend.createRequests[0].Session != "session-a" {
+		t.Fatalf("backend sessions = %q/%q, want session-a/session-a", backend.createTabRequests[0].Session, backend.createRequests[0].Session)
+	}
+}
+
 func TestApplyExecutionPlanCreatesPanesInOneTab(t *testing.T) {
 	tabID := ZellijTabID(11)
 	backend := &fakeBackend{
@@ -26,9 +65,10 @@ func TestApplyExecutionPlanCreatesPanesInOneTab(t *testing.T) {
 	service := newTestService(backend)
 
 	response, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
-		RequestID: "req_123",
-		Session:   "feature-auth",
-		Layout:    "triple-horizontal",
+		RequestID:     "req_123",
+		Session:       "feature-auth",
+		ZellijSession: "test-session",
+		Layout:        "triple-horizontal",
 		Tabs: []ExecutionPlanTabSpec{
 			{
 				Name: "feature-auth",
@@ -70,6 +110,7 @@ func TestApplyExecutionPlanCreatesPanesInOneTab(t *testing.T) {
 		t.Fatalf("CreatePane calls = %d, want 1 after new tab", len(backend.createRequests))
 	}
 	wantSecond := zellij.CreatePaneRequest{
+		Session: "test-session",
 		Name:    "frontend",
 		TabID:   zellijTabID(zellij.TabID(tabID)),
 		Command: DefaultExecutionPlanPaneCommand("frontend"),
@@ -91,9 +132,10 @@ func TestApplyExecutionPlanReusesLogicalIDsAfterCleanup(t *testing.T) {
 	}
 	service := newTestService(backend)
 	request := ApplyExecutionPlanRequest{
-		RequestID: "req_repeat-work",
-		Session:   "repeat-work",
-		Layout:    "triple-horizontal",
+		RequestID:     "req_repeat-work",
+		Session:       "repeat-work",
+		ZellijSession: "test-session",
+		Layout:        "triple-horizontal",
 		Tabs: []ExecutionPlanTabSpec{{
 			Name:  "repeat-work",
 			Panes: []ExecutionPlanPaneSpec{{ID: "coder", Role: "coding-agent"}},
@@ -158,9 +200,10 @@ func TestApplyExecutionPlanCreatesRemainingTabPanesConcurrently(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	response, err := service.ApplyExecutionPlan(ctx, ApplyExecutionPlanRequest{
-		RequestID: "req_123",
-		Session:   "feature-auth",
-		Layout:    "triple-horizontal",
+		RequestID:     "req_123",
+		Session:       "feature-auth",
+		ZellijSession: "test-session",
+		Layout:        "triple-horizontal",
 		Tabs: []ExecutionPlanTabSpec{
 			{
 				Name: "feature-auth",
@@ -198,9 +241,10 @@ func TestApplyExecutionPlanAllowsArbitraryLayoutMetadata(t *testing.T) {
 	service := newTestService(backend)
 
 	response, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
-		RequestID: "req_custom_layout",
-		Session:   "feature-auth",
-		Layout:    "custom-grid",
+		RequestID:     "req_custom_layout",
+		Session:       "feature-auth",
+		ZellijSession: "test-session",
+		Layout:        "custom-grid",
 		Tabs: []ExecutionPlanTabSpec{
 			{
 				Name: "feature-auth",
@@ -230,9 +274,10 @@ func TestApplyExecutionPlanAllowsEmptyLayout(t *testing.T) {
 	service := newTestService(backend)
 
 	response, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
-		RequestID: "req_empty_layout",
-		Session:   "feature-auth",
-		Layout:    "",
+		RequestID:     "req_empty_layout",
+		Session:       "feature-auth",
+		ZellijSession: "test-session",
+		Layout:        "",
 		Tabs: []ExecutionPlanTabSpec{
 			{
 				Name: "feature-auth",
@@ -260,8 +305,9 @@ func TestApplyExecutionPlanRollsBackOnSecondPaneFailure(t *testing.T) {
 	service := newTestService(backend)
 
 	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
-		Session: "feature-auth",
-		Layout:  "triple-horizontal",
+		Session:       "feature-auth",
+		ZellijSession: "test-session",
+		Layout:        "triple-horizontal",
 		Tabs: []ExecutionPlanTabSpec{
 			{
 				Name: "feature-auth",
@@ -283,7 +329,7 @@ func TestApplyExecutionPlanRollsBackOnSecondPaneFailure(t *testing.T) {
 	if len(list.Panes) != 0 {
 		t.Fatalf("ListPanes() = %#v, want empty registry after rollback", list.Panes)
 	}
-	if len(backend.closeRequests) != 1 || backend.closeRequests[0].PaneID != "terminal_3" {
+	if len(backend.closeRequests) != 1 || backend.closeRequests[0].Session != "test-session" || backend.closeRequests[0].PaneID != "terminal_3" {
 		t.Fatalf("ClosePane requests = %#v, want rollback close of first pane", backend.closeRequests)
 	}
 }
@@ -301,7 +347,8 @@ func TestApplyExecutionPlanSendsInitialInputForFirstAndRemainingPanes(t *testing
 	service := newTestService(backend)
 
 	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
-		Session: "goal-prefill",
+		Session:       "goal-prefill",
+		ZellijSession: "test-session",
 		Tabs: []ExecutionPlanTabSpec{{
 			Name: "goal-prefill",
 			Panes: []ExecutionPlanPaneSpec{
@@ -317,8 +364,8 @@ func TestApplyExecutionPlanSendsInitialInputForFirstAndRemainingPanes(t *testing
 	got := append([]zellij.SendInputRequest(nil), backend.sendRequests...)
 	sort.Slice(got, func(i, j int) bool { return got[i].PaneID < got[j].PaneID })
 	want := []zellij.SendInputRequest{
-		{PaneID: "terminal_31a", Text: "fix the parser"},
-		{PaneID: "terminal_31b", Text: "review these notes"},
+		{Session: "test-session", PaneID: "terminal_31a", Text: "fix the parser"},
+		{Session: "test-session", PaneID: "terminal_31b", Text: "review these notes"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("SendInput requests = %#v, want %#v", got, want)
@@ -336,7 +383,8 @@ func TestApplyExecutionPlanSkipsEmptyInitialInput(t *testing.T) {
 	service := newTestService(backend)
 
 	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
-		Session: "empty-prefill",
+		Session:       "empty-prefill",
+		ZellijSession: "test-session",
 		Tabs: []ExecutionPlanTabSpec{{
 			Name:  "empty-prefill",
 			Panes: []ExecutionPlanPaneSpec{{ID: "coder"}},
@@ -362,7 +410,8 @@ func TestApplyExecutionPlanRollsBackOnInitialInputFailure(t *testing.T) {
 	service := newTestService(backend)
 
 	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
-		Session: "failed-prefill",
+		Session:       "failed-prefill",
+		ZellijSession: "test-session",
 		Tabs: []ExecutionPlanTabSpec{{
 			Name: "failed-prefill",
 			Panes: []ExecutionPlanPaneSpec{{
@@ -402,7 +451,8 @@ func TestApplyExecutionPlanRollsBackAllPanesOnRemainingInitialInputFailure(t *te
 	service := newTestService(backend)
 
 	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
-		Session: "failed-remaining-prefill",
+		Session:       "failed-remaining-prefill",
+		ZellijSession: "test-session",
 		Tabs: []ExecutionPlanTabSpec{{
 			Name: "failed-remaining-prefill",
 			Panes: []ExecutionPlanPaneSpec{
@@ -447,7 +497,8 @@ func TestApplyExecutionPlanWaitsForInitialInputReadyText(t *testing.T) {
 	service := newTestService(backend)
 
 	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
-		Session: "ready-prefill",
+		Session:       "ready-prefill",
+		ZellijSession: "test-session",
 		Tabs: []ExecutionPlanTabSpec{{
 			Name: "ready-prefill",
 			Panes: []ExecutionPlanPaneSpec{{
@@ -463,7 +514,12 @@ func TestApplyExecutionPlanWaitsForInitialInputReadyText(t *testing.T) {
 	if len(backend.dumpRequests) != 2 {
 		t.Fatalf("DumpScreen requests = %d, want poll until second snapshot", len(backend.dumpRequests))
 	}
-	wantSend := []zellij.SendInputRequest{{PaneID: "terminal_35a", Text: "fix the parser"}}
+	for _, req := range backend.dumpRequests {
+		if req.Session != "test-session" {
+			t.Fatalf("DumpScreen request session = %q, want test-session", req.Session)
+		}
+	}
+	wantSend := []zellij.SendInputRequest{{Session: "test-session", PaneID: "terminal_35a", Text: "fix the parser"}}
 	if !reflect.DeepEqual(backend.sendRequests, wantSend) {
 		t.Fatalf("SendInput requests = %#v, want %#v after readiness", backend.sendRequests, wantSend)
 	}
@@ -482,7 +538,8 @@ func TestApplyExecutionPlanRetriesSnapshotErrorsUntilInitialInputReady(t *testin
 	service := newTestService(backend)
 
 	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
-		Session: "retry-ready-prefill",
+		Session:       "retry-ready-prefill",
+		ZellijSession: "test-session",
 		Tabs: []ExecutionPlanTabSpec{{
 			Name: "retry-ready-prefill",
 			Panes: []ExecutionPlanPaneSpec{{
@@ -514,7 +571,8 @@ func TestApplyExecutionPlanReadinessTimeoutRollsBackWithFreshContext(t *testing.
 	defer cancel()
 
 	_, err := service.ApplyExecutionPlan(ctx, ApplyExecutionPlanRequest{
-		Session: "timeout-prefill",
+		Session:       "timeout-prefill",
+		ZellijSession: "test-session",
 		Tabs: []ExecutionPlanTabSpec{{
 			Name: "timeout-prefill",
 			Panes: []ExecutionPlanPaneSpec{{

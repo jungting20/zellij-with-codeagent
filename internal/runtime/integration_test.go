@@ -23,11 +23,12 @@ func TestIntegrationCreateSnapshotAndClosePane(t *testing.T) {
 	service, _ := newIntegrationService(t, "integration-pane")
 
 	created, err := service.CreatePane(ctx, CreatePaneRequest{
-		Role:    "test",
-		NewTab:  true,
-		TabName: "agentd-smoke",
-		Command: []string{"sh", "-lc", "printf 'agentd-runtime-smoke\n'; sleep 30"},
-		CWD:     ".",
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+		Role:          "test",
+		NewTab:        true,
+		TabName:       "agentd-smoke",
+		Command:       []string{"sh", "-lc", "printf 'agentd-runtime-smoke\n'; sleep 30"},
+		CWD:           ".",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
@@ -54,11 +55,12 @@ func TestIntegrationCreateNewTabSendInputAndClosePane(t *testing.T) {
 	service, _ := newIntegrationService(t, "integration-input-pane")
 
 	created, err := service.CreatePane(ctx, CreatePaneRequest{
-		Role:    "coder",
-		NewTab:  true,
-		TabName: "agentd-input",
-		Command: []string{"sh"},
-		CWD:     ".",
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+		Role:          "coder",
+		NewTab:        true,
+		TabName:       "agentd-input",
+		Command:       []string{"sh"},
+		CWD:           ".",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
@@ -86,12 +88,13 @@ func TestIntegrationCreatePaneInExistingTabAndClosePane(t *testing.T) {
 	service, _ := newIntegrationService(t, "integration-existing-tab")
 
 	base, err := service.CreatePane(ctx, CreatePaneRequest{
-		ID:      "integration-existing-tab-base",
-		Role:    "test",
-		NewTab:  true,
-		TabName: "agentd-existing-tab",
-		Command: []string{"sh", "-lc", "printf 'agentd-existing-tab-base\n'; sleep 30"},
-		CWD:     ".",
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+		ID:            "integration-existing-tab-base",
+		Role:          "test",
+		NewTab:        true,
+		TabName:       "agentd-existing-tab",
+		Command:       []string{"sh", "-lc", "printf 'agentd-existing-tab-base\n'; sleep 30"},
+		CWD:           ".",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() base error = %v", err)
@@ -104,11 +107,12 @@ func TestIntegrationCreatePaneInExistingTabAndClosePane(t *testing.T) {
 	tabID := *base.Pane.ZellijTabID
 
 	target, err := service.CreatePane(ctx, CreatePaneRequest{
-		ID:          "integration-existing-tab-target",
-		Role:        "test",
-		ZellijTabID: &tabID,
-		Command:     []string{"sh", "-lc", "printf 'agentd-existing-tab-target\n'; sleep 30"},
-		CWD:         ".",
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+		ID:            "integration-existing-tab-target",
+		Role:          "test",
+		ZellijTabID:   &tabID,
+		Command:       []string{"sh", "-lc", "printf 'agentd-existing-tab-target\n'; sleep 30"},
+		CWD:           ".",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() target error = %v", err)
@@ -129,11 +133,12 @@ func TestIntegrationCreatePaneWithoutRuntimeClosePane(t *testing.T) {
 	service, backend := newIntegrationService(t, "integration-open-pane")
 
 	created, err := service.CreatePane(ctx, CreatePaneRequest{
-		Role:    "log",
-		NewTab:  true,
-		TabName: "agentd-left-open",
-		Command: []string{"sh", "-lc", "printf 'agentd-left-open\n'; sleep 30"},
-		CWD:     ".",
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+		Role:          "log",
+		NewTab:        true,
+		TabName:       "agentd-left-open",
+		Command:       []string{"sh", "-lc", "printf 'agentd-left-open\n'; sleep 30"},
+		CWD:           ".",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
@@ -182,13 +187,14 @@ func TestE2ECreateTabAndFourPanesPrintRegistry(t *testing.T) {
 	tabName := "agentd-e2e-four-panes"
 
 	first, err := service.CreatePane(ctx, CreatePaneRequest{
-		ID:      "e2e-pane-1",
-		Role:    "coder",
-		Name:    "e2e-pane-1",
-		NewTab:  true,
-		TabName: tabName,
-		Command: e2ePaneCommand("agentd-e2e-pane-1"),
-		CWD:     ".",
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+		ID:            "e2e-pane-1",
+		Role:          "coder",
+		Name:          "e2e-pane-1",
+		NewTab:        true,
+		TabName:       tabName,
+		Command:       e2ePaneCommand("agentd-e2e-pane-1"),
+		CWD:           ".",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() first error = %v", err)
@@ -210,12 +216,13 @@ func TestE2ECreateTabAndFourPanesPrintRegistry(t *testing.T) {
 	}
 	for _, req := range requests {
 		created, err := service.CreatePane(ctx, CreatePaneRequest{
-			ID:          req.id,
-			Role:        req.role,
-			Name:        string(req.id),
-			ZellijTabID: &tabID,
-			Command:     e2ePaneCommand(req.marker),
-			CWD:         ".",
+			ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+			ID:            req.id,
+			Role:          req.role,
+			Name:          string(req.id),
+			ZellijTabID:   &tabID,
+			Command:       e2ePaneCommand(req.marker),
+			CWD:           ".",
 		})
 		if err != nil {
 			t.Fatalf("CreatePane() %s error = %v", req.id, err)
@@ -291,13 +298,14 @@ func TestE2EClosePaneWhenManualPhraseObserved(t *testing.T) {
 	panes := make([]Pane, 0, 4)
 	tabName := "agentd-e2e-close-on-input"
 	first, err := service.CreatePane(ctx, CreatePaneRequest{
-		ID:      "e2e-close-input-pane-1",
-		Role:    "coder",
-		Name:    "e2e-close-input-pane-1",
-		NewTab:  true,
-		TabName: tabName,
-		Command: e2eManualInputCommand(trigger),
-		CWD:     ".",
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+		ID:            "e2e-close-input-pane-1",
+		Role:          "coder",
+		Name:          "e2e-close-input-pane-1",
+		NewTab:        true,
+		TabName:       tabName,
+		Command:       e2eManualInputCommand(trigger),
+		CWD:           ".",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() first error = %v", err)
@@ -318,12 +326,13 @@ func TestE2EClosePaneWhenManualPhraseObserved(t *testing.T) {
 	}
 	for _, req := range requests {
 		created, err := service.CreatePane(ctx, CreatePaneRequest{
-			ID:          req.id,
-			Role:        req.role,
-			Name:        string(req.id),
-			ZellijTabID: &tabID,
-			Command:     e2eManualInputCommand(trigger),
-			CWD:         ".",
+			ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+			ID:            req.id,
+			Role:          req.role,
+			Name:          string(req.id),
+			ZellijTabID:   &tabID,
+			Command:       e2eManualInputCommand(trigger),
+			CWD:           ".",
 		})
 		if err != nil {
 			t.Fatalf("CreatePane() %s error = %v", req.id, err)
@@ -388,15 +397,16 @@ func TestE2EPlannerScenarioEventMonitorAndSixPanes(t *testing.T) {
 	tabName := "agentd-e2e-planner-scenario"
 	panes := make([]Pane, 0, 6)
 	first, err := service.CreatePane(ctx, CreatePaneRequest{
-		ID:      "planner-e2e-coder",
-		TaskID:  "planner-e2e-task",
-		AgentID: "planner-agent",
-		Role:    "coder",
-		Name:    "planner-e2e-coder",
-		NewTab:  true,
-		TabName: tabName,
-		Command: e2ePlannerPaneCommand("planner-e2e-coder"),
-		CWD:     ".",
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+		ID:            "planner-e2e-coder",
+		TaskID:        "planner-e2e-task",
+		AgentID:       "planner-agent",
+		Role:          "coder",
+		Name:          "planner-e2e-coder",
+		NewTab:        true,
+		TabName:       tabName,
+		Command:       e2ePlannerPaneCommand("planner-e2e-coder"),
+		CWD:           ".",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() first error = %v", err)
@@ -409,6 +419,7 @@ func TestE2EPlannerScenarioEventMonitorAndSixPanes(t *testing.T) {
 	panes = append(panes, first.Pane)
 
 	monitorPaneID, err := backend.CreatePane(ctx, zellij.CreatePaneRequest{
+		Session:  os.Getenv("ZELLIJ_SESSION_NAME"),
 		Name:     "planner-e2e-eventbus-monitor",
 		TabID:    &zellijTabID,
 		Floating: true,
@@ -432,14 +443,15 @@ func TestE2EPlannerScenarioEventMonitorAndSixPanes(t *testing.T) {
 	}
 	for _, req := range requests {
 		created, err := service.CreatePane(ctx, CreatePaneRequest{
-			ID:          req.id,
-			TaskID:      "planner-e2e-task",
-			AgentID:     "planner-agent",
-			Role:        req.role,
-			Name:        string(req.id),
-			ZellijTabID: &tabID,
-			Command:     e2ePlannerPaneCommand(string(req.id)),
-			CWD:         ".",
+			ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+			ID:            req.id,
+			TaskID:        "planner-e2e-task",
+			AgentID:       "planner-agent",
+			Role:          req.role,
+			Name:          string(req.id),
+			ZellijTabID:   &tabID,
+			Command:       e2ePlannerPaneCommand(string(req.id)),
+			CWD:           ".",
 		})
 		if err != nil {
 			t.Fatalf("CreatePane() %s error = %v", req.id, err)
@@ -567,11 +579,12 @@ func TestIntegrationSubscribeEmitsRawOutput(t *testing.T) {
 
 	marker := "agentd-subscribe-marker"
 	created, err := service.CreatePane(ctx, CreatePaneRequest{
-		Role:    "log",
-		NewTab:  true,
-		TabName: "agentd-subscribe",
-		Command: []string{"sh", "-lc", fmt.Sprintf("printf '%s\\n'; sleep 30", marker)},
-		CWD:     ".",
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+		Role:          "log",
+		NewTab:        true,
+		TabName:       "agentd-subscribe",
+		Command:       []string{"sh", "-lc", fmt.Sprintf("printf '%s\\n'; sleep 30", marker)},
+		CWD:           ".",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
@@ -598,12 +611,13 @@ func TestIntegrationReconcileMarksExternallyClosedPaneTerminal(t *testing.T) {
 	service, backend := newIntegrationService(t, "integration-reconcile-unused")
 
 	created, err := service.CreatePane(ctx, CreatePaneRequest{
-		ID:      "integration-reconcile-lost",
-		Role:    "test",
-		NewTab:  true,
-		TabName: "agentd-reconcile",
-		Command: []string{"sh", "-lc", "printf 'agentd-reconcile-lost\n'; sleep 30"},
-		CWD:     ".",
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+		ID:            "integration-reconcile-lost",
+		Role:          "test",
+		NewTab:        true,
+		TabName:       "agentd-reconcile",
+		Command:       []string{"sh", "-lc", "printf 'agentd-reconcile-lost\n'; sleep 30"},
+		CWD:           ".",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
@@ -651,12 +665,13 @@ func TestIntegrationCleanupClosesManagedPanesOnly(t *testing.T) {
 	service, backend := newIntegrationService(t, "integration-cleanup-unused")
 
 	first, err := service.CreatePane(ctx, CreatePaneRequest{
-		ID:      "integration-cleanup-managed-1",
-		Role:    "test",
-		NewTab:  true,
-		TabName: "agentd-cleanup",
-		Command: []string{"sh", "-lc", "printf 'agentd-cleanup-managed-1\n'; sleep 30"},
-		CWD:     ".",
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+		ID:            "integration-cleanup-managed-1",
+		Role:          "test",
+		NewTab:        true,
+		TabName:       "agentd-cleanup",
+		Command:       []string{"sh", "-lc", "printf 'agentd-cleanup-managed-1\n'; sleep 30"},
+		CWD:           ".",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() first error = %v", err)
@@ -675,17 +690,19 @@ func TestIntegrationCleanupClosesManagedPanesOnly(t *testing.T) {
 
 	runtimeTabID := ZellijTabID(tabID)
 	second, err := service.CreatePane(ctx, CreatePaneRequest{
-		ID:          "integration-cleanup-managed-2",
-		Role:        "build",
-		ZellijTabID: &runtimeTabID,
-		Command:     []string{"sh", "-lc", "printf 'agentd-cleanup-managed-2\n'; sleep 30"},
-		CWD:         ".",
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+		ID:            "integration-cleanup-managed-2",
+		Role:          "build",
+		ZellijTabID:   &runtimeTabID,
+		Command:       []string{"sh", "-lc", "printf 'agentd-cleanup-managed-2\n'; sleep 30"},
+		CWD:           ".",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() second error = %v", err)
 	}
 
 	unmanagedID, err := backend.CreatePane(ctx, zellij.CreatePaneRequest{
+		Session: os.Getenv("ZELLIJ_SESSION_NAME"),
 		TabID:   &tabID,
 		Command: []string{"sh", "-lc", "printf 'agentd-cleanup-unmanaged\n'; sleep 30"},
 		CWD:     ".",
@@ -927,13 +944,14 @@ func TestIntegrationCreatePaneWithAgentRoles(t *testing.T) {
 	projectRoot := filepath.Clean(filepath.Join(wd, "../.."))
 
 	createdCoder, err := service.CreatePane(ctx, CreatePaneRequest{
-		ID:      "integration-agent-role-coder",
-		Role:    "coder",
-		Name:    "coder-role",
-		NewTab:  true,
-		TabName: "agent-roles-test",
-		Command: []string{"./bin/agent-role", "coder"},
-		CWD:     projectRoot,
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+		ID:            "integration-agent-role-coder",
+		Role:          "coder",
+		Name:          "coder-role",
+		NewTab:        true,
+		TabName:       "agent-roles-test",
+		Command:       []string{"./bin/agent-role", "coder"},
+		CWD:           projectRoot,
 	})
 	if err != nil {
 		t.Fatalf("CreatePane(coder) error = %v", err)
@@ -946,12 +964,13 @@ func TestIntegrationCreatePaneWithAgentRoles(t *testing.T) {
 	defer closeIntegrationPane(t, service, createdCoder.Pane.ID)
 
 	createdNetwork, err := service.CreatePane(ctx, CreatePaneRequest{
-		ID:          "integration-agent-role-network",
-		Role:        "network-tracker",
-		Name:        "network-role",
-		ZellijTabID: &tabID,
-		Command:     []string{"./bin/agent-role", "network-tracker", "--url", "https://html5test.co"},
-		CWD:         projectRoot,
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+		ID:            "integration-agent-role-network",
+		Role:          "network-tracker",
+		Name:          "network-role",
+		ZellijTabID:   &tabID,
+		Command:       []string{"./bin/agent-role", "network-tracker", "--url", "https://html5test.co"},
+		CWD:           projectRoot,
 	})
 	if err != nil {
 		t.Fatalf("CreatePane(network-tracker) error = %v", err)
@@ -959,12 +978,13 @@ func TestIntegrationCreatePaneWithAgentRoles(t *testing.T) {
 	defer closeIntegrationPane(t, service, createdNetwork.Pane.ID)
 
 	createdConsole, err := service.CreatePane(ctx, CreatePaneRequest{
-		ID:          "integration-agent-role-console",
-		Role:        "console-tracker",
-		Name:        "console-role",
-		ZellijTabID: &tabID,
-		Command:     []string{"./bin/agent-role", "console-tracker", "--url", "https://html5test.co"},
-		CWD:         projectRoot,
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"),
+		ID:            "integration-agent-role-console",
+		Role:          "console-tracker",
+		Name:          "console-role",
+		ZellijTabID:   &tabID,
+		Command:       []string{"./bin/agent-role", "console-tracker", "--url", "https://html5test.co"},
+		CWD:           projectRoot,
 	})
 	if err != nil {
 		t.Fatalf("CreatePane(console-tracker) error = %v", err)

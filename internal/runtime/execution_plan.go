@@ -34,10 +34,11 @@ type ExecutionPlanTabSpec struct {
 }
 
 type ApplyExecutionPlanRequest struct {
-	RequestID string
-	Session   string
-	Layout    string
-	Tabs      []ExecutionPlanTabSpec
+	RequestID     string
+	Session       string
+	ZellijSession string
+	Layout        string
+	Tabs          []ExecutionPlanTabSpec
 }
 
 type ExecutionPlanTabResult struct {
@@ -83,15 +84,16 @@ func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlan
 
 		firstSpec := tabSpec.Panes[0]
 		response, err := s.CreatePane(ctx, CreatePaneRequest{
-			ID:      firstSpec.ID,
-			TaskID:  taskID,
-			AgentID: firstSpec.AgentID,
-			Role:    firstSpec.Role,
-			Name:    string(firstSpec.ID),
-			NewTab:  true,
-			TabName: tabName,
-			CWD:     firstSpec.CWD,
-			Command: executionPlanCommand(firstSpec),
+			ID:            firstSpec.ID,
+			TaskID:        taskID,
+			AgentID:       firstSpec.AgentID,
+			Role:          firstSpec.Role,
+			Name:          string(firstSpec.ID),
+			ZellijSession: req.ZellijSession,
+			NewTab:        true,
+			TabName:       tabName,
+			CWD:           firstSpec.CWD,
+			Command:       executionPlanCommand(firstSpec),
 		})
 		if err != nil {
 			_ = s.rollbackExecutionPlan(ctx, createdAll)
@@ -111,7 +113,7 @@ func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlan
 				_ = s.rollbackExecutionPlan(ctx, createdAll)
 				return ApplyExecutionPlanResponse{}, fmt.Errorf("%w: first pane missing zellij tab id in tab %q", ErrInvalidExecutionPlan, tabName)
 			}
-			remaining, err := s.createRemainingExecutionPlanTabPanes(ctx, taskID, tabName, *tabID, tabSpec.Panes[1:])
+			remaining, err := s.createRemainingExecutionPlanTabPanes(ctx, req.ZellijSession, taskID, tabName, *tabID, tabSpec.Panes[1:])
 			if err != nil {
 				_ = s.rollbackExecutionPlan(ctx, append(createdAll, remaining...))
 				return ApplyExecutionPlanResponse{}, err
@@ -136,7 +138,7 @@ func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlan
 	}, nil
 }
 
-func (s *Service) createRemainingExecutionPlanTabPanes(ctx context.Context, taskID TaskID, tabName string, tabID ZellijTabID, specs []ExecutionPlanPaneSpec) ([]createdExecutionPlanPane, error) {
+func (s *Service) createRemainingExecutionPlanTabPanes(ctx context.Context, zellijSession string, taskID TaskID, tabName string, tabID ZellijTabID, specs []ExecutionPlanPaneSpec) ([]createdExecutionPlanPane, error) {
 	if len(specs) == 0 {
 		return nil, nil
 	}
@@ -152,15 +154,16 @@ func (s *Service) createRemainingExecutionPlanTabPanes(ctx context.Context, task
 		go func() {
 			defer wg.Done()
 			response, err := s.CreatePane(ctx, CreatePaneRequest{
-				ID:          spec.ID,
-				TaskID:      taskID,
-				AgentID:     spec.AgentID,
-				Role:        spec.Role,
-				Name:        string(spec.ID),
-				TabName:     tabName,
-				ZellijTabID: &tabID,
-				CWD:         spec.CWD,
-				Command:     executionPlanCommand(spec),
+				ID:            spec.ID,
+				TaskID:        taskID,
+				AgentID:       spec.AgentID,
+				Role:          spec.Role,
+				Name:          string(spec.ID),
+				ZellijSession: zellijSession,
+				TabName:       tabName,
+				ZellijTabID:   &tabID,
+				CWD:           spec.CWD,
+				Command:       executionPlanCommand(spec),
 			})
 			if err != nil {
 				cancel()
@@ -213,8 +216,9 @@ func (s *Service) sendExecutionPlanInitialInput(ctx context.Context, created cre
 		return fmt.Errorf("send initial input to pane %q: %w", created.pane.ID, registry.ErrStaleRecord)
 	}
 	if err := s.backend.SendInput(ctx, zellij.SendInputRequest{
-		PaneID: zellij.PaneID(created.record.ZellijPaneID),
-		Text:   initialInput,
+		Session: string(created.record.SessionID),
+		PaneID:  zellij.PaneID(created.record.ZellijPaneID),
+		Text:    initialInput,
 	}); err != nil {
 		_, _ = s.registry.UpdatePaneStatusGeneration(created.record.ID, created.record.Generation, registry.PaneStatusError, err.Error())
 		return fmt.Errorf("send initial input to pane %q: %w", created.pane.ID, err)
@@ -232,7 +236,8 @@ func (s *Service) waitForExecutionPlanInitialInputReady(ctx context.Context, cre
 	var lastErr error
 	for {
 		output, err := s.backend.DumpScreen(ctx, zellij.DumpScreenRequest{
-			PaneID: zellij.PaneID(created.record.ZellijPaneID),
+			Session: string(created.record.SessionID),
+			PaneID:  zellij.PaneID(created.record.ZellijPaneID),
 		})
 		if err == nil && strings.Contains(output, readyText) {
 			return nil
@@ -254,6 +259,9 @@ func (s *Service) waitForExecutionPlanInitialInputReady(ctx context.Context, cre
 }
 
 func validateExecutionPlan(req ApplyExecutionPlanRequest) error {
+	if strings.TrimSpace(req.ZellijSession) == "" {
+		return ErrZellijSessionRequired
+	}
 	if req.Session == "" {
 		return fmt.Errorf("%w: session is required", ErrInvalidExecutionPlan)
 	}
@@ -300,7 +308,7 @@ func (s *Service) rollbackExecutionPlan(ctx context.Context, created []createdEx
 
 	var rollbackErr error
 	for _, createdPane := range created {
-		if err := s.backend.ClosePane(rollbackCtx, zellij.ClosePaneRequest{PaneID: zellij.PaneID(createdPane.record.ZellijPaneID)}); err != nil {
+		if err := s.backend.ClosePane(rollbackCtx, zellij.ClosePaneRequest{Session: string(createdPane.record.SessionID), PaneID: zellij.PaneID(createdPane.record.ZellijPaneID)}); err != nil {
 			rollbackErr = errors.Join(rollbackErr, err)
 		}
 		if s.subs != nil {

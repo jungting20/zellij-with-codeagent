@@ -150,6 +150,9 @@ func TestReconcileRecordDoesNotReturnReusedPaneFromNoMutationBranch(t *testing.T
 
 func mustCreatePane(t *testing.T, service *Service, req CreatePaneRequest) Pane {
 	t.Helper()
+	if req.ZellijSession == "" {
+		req.ZellijSession = "test-session"
+	}
 	response, err := service.CreatePane(context.Background(), req)
 	if err != nil {
 		t.Fatalf("CreatePane(%s) error = %v", req.ID, err)

@@ -13,6 +13,54 @@ import (
 	"zellij-with-codeagent/internal/zellij"
 )
 
+func TestCreatePaneRequiresZellijSession(t *testing.T) {
+	service := newTestService(&fakeBackend{})
+
+	_, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "missing-session"})
+	if !errors.Is(err, ErrZellijSessionRequired) {
+		t.Fatalf("CreatePane() error = %v, want %v", err, ErrZellijSessionRequired)
+	}
+}
+
+func TestCreatePanePropagatesZellijSession(t *testing.T) {
+	backend := &fakeBackend{createID: "terminal_a"}
+	service := newTestService(backend)
+
+	created, err := service.CreatePane(context.Background(), CreatePaneRequest{
+		ID: "pane-a", ZellijSession: "session-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Pane.SessionID != "session-a" || backend.createRequests[0].Session != "session-a" {
+		t.Fatalf("pane/backend session = %q/%q, want session-a/session-a", created.Pane.SessionID, backend.createRequests[0].Session)
+	}
+	if len(backend.listRequests) != 1 || backend.listRequests[0].Session != "session-a" {
+		t.Fatalf("ListPanes requests = %#v, want session-a", backend.listRequests)
+	}
+}
+
+func TestCreatePaneRejectsCrossSessionAnchor(t *testing.T) {
+	anchorTabID := registry.ZellijTabID(7)
+	service := newTestService(&fakeBackend{createID: "terminal_worker"})
+	if _, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "manager",
+		SessionID:    "session-a",
+		ZellijPaneID: "terminal_manager",
+		ZellijTabID:  &anchorTabID,
+		Status:       registry.PaneStatusRunning,
+	}); err != nil {
+		t.Fatalf("RegisterPane(anchor) error = %v", err)
+	}
+
+	_, err := service.CreatePane(context.Background(), CreatePaneRequest{
+		ID: "worker", ZellijSession: "session-b", SameTabAsPaneID: "manager",
+	})
+	if !errors.Is(err, ErrInvalidPaneTarget) {
+		t.Fatalf("CreatePane() error = %v, want %v", err, ErrInvalidPaneTarget)
+	}
+}
+
 func TestCreatePaneRegistersLogicalRecord(t *testing.T) {
 	backend := &fakeBackend{
 		createID:  "terminal_5",
@@ -21,13 +69,14 @@ func TestCreatePaneRegistersLogicalRecord(t *testing.T) {
 	service := newTestService(backend)
 
 	response, err := service.CreatePane(context.Background(), CreatePaneRequest{
-		ID:      "pane-1",
-		TaskID:  "task-1",
-		AgentID: "agent-1",
-		Role:    "test",
-		Name:    "tests",
-		Command: []string{"go", "test", "./..."},
-		CWD:     "/workspace",
+		ID:            "pane-1",
+		ZellijSession: "test-session",
+		TaskID:        "task-1",
+		AgentID:       "agent-1",
+		Role:          "test",
+		Name:          "tests",
+		Command:       []string{"go", "test", "./..."},
+		CWD:           "/workspace",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
@@ -46,6 +95,7 @@ func TestCreatePaneRegistersLogicalRecord(t *testing.T) {
 		t.Fatalf("backend CreatePane calls = %d, want 1", len(backend.createRequests))
 	}
 	wantBackendRequest := zellij.CreatePaneRequest{
+		Session: "test-session",
 		Name:    "tests",
 		CWD:     "/workspace",
 		Command: []string{"go", "test", "./..."},
@@ -72,17 +122,19 @@ func TestCreatePaneTargetsExistingTab(t *testing.T) {
 	service := newTestService(backend)
 
 	response, err := service.CreatePane(context.Background(), CreatePaneRequest{
-		ID:          "pane-1",
-		Role:        "test",
-		Name:        "runner",
-		ZellijTabID: &tabID,
-		Command:     []string{"go", "test", "./..."},
+		ID:            "pane-1",
+		ZellijSession: "test-session",
+		Role:          "test",
+		Name:          "runner",
+		ZellijTabID:   &tabID,
+		Command:       []string{"go", "test", "./..."},
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
 	}
 
 	want := zellij.CreatePaneRequest{
+		Session: "test-session",
 		Name:    "runner",
 		TabID:   zellijTabID(7),
 		Command: []string{"go", "test", "./..."},
@@ -104,15 +156,17 @@ func TestCreatePaneTargetsTabZero(t *testing.T) {
 	service := newTestService(backend)
 
 	response, err := service.CreatePane(context.Background(), CreatePaneRequest{
-		ID:          "pane-1",
-		ZellijTabID: &tabID,
-		Command:     []string{"pwd"},
+		ID:            "pane-1",
+		ZellijSession: "test-session",
+		ZellijTabID:   &tabID,
+		Command:       []string{"pwd"},
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
 	}
 
 	want := zellij.CreatePaneRequest{
+		Session: "test-session",
 		TabID:   zellijTabID(0),
 		Command: []string{"pwd"},
 	}
@@ -133,6 +187,7 @@ func TestCreatePaneSameTabAsActiveLogicalAnchor(t *testing.T) {
 	service := newTestService(backend)
 	if _, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
 		ID:           "manager",
+		SessionID:    "test-session",
 		ZellijPaneID: "terminal_manager",
 		ZellijTabID:  &anchorTabID,
 		Status:       registry.PaneStatusRunning,
@@ -142,6 +197,7 @@ func TestCreatePaneSameTabAsActiveLogicalAnchor(t *testing.T) {
 
 	response, err := service.CreatePane(context.Background(), CreatePaneRequest{
 		ID:              "worker-1",
+		ZellijSession:   "test-session",
 		TaskID:          "ticket-session",
 		Role:            "ticket-worker",
 		SameTabAsPaneID: "manager",
@@ -153,6 +209,7 @@ func TestCreatePaneSameTabAsActiveLogicalAnchor(t *testing.T) {
 	}
 
 	want := zellij.CreatePaneRequest{
+		Session: "test-session",
 		CWD:     "/repo",
 		TabID:   zellijTabID(7),
 		Command: []string{"worker"},
@@ -189,6 +246,7 @@ func TestCreatePaneSameTabAsRejectsInvalidAnchor(t *testing.T) {
 			if tt.anchor {
 				if _, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
 					ID:           "manager",
+					SessionID:    "test-session",
 					ZellijPaneID: "terminal_manager",
 					ZellijTabID:  tt.anchorTab,
 					Status:       tt.status,
@@ -199,6 +257,7 @@ func TestCreatePaneSameTabAsRejectsInvalidAnchor(t *testing.T) {
 
 			_, err := service.CreatePane(context.Background(), CreatePaneRequest{
 				ID:              "worker-1",
+				ZellijSession:   "test-session",
 				SameTabAsPaneID: "manager",
 				NewTab:          tt.newTab,
 				ZellijTabID:     tt.targetTab,
@@ -219,10 +278,11 @@ func TestCreatePaneRejectsNewTabWithExplicitZellijTabID(t *testing.T) {
 	service := newTestService(backend)
 
 	_, err := service.CreatePane(context.Background(), CreatePaneRequest{
-		ID:          "worker-1",
-		NewTab:      true,
-		ZellijTabID: runtimeZellijTabID(7),
-		Command:     []string{"worker"},
+		ID:            "worker-1",
+		ZellijSession: "test-session",
+		NewTab:        true,
+		ZellijTabID:   runtimeZellijTabID(7),
+		Command:       []string{"worker"},
 	})
 	if !errors.Is(err, ErrInvalidPaneTarget) {
 		t.Fatalf("CreatePane() error = %v, want %v", err, ErrInvalidPaneTarget)
@@ -240,12 +300,13 @@ func TestCreatePaneCreatesNewTabAndRegistersTabMetadata(t *testing.T) {
 	service := newTestService(backend)
 
 	response, err := service.CreatePane(context.Background(), CreatePaneRequest{
-		ID:      "pane-1",
-		Role:    "test",
-		NewTab:  true,
-		TabName: "agent-tests",
-		Command: []string{"go", "test", "./..."},
-		CWD:     "/workspace",
+		ID:            "pane-1",
+		ZellijSession: "test-session",
+		Role:          "test",
+		NewTab:        true,
+		TabName:       "agent-tests",
+		Command:       []string{"go", "test", "./..."},
+		CWD:           "/workspace",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
@@ -255,6 +316,7 @@ func TestCreatePaneCreatesNewTabAndRegistersTabMetadata(t *testing.T) {
 		t.Fatalf("backend CreateTab calls = %d, want 1", len(backend.createTabRequests))
 	}
 	wantTabRequest := zellij.CreateTabRequest{
+		Session: "test-session",
 		Name:    "agent-tests",
 		CWD:     "/workspace",
 		Command: []string{"go", "test", "./..."},
@@ -278,15 +340,16 @@ func TestCreatePaneCleansUpNewTabWhenPaneDiscoveryFails(t *testing.T) {
 	service := newTestService(backend)
 
 	_, err := service.CreatePane(context.Background(), CreatePaneRequest{
-		ID:      "pane-1",
-		NewTab:  true,
-		TabName: "agent-tests",
-		Command: []string{"go", "test", "./..."},
+		ID:            "pane-1",
+		ZellijSession: "test-session",
+		NewTab:        true,
+		TabName:       "agent-tests",
+		Command:       []string{"go", "test", "./..."},
 	})
 	if !errors.Is(err, ErrPaneNotFound) {
 		t.Fatalf("CreatePane() error = %v, want %v", err, ErrPaneNotFound)
 	}
-	if len(backend.closeTabRequests) != 1 || backend.closeTabRequests[0].TabID == nil || *backend.closeTabRequests[0].TabID != 9 {
+	if len(backend.closeTabRequests) != 1 || backend.closeTabRequests[0].Session != "test-session" || backend.closeTabRequests[0].TabID == nil || *backend.closeTabRequests[0].TabID != 9 {
 		t.Fatalf("backend CloseTab requests = %#v, want cleanup of tab 9", backend.closeTabRequests)
 	}
 }
@@ -294,7 +357,7 @@ func TestCreatePaneCleansUpNewTabWhenPaneDiscoveryFails(t *testing.T) {
 func TestSendInputResolvesLogicalPaneID(t *testing.T) {
 	backend := &fakeBackend{createID: "terminal_5"}
 	service := newTestService(backend)
-	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1"}); err != nil {
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"}); err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
 	}
 
@@ -341,10 +404,10 @@ func TestSendMessageRoutesWithinSameTab(t *testing.T) {
 		},
 	}
 	service := newTestService(backend)
-	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "from-pane", ZellijTabID: &tabID}); err != nil {
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "from-pane", ZellijSession: "test-session", ZellijTabID: &tabID}); err != nil {
 		t.Fatalf("CreatePane(from) error = %v", err)
 	}
-	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "to-pane", ZellijTabID: &tabID}); err != nil {
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "to-pane", ZellijSession: "test-session", ZellijTabID: &tabID}); err != nil {
 		t.Fatalf("CreatePane(to) error = %v", err)
 	}
 
@@ -379,10 +442,10 @@ func TestSendMessageRejectsDifferentTabs(t *testing.T) {
 		},
 	}
 	service := newTestService(backend)
-	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "from-pane"}); err != nil {
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "from-pane", ZellijSession: "test-session"}); err != nil {
 		t.Fatalf("CreatePane(from) error = %v", err)
 	}
-	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "to-pane"}); err != nil {
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "to-pane", ZellijSession: "test-session"}); err != nil {
 		t.Fatalf("CreatePane(to) error = %v", err)
 	}
 
@@ -403,7 +466,7 @@ func TestCreatePaneBackendFailureLeavesRegistryEmpty(t *testing.T) {
 	backend := &fakeBackend{createErr: errors.New("zellij failed")}
 	service := newTestService(backend)
 
-	_, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1"})
+	_, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"})
 	if err == nil {
 		t.Fatal("CreatePane() error = nil, want backend error")
 	}
@@ -420,15 +483,15 @@ func TestCreatePaneBackendFailureLeavesRegistryEmpty(t *testing.T) {
 func TestCreatePaneRegistryFailureCleansUpCreatedZellijPane(t *testing.T) {
 	backend := &fakeBackend{createIDs: []zellij.PaneID{"terminal_5", "terminal_7"}}
 	service := newTestService(backend)
-	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1"}); err != nil {
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"}); err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
 	}
 
-	_, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1"})
+	_, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"})
 	if !errors.Is(err, registry.ErrAlreadyExists) {
 		t.Fatalf("CreatePane() error = %v, want %v", err, registry.ErrAlreadyExists)
 	}
-	if len(backend.closeRequests) != 1 || backend.closeRequests[0].PaneID != "terminal_7" {
+	if len(backend.closeRequests) != 1 || backend.closeRequests[0].Session != "test-session" || backend.closeRequests[0].PaneID != "terminal_7" {
 		t.Fatalf("backend ClosePane requests = %#v, want cleanup of terminal_7", backend.closeRequests)
 	}
 }
@@ -437,10 +500,11 @@ func TestInspectPaneReturnsRegistryRecord(t *testing.T) {
 	backend := &fakeBackend{createID: "terminal_5"}
 	service := newTestService(backend)
 	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{
-		ID:      "pane-1",
-		TaskID:  "task-1",
-		Role:    "coder",
-		Command: []string{"bash"},
+		ID:            "pane-1",
+		ZellijSession: "test-session",
+		TaskID:        "task-1",
+		Role:          "coder",
+		Command:       []string{"bash"},
 	}); err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
 	}
@@ -468,7 +532,7 @@ func TestSnapshotOutputUpdatesPaneOutput(t *testing.T) {
 		dumpOutput: "PASS\n",
 	}
 	service := newTestService(backend)
-	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1"}); err != nil {
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"}); err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
 	}
 
@@ -500,7 +564,7 @@ func TestSnapshotOutputDoesNotMutateReusedPaneGeneration(t *testing.T) {
 		dumpOutput: "stale output\n",
 	}
 	service := newTestService(backend)
-	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "coder", TaskID: "old-task"}); err != nil {
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "coder", TaskID: "old-task", ZellijSession: "test-session"}); err != nil {
 		t.Fatalf("CreatePane(old) error = %v", err)
 	}
 
@@ -532,7 +596,7 @@ func TestSnapshotOutputDoesNotMutateReusedPaneGeneration(t *testing.T) {
 func TestClosePaneMarksRecordClosed(t *testing.T) {
 	backend := &fakeBackend{createID: "terminal_5"}
 	service := newTestService(backend)
-	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1"}); err != nil {
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"}); err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
 	}
 
@@ -556,7 +620,7 @@ func TestClosePaneFailureMarksRecordError(t *testing.T) {
 		closeErr: errors.New("close failed"),
 	}
 	service := newTestService(backend)
-	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1"}); err != nil {
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"}); err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
 	}
 
@@ -581,9 +645,10 @@ func TestInProcessHarnessExercisesRuntimeOperations(t *testing.T) {
 	service := newTestService(backend)
 
 	created, err := service.CreatePane(context.Background(), CreatePaneRequest{
-		ID:      "pane-1",
-		Role:    "coder",
-		Command: []string{"bash"},
+		ID:            "pane-1",
+		ZellijSession: "test-session",
+		Role:          "coder",
+		Command:       []string{"bash"},
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
@@ -611,12 +676,13 @@ func TestInProcessScenarioLeavesPaneOpenWhenClosePaneIsNotCalled(t *testing.T) {
 	service := newTestService(backend)
 
 	created, err := service.CreatePane(context.Background(), CreatePaneRequest{
-		ID:      "pane-1",
-		Role:    "coder",
-		NewTab:  true,
-		TabName: "agentd-scenario",
-		Command: []string{"sh"},
-		CWD:     "/workspace",
+		ID:            "pane-1",
+		ZellijSession: "test-session",
+		Role:          "coder",
+		NewTab:        true,
+		TabName:       "agentd-scenario",
+		Command:       []string{"sh"},
+		CWD:           "/workspace",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
@@ -716,6 +782,7 @@ type fakeBackend struct {
 	sendRequests      []zellij.SendInputRequest
 	dumpRequests      []zellij.DumpScreenRequest
 	listCalls         []struct{}
+	listRequests      []zellij.ListPanesRequest
 
 	beforeCreatePane func(context.Context, zellij.CreatePaneRequest, int) error
 	beforeClosePane  func(context.Context, zellij.ClosePaneRequest) error
@@ -730,6 +797,7 @@ func (b *fakeBackend) CreateTab(_ context.Context, req zellij.CreateTabRequest) 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.createTabRequests = append(b.createTabRequests, zellij.CreateTabRequest{
+		Session: req.Session,
 		Name:    req.Name,
 		CWD:     req.CWD,
 		Command: cloneStrings(req.Command),
@@ -751,7 +819,7 @@ func (b *fakeBackend) CloseTab(_ context.Context, req zellij.CloseTabRequest) er
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.closeTabRequests = append(b.closeTabRequests, zellij.CloseTabRequest{TabID: tabID})
+	b.closeTabRequests = append(b.closeTabRequests, zellij.CloseTabRequest{Session: req.Session, TabID: tabID})
 	return b.closeTabErr
 }
 
@@ -762,6 +830,7 @@ func (b *fakeBackend) CreatePane(ctx context.Context, req zellij.CreatePaneReque
 		tabID = &clone
 	}
 	cloned := zellij.CreatePaneRequest{
+		Session:  req.Session,
 		Name:     req.Name,
 		CWD:      req.CWD,
 		TabID:    tabID,
@@ -826,10 +895,11 @@ func (b *fakeBackend) SendInput(_ context.Context, req zellij.SendInputRequest) 
 	return b.sendErr
 }
 
-func (b *fakeBackend) ListPanes(context.Context, zellij.ListPanesRequest) ([]zellij.Pane, error) {
+func (b *fakeBackend) ListPanes(_ context.Context, req zellij.ListPanesRequest) ([]zellij.Pane, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.listCalls = append(b.listCalls, struct{}{})
+	b.listRequests = append(b.listRequests, req)
 	if b.listErr != nil {
 		return nil, b.listErr
 	}
@@ -872,9 +942,10 @@ func TestService3DepthQueries(t *testing.T) {
 
 	ctx := context.Background()
 	_, err := service.CreatePane(ctx, CreatePaneRequest{
-		ID:      "pane-1",
-		Role:    "test",
-		TabName: "my-tab",
+		ID:            "pane-1",
+		ZellijSession: "test-session",
+		Role:          "test",
+		TabName:       "my-tab",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() error = %v", err)

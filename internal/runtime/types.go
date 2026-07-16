@@ -10,13 +10,14 @@ import (
 )
 
 var (
-	ErrPaneNotFound      = errors.New("runtime pane not found")
-	ErrMissingPaneID     = errors.New("runtime pane id is required")
-	ErrCleanupPartial    = errors.New("runtime cleanup partially failed")
-	ErrSessionNotFound   = errors.New("runtime session not found")
-	ErrTabNotFound       = errors.New("runtime tab not found")
-	ErrInvalidMessage    = errors.New("runtime: invalid message")
-	ErrInvalidPaneTarget = errors.New("runtime: invalid pane target")
+	ErrPaneNotFound          = errors.New("runtime pane not found")
+	ErrMissingPaneID         = errors.New("runtime pane id is required")
+	ErrCleanupPartial        = errors.New("runtime cleanup partially failed")
+	ErrSessionNotFound       = errors.New("runtime session not found")
+	ErrTabNotFound           = errors.New("runtime tab not found")
+	ErrInvalidMessage        = errors.New("runtime: invalid message")
+	ErrInvalidPaneTarget     = errors.New("runtime: invalid pane target")
+	ErrZellijSessionRequired = errors.New("runtime: zellij session is required")
 )
 
 type (
@@ -100,13 +101,14 @@ type RuntimeService interface {
 }
 
 type CreatePaneRequest struct {
-	ID      PaneID
-	TaskID  TaskID
-	AgentID AgentID
-	Role    string
-	Name    string
-	NewTab  bool
-	TabName string
+	ID            PaneID
+	TaskID        TaskID
+	AgentID       AgentID
+	Role          string
+	Name          string
+	ZellijSession string
+	NewTab        bool
+	TabName       string
 	// ZellijTabID targets an existing tab. When NewTab is true, the created tab
 	// ID is returned on the Pane instead.
 	ZellijTabID     *ZellijTabID
