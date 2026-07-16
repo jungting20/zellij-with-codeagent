@@ -116,6 +116,50 @@ The daemon must be running before non-dry-run submission:
 ./bin/zellij-agent daemon serve
 ```
 
+### Ticket Worker Pool
+
+`zellij-agent ticket-worker` launches a project-configured pool of identical worker commands. Initialize the project-local configuration from the project root:
+
+```bash
+./bin/zellij-agent ticket-worker init
+```
+
+This creates `.zellij-agent/worker/config.yaml` and refuses to overwrite an existing file. Use `ticket-worker init --force` to replace it, or `--cwd /path/to/project` to select another project root. The version-1 configuration is:
+
+```yaml
+version: 1
+max_workers: 3
+poll_interval: 30s
+worker:
+  command: ["go", "run", "./cmd/ticket-worker"]
+  completion_marker: "ZELLIJ_AGENT_WORKER_DONE"
+```
+
+`version` must be `1`. `max_workers` and `poll_interval` must be positive; when omitted, they default to `3` and `30s`. `worker.command` is a non-empty argument vector executed directly from the project root, not through a shell. `worker.completion_marker` must be a non-empty single line with no surrounding whitespace. Unknown fields are rejected.
+
+After replacing the example command with the project's worker entrypoint, start the daemon and workspace:
+
+```bash
+./bin/zellij-agent daemon serve
+./bin/zellij-agent ticket-worker start
+```
+
+`start` validates the complete configuration before submitting a new `ticket-worker` tab. The initial plan contains exactly two bootstrap panes: the deterministic worker manager and a read-only dashboard monitor. The manager then creates up to `max_workers` worker panes in that same tab. A one-run capacity override does not change the file:
+
+```bash
+./bin/zellij-agent ticket-worker start --max-workers 5
+```
+
+Use `--dry-run` to print the `/v1/requests` execution-plan envelope without contacting the daemon or creating panes. `--cwd`, `--config`, `--session`, `--socket`, and `--timeout` are also available; run `ticket-worker start --help` for their exact forms.
+
+The project worker command owns the ticket workflow. It must atomically claim its own next ticket, invoke the coding agent or project-specific ticket skill, implement and verify the change, update the ticket system, and only then print the configured completion marker. If no ticket is available, the project command also decides whether and when to print the marker. The manager has no ticket-system knowledge and does not claim tickets, interpret ticket IDs, or infer success from process exit or idle output.
+
+Completion requires an output line from the watched logical pane whose surrounding whitespace is trimmed and then exactly equals `completion_marker`. Substrings do not match, and an identical marker from another pane cannot complete the watched worker. Process exit, pane-close events, unchanged output, and silence are not completion signals.
+
+When a worker matches the marker, the manager closes that logical pane through the runtime and makes its slot eligible for refill on the next polling tick. Create failures leave a slot empty for a later retry. Watch failures and marker-less exits leave the worker unresolved. Close failures keep the slot occupied, so replacements cannot exceed configured capacity.
+
+Canceling or closing the manager stops marker watches and future creation but performs zero worker close or cleanup calls; existing worker panes are deliberately preserved. Version 1 does not recover or adopt those panes after a manager or daemon restart, persist pool state, automatically retry stalled workers, or handle failed/waiting worker policy. Starting another manager while prior workers remain is an operator error. The monitor is read-only and cannot create, close, retry, or send input to workers.
+
 `zellij-agent ctl plan` accepts either a raw execution plan payload or a full `/v1/requests` envelope.
 `zellij-agent planner page` is a mock planner path for URL-based page inspection. It uses a built-in mock source by default, generates a canonical `/v1/requests` `execution_plan`, and submits panes for editor, LSP, network, and console inspection. Add `--dry-run` to print the envelope without contacting `agentd`.
 `zellij-agent planner tui` provides the same mock planner path through a single chat-style prompt. Include the URL in the natural-language request, for example `localhost:8000/example/aa 페이지 소스 열고 네트워크/콘솔 확인해줘`; the mock source and cwd default from the current repo, and generated panes call back into `zellij-agent role`.
