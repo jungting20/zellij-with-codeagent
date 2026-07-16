@@ -3,6 +3,8 @@ package ctlcli
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,10 @@ import (
 
 func TestRunDebateInvalidArgumentsPrecedeMissingZellijSession(t *testing.T) {
 	t.Setenv("ZELLIJ_SESSION_NAME", "")
+	invalidConfig := filepath.Join(t.TempDir(), "invalid.yaml")
+	if err := os.WriteFile(invalidConfig, []byte("agents: ["), 0o600); err != nil {
+		t.Fatalf("WriteFile(invalid config) error = %v", err)
+	}
 	tests := []struct {
 		name string
 		args []string
@@ -20,6 +26,8 @@ func TestRunDebateInvalidArgumentsPrecedeMissingZellijSession(t *testing.T) {
 		{name: "topic", args: []string{"debate"}, want: "debate requires --topic"},
 		{name: "rounds", args: []string{"debate", "--topic", "valid", "--rounds", "0"}, want: "debate requires --rounds between 1 and 3"},
 		{name: "agent timeout", args: []string{"debate", "--topic", "valid", "--agent-timeout", "0s"}, want: "debate requires --agent-timeout greater than 0"},
+		{name: "missing config", args: []string{"debate", "--topic", "valid", "--config", "/missing/debate.yaml"}, want: "debate config failed"},
+		{name: "invalid config", args: []string{"debate", "--topic", "valid", "--config", invalidConfig}, want: "debate config failed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

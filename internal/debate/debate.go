@@ -41,6 +41,13 @@ type Result struct {
 	coordinatorOutput string
 }
 
+type Prepared struct {
+	opts            Options
+	agentSpecs      []agentSpec
+	coordinatorSpec coordinatorSpec
+	agents          []string
+}
+
 type ValidationError struct {
 	Message string
 }
@@ -70,9 +77,9 @@ func ValidateOptions(opts Options) error {
 	return nil
 }
 
-func Run(ctx context.Context, client Client, opts Options) (Result, error) {
+func Prepare(opts Options) (Prepared, error) {
 	if err := ValidateOptions(opts); err != nil {
-		return Result{}, err
+		return Prepared{}, err
 	}
 
 	roleCommand := roleCommand(opts.AgentRoleBin)
@@ -82,12 +89,38 @@ func Run(ctx context.Context, client Client, opts Options) (Result, error) {
 	if strings.TrimSpace(opts.ConfigPath) != "" {
 		loadedAgents, loadedCoordinator, err := loadConfig(opts.ConfigPath, opts.CWD, coordinatorSpec)
 		if err != nil {
-			return Result{}, ValidationError{Message: fmt.Sprintf("debate config failed: %v", err)}
+			return Prepared{}, ValidationError{Message: fmt.Sprintf("debate config failed: %v", err)}
 		}
 		agentSpecs = loadedAgents
 		coordinatorSpec = loadedCoordinator
 		agents = agentIDs(agentSpecs)
 	}
+	return Prepared{
+		opts:            opts,
+		agentSpecs:      agentSpecs,
+		coordinatorSpec: coordinatorSpec,
+		agents:          agents,
+	}, nil
+}
+
+func (prepared Prepared) WithZellijSession(zellijSession string) Prepared {
+	prepared.opts.ZellijSession = zellijSession
+	return prepared
+}
+
+func Run(ctx context.Context, client Client, opts Options) (Result, error) {
+	prepared, err := Prepare(opts)
+	if err != nil {
+		return Result{}, err
+	}
+	return RunPrepared(ctx, client, prepared)
+}
+
+func RunPrepared(ctx context.Context, client Client, prepared Prepared) (Result, error) {
+	opts := prepared.opts
+	agentSpecs := prepared.agentSpecs
+	coordinatorSpec := prepared.coordinatorSpec
+	agents := prepared.agents
 
 	requestID := fmt.Sprintf("debate_%d", time.Now().UnixNano())
 	payload := executionPlan(requestID, opts.ZellijSession, agentSpecs, coordinatorSpec)

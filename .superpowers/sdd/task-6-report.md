@@ -28,7 +28,7 @@ Focused command selector:
 go test ./internal/cli/work ./internal/cli/chrome ./internal/cli/planner ./internal/cli/ctl ./internal/debate -run 'Test.*ZellijSession' -count=1
 ```
 
-Result: PASS for work, Chrome, and debate; planner/ctl implementation packages report no local test files because their established command harnesses live under `cmd/`.
+Result: PASS. Planner and ctl now also have local regression suites under `internal/cli/planner` and `internal/cli/ctl`, added during the Task 6 review fixes alongside the established `cmd/` command harnesses.
 
 Affected command and package suites:
 
@@ -71,7 +71,8 @@ Ticket-worker/role propagation is explicitly assigned to Task 7, so this task di
 - `internal/cli/chrome/chrome.go`, `internal/cli/chrome/chrome_test.go`
 - `internal/chrome/chrome.go`, `internal/chrome/chrome_test.go`
 - `internal/cli/planner/planner.go`, `internal/planner/page.go`, `internal/planner/page_test.go`
-- `internal/cli/ctl/ctl.go`
+- `internal/cli/planner/planner_test.go`
+- `internal/cli/ctl/ctl.go`, `internal/cli/ctl/ctl_test.go`
 - `internal/debate/debate.go`, `internal/debate/debate_test.go`
 - `cmd/agent-planner/main_test.go`, `cmd/agentctl/main_test.go` (existing planner/ctl CLI test harness locations)
 
@@ -135,3 +136,52 @@ env -u ZELLIJ_SESSION_NAME go test ./cmd/agent-planner ./cmd/agentctl ./internal
 ```
 
 Result: PASS for every listed package.
+
+## Final Debate Preparation Fix
+
+The remaining review finding was config validation ordering. Outside Zellij, a valid topic with a missing or malformed `--config` previously reached physical-session resolution before config loading and returned exit `1` with the resolver error.
+
+The debate boundary now works as follows:
+
+1. `debate.Prepare` validates options and loads/normalizes configuration once.
+2. ctl resolves the caller's physical Zellij session only after preparation succeeds.
+3. `Prepared.WithZellijSession` attaches that resolved session.
+4. `debate.RunPrepared` executes the already-prepared specs without reopening the config.
+5. The existing `debate.Run` API remains as a compatibility wrapper around `Prepare` plus `RunPrepared`.
+
+Focused RED command before the fix:
+
+```text
+env -u ZELLIJ_SESSION_NAME go test ./internal/cli/ctl -run 'TestRunDebateInvalidArgumentsPrecedeMissingZellijSession/missing_config' -count=1
+```
+
+Observed: FAIL with exit `1` and `resolve zellij session: zellij session is required`, instead of exit `2` and `debate config failed`.
+
+Focused GREEN command and exact output:
+
+```text
+env -u ZELLIJ_SESSION_NAME go test ./internal/cli/ctl -run 'TestRunDebateInvalidArgumentsPrecedeMissingZellijSession/(missing|invalid)_config' -count=1
+```
+
+```text
+ok  	zellij-with-codeagent/internal/cli/ctl	0.728s
+```
+
+Required verification command and exact output:
+
+```text
+env -u ZELLIJ_SESSION_NAME go test ./internal/cli/ctl ./internal/debate -count=1
+```
+
+```text
+ok  	zellij-with-codeagent/internal/cli/ctl	0.206s
+ok  	zellij-with-codeagent/internal/debate	0.360s
+```
+
+Additional compatibility verification:
+
+```text
+env -u ZELLIJ_SESSION_NAME go test ./cmd/agentctl ./internal/cli/ctl ./internal/debate -count=1
+```
+
+Result: PASS.

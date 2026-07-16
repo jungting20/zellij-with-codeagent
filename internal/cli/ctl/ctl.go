@@ -328,7 +328,8 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 		CWD:          *cwd,
 		AgentRoleBin: *agentRoleBin,
 	}
-	if err := debate.ValidateOptions(debateOpts); err != nil {
+	prepared, err := debate.Prepare(debateOpts)
+	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
@@ -341,8 +342,8 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
 
-	debateOpts.ZellijSession = zellijSession
-	result, err := debate.Run(ctx, newClient(opts.socketPath, opts.timeout), debateOpts)
+	prepared = prepared.WithZellijSession(zellijSession)
+	result, err := debate.RunPrepared(ctx, newClient(opts.socketPath, opts.timeout), prepared)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		if debate.IsValidationError(err) {
