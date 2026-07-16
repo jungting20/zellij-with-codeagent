@@ -177,9 +177,11 @@ poll_interval: 30s
 worker:
   command: ["go", "run", "./cmd/ticket-worker"]
   completion_marker: "ZELLIJ_AGENT_WORKER_DONE"
+  complete_command: ["ticket", "complete"]
+  complete_timeout: 30s
 ```
 
-`version` must be `1`. `max_workers` and `poll_interval` must be positive; when omitted, they default to `3` and `30s`. `worker.command` is a non-empty argument vector executed directly from the project root, not through a shell. `worker.completion_marker` must be a non-empty single line with no surrounding whitespace. Unknown fields are rejected.
+`version` must be `1`. `max_workers` and `poll_interval` must be positive; when omitted, they default to `3` and `30s`. `worker.command` is required, while `worker.complete_command` is optional for backward compatibility; when present, both are non-empty argument vectors executed directly from the project root, not through a shell. `worker.completion_marker` must be a non-empty single line with no surrounding whitespace. `worker.complete_timeout` defaults to `30s` and must be positive. Unknown fields are rejected. Replace both example commands with the coding-agent and ticket CLI commands used by the project.
 
 After replacing the example command with the project's worker entrypoint, start the daemon and workspace:
 
@@ -212,13 +214,19 @@ contacting the daemon or creating panes:
 `--timeout` are also available; run `ticket-worker start --help` for their exact
 forms.
 
-The project worker command owns the ticket workflow. It must atomically claim its own next ticket, invoke the coding agent or project-specific ticket skill, implement and verify the change, update the ticket system, and only then print the configured completion marker. If no ticket is available, the project command also decides whether and when to print the marker. The manager has no ticket-system knowledge and does not claim tickets, interpret ticket IDs, or infer success from process exit or idle output.
+The project worker command owns ticket claiming and the coding-agent prompt. The prompt must tell the agent to emit the following final standalone line only after implementation and verification succeed:
 
-Completion requires an output line from the watched logical pane whose surrounding whitespace is trimmed and then exactly equals `completion_marker`. Substrings do not match, and an identical marker from another pane cannot complete the watched worker. Process exit, pane-close events, unchanged output, and silence are not completion signals.
+```text
+ZELLIJ_AGENT_WORKER_DONE ticket_id=<ticket-id>
+```
 
-When a worker matches the marker, the manager closes that logical pane through the runtime and makes its slot eligible for refill on the next polling tick. A worker may print the exact marker and exit immediately; if closing then reports that the runtime record is already absent, the manager reconciles runtime state and releases the slot. Create failures leave a slot empty for a later retry. Watch failures and marker-less exits leave the worker unresolved. Other close failures keep the slot occupied, so replacements cannot exceed configured capacity.
+The manager watches the worker's logical pane for the configured marker prefix, validates the structured `ticket_id`, and runs `complete_command` from the project root with that ID appended as the final argv element. For example, the template executes `ticket complete TICKET-123`. Ticket IDs may contain ASCII letters, digits, `.`, `_`, `:`, and `-`, and must begin with a letter or digit. The manager does not invoke a shell or claim tickets itself. Process exit, pane-close events, unchanged output, and silence are not completion signals.
 
-Canceling or closing the manager stops marker watches and future creation but performs zero worker close or cleanup calls; existing worker panes are deliberately preserved. Version 1 does not recover or adopt those panes after a manager or daemon restart, persist pool state, automatically retry stalled workers, or handle failed/waiting worker policy. Starting another manager while prior workers remain is an operator error. The monitor is read-only and cannot create, close, retry, or send input to workers.
+The manager closes the worker pane only after the completion command exits successfully. Start failures, timeouts, and non-zero exits leave the pane and capacity slot occupied, record diagnostics in the manager pane, and are not retried automatically. After manually completing the ticket, close the failed worker pane; the manager detects its absence on the next polling tick, releases the slot, and may create a replacement. A worker may print the structured marker and exit immediately; after a successful ticket command, the existing close-race reconciliation releases the slot when the runtime record is already absent. Create failures leave a slot empty for a later retry, while watch failures and marker-less exits remain unresolved.
+
+For backward compatibility, an existing version-1 config that omits `complete_command` still uses the previous exact standalone-marker behavior and closes the pane without a ticket completion command.
+
+Canceling or closing the manager stops marker watches, cancels an in-flight completion command, and performs zero worker close or cleanup calls; existing worker panes are deliberately preserved. Version 1 does not recover or adopt those panes after a manager or daemon restart, persist pool state, or automatically retry stalled workers. Starting another manager while prior workers remain is an operator error. The monitor is read-only and cannot create, close, retry, or send input to workers.
 
 The initial release also has known limitations around repeated starts, dashboard capacity display, malformed marker error mapping, multi-document YAML, and real-Zellij end-to-end coverage. See [`docs/ticket-worker-known-issues.md`](docs/ticket-worker-known-issues.md) for reproduction conditions and follow-up directions.
 
