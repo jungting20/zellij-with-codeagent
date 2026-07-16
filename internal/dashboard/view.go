@@ -274,22 +274,34 @@ func (m Model) statusView(width int) string {
 }
 
 func (m Model) footerText() string {
-	prefix := ""
-	if m.opts.ReadOnly {
-		prefix = "READ ONLY"
-		if m.opts.TaskID != "" {
-			prefix += " task=" + m.opts.TaskID
-		}
+	prefix := m.dashboardContextText()
+	if prefix != "" {
 		prefix += "  "
+	}
+	if m.opts.ReadOnly {
 		if m.focus == focusDetail {
 			return prefix + "j/k scroll  h/l tab  pgup/pgdn page  g/G ends  tab focus  s snapshot  R refresh  ? help  q quit"
 		}
 		return prefix + "j/k move  enter toggle  tab focus  s snapshot  R refresh  ? help  q quit"
 	}
 	if m.focus == focusDetail {
-		return "j/k scroll  h/l tab  pgup/pgdn page  g/G ends  tab focus  i input  ? help  q quit"
+		return prefix + "j/k scroll  h/l tab  pgup/pgdn page  g/G ends  tab focus  i input  ? help  q quit"
 	}
-	return "j/k move  enter toggle  tab focus  s snapshot  i input  x cleanup  ? help  q quit"
+	return prefix + "j/k move  enter toggle  tab focus  s snapshot  i input  x cleanup  ? help  q quit"
+}
+
+func (m Model) dashboardContextText() string {
+	parts := make([]string, 0, 3)
+	if m.opts.ReadOnly {
+		parts = append(parts, "READ ONLY")
+	}
+	if m.opts.TaskID != "" {
+		parts = append(parts, "task="+m.opts.TaskID)
+	}
+	if m.opts.Capacity > 0 {
+		parts = append(parts, fmt.Sprintf("active=%d/%d", lifecycleSummary(m.panes).active, m.opts.Capacity))
+	}
+	return strings.Join(parts, "  ")
 }
 
 func (m Model) overlayView() string {
@@ -303,14 +315,14 @@ func (m Model) overlayView() string {
 			m.taskPaneCount(m.confirmTask),
 		)
 	case "help":
-		if m.opts.ReadOnly {
-			scope := "READ ONLY"
-			if m.opts.TaskID != "" {
-				scope += "  task=" + m.opts.TaskID
-			}
-			return "DASHBOARD HELP  " + scope + "\n\nTab focus panels\nj/k move or scroll\nh/l switch Output and Events\nPgUp/PgDn page  g/G ends\nEnter expand/collapse\ns snapshot  R refresh\n\n? / q / Esc close"
+		title := "DASHBOARD HELP"
+		if context := m.dashboardContextText(); context != "" {
+			title += "  " + context
 		}
-		return "DASHBOARD HELP\n\nTab focus panels\nj/k move or scroll\nh/l switch Output and Events\nPgUp/PgDn page  g/G ends\nEnter expand/collapse\ns snapshot  i input\nr reconcile  x cleanup  R refresh\n\n? / q / Esc close"
+		if m.opts.ReadOnly {
+			return title + "\n\nTab focus panels\nj/k move or scroll\nh/l switch Output and Events\nPgUp/PgDn page  g/G ends\nEnter expand/collapse\ns snapshot  R refresh\n\n? / q / Esc close"
+		}
+		return title + "\n\nTab focus panels\nj/k move or scroll\nh/l switch Output and Events\nPgUp/PgDn page  g/G ends\nEnter expand/collapse\ns snapshot  i input\nr reconcile  x cleanup  R refresh\n\n? / q / Esc close"
 	default:
 		return ""
 	}

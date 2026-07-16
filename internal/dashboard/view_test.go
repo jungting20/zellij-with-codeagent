@@ -179,3 +179,52 @@ func TestViewReadOnlyTaskFilterAndCapacity(t *testing.T) {
 		}
 	}
 }
+
+func TestFooterShowsTaskReadOnlyAndCapacityContext(t *testing.T) {
+	panes := []transport.Pane{{ID: "worker", TaskID: "tickets-1", Status: "running"}}
+	cases := []struct {
+		name string
+		opts Options
+		want []string
+	}{
+		{name: "mutable task dashboard", opts: Options{TaskID: "tickets-1", Capacity: 4}, want: []string{"task=tickets-1", "active=1/4"}},
+		{name: "read only task dashboard", opts: Options{TaskID: "tickets-1", ReadOnly: true, Capacity: 4}, want: []string{"READ ONLY", "task=tickets-1", "active=1/4"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModel(context.Background(), &fakeClient{}, tc.opts)
+			m.panes = panes
+			footer := m.footerText()
+			for _, want := range tc.want {
+				if !strings.Contains(footer, want) {
+					t.Fatalf("footer missing %q: %q", want, footer)
+				}
+			}
+		})
+	}
+}
+
+func TestHelpShowsTaskReadOnlyAndCapacityContext(t *testing.T) {
+	panes := []transport.Pane{{ID: "worker", TaskID: "tickets-1", Status: "running"}}
+	cases := []struct {
+		name string
+		opts Options
+		want []string
+	}{
+		{name: "mutable task dashboard", opts: Options{TaskID: "tickets-1", Capacity: 4}, want: []string{"task=tickets-1", "active=1/4", "i input", "r reconcile", "x cleanup"}},
+		{name: "read only task dashboard", opts: Options{TaskID: "tickets-1", ReadOnly: true, Capacity: 4}, want: []string{"READ ONLY", "task=tickets-1", "active=1/4"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModel(context.Background(), &fakeClient{}, tc.opts)
+			m.panes = panes
+			m.mode = "help"
+			help := m.overlayView()
+			for _, want := range tc.want {
+				if !strings.Contains(help, want) {
+					t.Fatalf("help missing %q: %q", want, help)
+				}
+			}
+		})
+	}
+}
