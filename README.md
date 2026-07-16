@@ -160,6 +160,8 @@ When a worker matches the marker, the manager closes that logical pane through t
 
 Canceling or closing the manager stops marker watches and future creation but performs zero worker close or cleanup calls; existing worker panes are deliberately preserved. Version 1 does not recover or adopt those panes after a manager or daemon restart, persist pool state, automatically retry stalled workers, or handle failed/waiting worker policy. Starting another manager while prior workers remain is an operator error. The monitor is read-only and cannot create, close, retry, or send input to workers.
 
+The initial release also has known limitations around repeated starts, dashboard capacity display, malformed marker error mapping, multi-document YAML, and real-Zellij end-to-end coverage. See [`docs/ticket-worker-known-issues.md`](docs/ticket-worker-known-issues.md) for reproduction conditions and follow-up directions.
+
 `zellij-agent ctl plan` accepts either a raw execution plan payload or a full `/v1/requests` envelope.
 `zellij-agent planner page` is a mock planner path for URL-based page inspection. It uses a built-in mock source by default, generates a canonical `/v1/requests` `execution_plan`, and submits panes for editor, LSP, network, and console inspection. Add `--dry-run` to print the envelope without contacting `agentd`.
 `zellij-agent planner tui` provides the same mock planner path through a single chat-style prompt. Include the URL in the natural-language request, for example `localhost:8000/example/aa 페이지 소스 열고 네트워크/콘솔 확인해줘`; the mock source and cwd default from the current repo, and generated panes call back into `zellij-agent role`.
