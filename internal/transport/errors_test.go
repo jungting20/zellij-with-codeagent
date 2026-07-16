@@ -19,6 +19,16 @@ func TestErrorForPaneNotFound(t *testing.T) {
 	}
 }
 
+func TestErrorForInvalidPaneTarget(t *testing.T) {
+	apiErr, status := ErrorFor(errors.Join(rt.ErrInvalidPaneTarget, errors.New("target modes conflict")))
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+	if apiErr.Code != CodeBadRequest || apiErr.Retryable {
+		t.Fatalf("api error = %#v, want non-retryable bad_request", apiErr)
+	}
+}
+
 func TestErrorForCleanupPartial(t *testing.T) {
 	apiErr, status := ErrorFor(errors.Join(rt.ErrCleanupPartial, errors.New("2 pane(s) failed")))
 	if status != http.StatusConflict {

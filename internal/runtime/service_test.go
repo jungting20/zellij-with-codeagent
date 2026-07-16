@@ -214,6 +214,24 @@ func TestCreatePaneSameTabAsRejectsInvalidAnchor(t *testing.T) {
 	}
 }
 
+func TestCreatePaneRejectsNewTabWithExplicitZellijTabID(t *testing.T) {
+	backend := &fakeBackend{createID: "terminal_worker"}
+	service := newTestService(backend)
+
+	_, err := service.CreatePane(context.Background(), CreatePaneRequest{
+		ID:          "worker-1",
+		NewTab:      true,
+		ZellijTabID: runtimeZellijTabID(7),
+		Command:     []string{"worker"},
+	})
+	if !errors.Is(err, ErrInvalidPaneTarget) {
+		t.Fatalf("CreatePane() error = %v, want %v", err, ErrInvalidPaneTarget)
+	}
+	if len(backend.createRequests) != 0 || len(backend.createTabRequests) != 0 {
+		t.Fatalf("backend create calls = panes %#v, tabs %#v; want none", backend.createRequests, backend.createTabRequests)
+	}
+}
+
 func TestCreatePaneCreatesNewTabAndRegistersTabMetadata(t *testing.T) {
 	backend := &fakeBackend{
 		createTabID: 9,

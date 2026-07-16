@@ -124,6 +124,9 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 }
 
 func (s *Service) resolveCreatePaneTarget(req CreatePaneRequest) (CreatePaneRequest, error) {
+	if req.NewTab && req.ZellijTabID != nil {
+		return req, ErrInvalidPaneTarget
+	}
 	if req.SameTabAsPaneID == "" {
 		return req, nil
 	}

@@ -23,7 +23,7 @@ func TestServerCreatePane(t *testing.T) {
 	service := newFakeRuntimeService()
 	server := newTestServer(t, service)
 
-	body := strings.NewReader(`{"id":"pane-1","task_id":"task-1","agent_id":"agent-1","role":"test","same_tab_as_pane_id":"manager","new_tab":true,"tab_name":"agentd-test","command":["go","test"],"cwd":"."}`)
+	body := strings.NewReader(`{"id":"pane-1","task_id":"task-1","agent_id":"agent-1","role":"test","same_tab_as_pane_id":"manager","tab_name":"agentd-test","command":["go","test"],"cwd":"."}`)
 	request := httptest.NewRequest(http.MethodPost, "/v1/panes", body)
 	response := httptest.NewRecorder()
 
@@ -32,7 +32,7 @@ func TestServerCreatePane(t *testing.T) {
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusCreated, response.Body.String())
 	}
-	if service.createReq.ID != "pane-1" || service.createReq.TaskID != "task-1" || !service.createReq.NewTab {
+	if service.createReq.ID != "pane-1" || service.createReq.TaskID != "task-1" || service.createReq.NewTab {
 		t.Fatalf("CreatePane request = %#v, want decoded logical request", service.createReq)
 	}
 	if service.createReq.SameTabAsPaneID != "manager" {
@@ -44,6 +44,27 @@ func TestServerCreatePane(t *testing.T) {
 	}
 	if decoded.Pane.ID != "pane-1" || decoded.Pane.ZellijPaneID != "terminal_1" {
 		t.Fatalf("response pane = %#v, want logical and zellij ids", decoded.Pane)
+	}
+}
+
+func TestServerCreatePaneInvalidTargetReturnsBadRequest(t *testing.T) {
+	service := newFakeRuntimeService()
+	service.createErr = rt.ErrInvalidPaneTarget
+	server := newTestServer(t, service)
+	request := httptest.NewRequest(http.MethodPost, "/v1/panes", strings.NewReader(`{"id":"pane-1"}`))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusBadRequest, response.Body.String())
+	}
+	var decoded ErrorResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if decoded.Error.Code != CodeBadRequest {
+		t.Fatalf("error = %#v, want bad_request", decoded.Error)
 	}
 }
 
@@ -290,6 +311,7 @@ type fakeRuntimeService struct {
 
 	createCalled    bool
 	createReq       rt.CreatePaneRequest
+	createErr       error
 	applyPlanCalled bool
 	applyPlanReq    rt.ApplyExecutionPlanRequest
 	sendReq         rt.SendInputRequest
@@ -311,6 +333,9 @@ func (f *fakeRuntimeService) CreatePane(_ context.Context, req rt.CreatePaneRequ
 	defer f.mu.Unlock()
 	f.createCalled = true
 	f.createReq = req
+	if f.createErr != nil {
+		return rt.CreatePaneResponse{}, f.createErr
+	}
 	tabID := rt.ZellijTabID(7)
 	return rt.CreatePaneResponse{Pane: rt.Pane{
 		ID:           req.ID,
