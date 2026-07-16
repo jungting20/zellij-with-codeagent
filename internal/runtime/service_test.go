@@ -826,7 +826,7 @@ func (b *fakeBackend) SendInput(_ context.Context, req zellij.SendInputRequest) 
 	return b.sendErr
 }
 
-func (b *fakeBackend) ListPanes(context.Context) ([]zellij.Pane, error) {
+func (b *fakeBackend) ListPanes(context.Context, zellij.ListPanesRequest) ([]zellij.Pane, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.listCalls = append(b.listCalls, struct{}{})

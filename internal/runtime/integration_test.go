@@ -848,7 +848,7 @@ func waitForBackendPanePresence(ctx context.Context, t *testing.T, backend *zell
 	t.Helper()
 
 	for i := 0; i < 30; i++ {
-		panes, err := backend.ListPanes(ctx)
+		panes, err := backend.ListPanes(ctx, zellij.ListPanesRequest{})
 		if err != nil {
 			t.Fatalf("ListPanes() error = %v", err)
 		}

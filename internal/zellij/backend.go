@@ -41,8 +41,15 @@ func (b *CLIBackend) Session() string {
 	return b.session
 }
 
+func (b *CLIBackend) requestSession(session string) string {
+	if session = strings.TrimSpace(session); session != "" {
+		return session
+	}
+	return b.session
+}
+
 func (b *CLIBackend) CreateTab(ctx context.Context, req CreateTabRequest) (TabID, error) {
-	result, err := b.run(ctx, "create tab", createTabCommand(b.binary, b.session, req))
+	result, err := b.run(ctx, "create tab", createTabCommand(b.binary, b.requestSession(req.Session), req))
 	if err != nil {
 		return 0, err
 	}
@@ -59,12 +66,12 @@ func (b *CLIBackend) CloseTab(ctx context.Context, req CloseTabRequest) error {
 		return ErrMissingTab
 	}
 
-	_, err := b.run(ctx, "close tab", closeTabCommand(b.binary, b.session, *req.TabID))
+	_, err := b.run(ctx, "close tab", closeTabCommand(b.binary, b.requestSession(req.Session), *req.TabID))
 	return err
 }
 
 func (b *CLIBackend) CreatePane(ctx context.Context, req CreatePaneRequest) (PaneID, error) {
-	result, err := b.run(ctx, "create pane", createPaneCommand(b.binary, b.session, req))
+	result, err := b.run(ctx, "create pane", createPaneCommand(b.binary, b.requestSession(req.Session), req))
 	if err != nil {
 		return "", err
 	}
@@ -81,7 +88,7 @@ func (b *CLIBackend) ClosePane(ctx context.Context, req ClosePaneRequest) error 
 		return ErrMissingPane
 	}
 
-	_, err := b.run(ctx, "close pane", closePaneCommand(b.binary, b.session, req.PaneID))
+	_, err := b.run(ctx, "close pane", closePaneCommand(b.binary, b.requestSession(req.Session), req.PaneID))
 	return err
 }
 
@@ -99,15 +106,16 @@ func (b *CLIBackend) SendInput(ctx context.Context, req SendInputRequest) error 
 	if sendEnter {
 		text = strings.TrimSuffix(text, "\n")
 	}
+	session := b.requestSession(req.Session)
 
 	if text != "" {
-		if _, err := b.run(ctx, "paste input", pasteCommand(b.binary, b.session, req.PaneID, text)); err != nil {
+		if _, err := b.run(ctx, "paste input", pasteCommand(b.binary, session, req.PaneID, text)); err != nil {
 			return err
 		}
 	}
 
 	if sendEnter {
-		if _, err := b.run(ctx, "send enter", sendEnterCommand(b.binary, b.session, req.PaneID)); err != nil {
+		if _, err := b.run(ctx, "send enter", sendEnterCommand(b.binary, session, req.PaneID)); err != nil {
 			return err
 		}
 	}
@@ -115,8 +123,8 @@ func (b *CLIBackend) SendInput(ctx context.Context, req SendInputRequest) error 
 	return nil
 }
 
-func (b *CLIBackend) ListPanes(ctx context.Context) ([]Pane, error) {
-	result, err := b.run(ctx, "list panes", listPanesCommand(b.binary, b.session))
+func (b *CLIBackend) ListPanes(ctx context.Context, req ListPanesRequest) ([]Pane, error) {
+	result, err := b.run(ctx, "list panes", listPanesCommand(b.binary, b.requestSession(req.Session)))
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +141,7 @@ func (b *CLIBackend) DumpScreen(ctx context.Context, req DumpScreenRequest) (str
 		return "", ErrMissingPane
 	}
 
-	result, err := b.run(ctx, "dump screen", dumpScreenCommand(b.binary, b.session, req))
+	result, err := b.run(ctx, "dump screen", dumpScreenCommand(b.binary, b.requestSession(req.Session), req))
 	if err != nil {
 		return "", err
 	}
@@ -144,7 +152,7 @@ func (b *CLIBackend) SubscribeCommand(req SubscribeRequest) (CommandSpec, error)
 	if req.PaneID == "" {
 		return CommandSpec{}, ErrMissingPane
 	}
-	return subscribeCommand(b.binary, b.session, req), nil
+	return subscribeCommand(b.binary, b.requestSession(req.Session), req), nil
 }
 
 func (b *CLIBackend) run(ctx context.Context, operation string, spec CommandSpec) (CommandResult, error) {

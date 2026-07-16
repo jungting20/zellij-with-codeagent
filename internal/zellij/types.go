@@ -28,7 +28,7 @@ type Backend interface {
 	CreatePane(ctx context.Context, req CreatePaneRequest) (PaneID, error)
 	ClosePane(ctx context.Context, req ClosePaneRequest) error
 	SendInput(ctx context.Context, req SendInputRequest) error
-	ListPanes(ctx context.Context) ([]Pane, error)
+	ListPanes(ctx context.Context, req ListPanesRequest) ([]Pane, error)
 	DumpScreen(ctx context.Context, req DumpScreenRequest) (string, error)
 	SubscribeCommand(req SubscribeRequest) (CommandSpec, error)
 }
@@ -40,6 +40,7 @@ type Options struct {
 }
 
 type CreatePaneRequest struct {
+	Session  string
 	Name     string
 	CWD      string
 	TabID    *TabID
@@ -48,34 +49,44 @@ type CreatePaneRequest struct {
 }
 
 type CreateTabRequest struct {
+	Session string
 	Name    string
 	CWD     string
 	Command []string
 }
 
 type CloseTabRequest struct {
-	TabID *TabID
+	Session string
+	TabID   *TabID
 }
 
 type ClosePaneRequest struct {
-	PaneID PaneID
+	Session string
+	PaneID  PaneID
 }
 
 type SendInputRequest struct {
-	PaneID PaneID
-	Text   string
+	Session string
+	PaneID  PaneID
+	Text    string
+}
+
+type ListPanesRequest struct {
+	Session string
 }
 
 type DumpScreenRequest struct {
-	PaneID PaneID
-	Full   bool
-	ANSI   bool
+	Session string
+	PaneID  PaneID
+	Full    bool
+	ANSI    bool
 }
 
 type SubscribeRequest struct {
-	PaneID PaneID
-	JSON   bool
-	ANSI   bool
+	Session string
+	PaneID  PaneID
+	JSON    bool
+	ANSI    bool
 }
 
 type Pane struct {

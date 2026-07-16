@@ -397,7 +397,7 @@ func formatPaneMessage(from registry.PaneID, messageType, body string) string {
 }
 
 func (s *Service) findPaneByID(ctx context.Context, paneID zellij.PaneID) (zellij.Pane, error) {
-	panes, err := s.backend.ListPanes(ctx)
+	panes, err := s.backend.ListPanes(ctx, zellij.ListPanesRequest{})
 	if err != nil {
 		return zellij.Pane{}, err
 	}
@@ -410,7 +410,7 @@ func (s *Service) findPaneByID(ctx context.Context, paneID zellij.PaneID) (zelli
 }
 
 func (s *Service) findPaneInTab(ctx context.Context, tabID zellij.TabID) (zellij.Pane, error) {
-	panes, err := s.backend.ListPanes(ctx)
+	panes, err := s.backend.ListPanes(ctx, zellij.ListPanesRequest{})
 	if err != nil {
 		return zellij.Pane{}, err
 	}

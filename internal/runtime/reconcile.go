@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Service) Reconcile(ctx context.Context, _ ReconcileRequest) (ReconcileResponse, error) {
-	livePanes, err := s.backend.ListPanes(ctx)
+	livePanes, err := s.backend.ListPanes(ctx, zellij.ListPanesRequest{})
 	if err != nil {
 		s.publishRuntimeHealth(fmt.Sprintf("reconcile failed: %v", err))
 		return ReconcileResponse{}, err

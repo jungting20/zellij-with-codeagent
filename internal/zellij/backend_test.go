@@ -8,6 +8,109 @@ import (
 	"testing"
 )
 
+func TestBackendRequestsUseRequestSession(t *testing.T) {
+	wantPrefix := []string{"--session", "request-session"}
+	tabID := TabID(7)
+
+	tests := []struct {
+		name   string
+		result CommandResult
+		invoke func(*CLIBackend) error
+	}{
+		{
+			name:   "create tab",
+			result: CommandResult{Stdout: "7\n"},
+			invoke: func(backend *CLIBackend) error {
+				_, err := backend.CreateTab(context.Background(), CreateTabRequest{Session: "request-session"})
+				return err
+			},
+		},
+		{
+			name:   "create pane",
+			result: CommandResult{Stdout: "terminal_5\n"},
+			invoke: func(backend *CLIBackend) error {
+				_, err := backend.CreatePane(context.Background(), CreatePaneRequest{Session: "request-session"})
+				return err
+			},
+		},
+		{
+			name:   "list panes",
+			result: CommandResult{Stdout: "[]"},
+			invoke: func(backend *CLIBackend) error {
+				_, err := backend.ListPanes(context.Background(), ListPanesRequest{Session: "request-session"})
+				return err
+			},
+		},
+		{
+			name: "close tab",
+			invoke: func(backend *CLIBackend) error {
+				return backend.CloseTab(context.Background(), CloseTabRequest{Session: "request-session", TabID: &tabID})
+			},
+		},
+		{
+			name: "close pane",
+			invoke: func(backend *CLIBackend) error {
+				return backend.ClosePane(context.Background(), ClosePaneRequest{Session: "request-session", PaneID: "terminal_5"})
+			},
+		},
+		{
+			name: "send input",
+			invoke: func(backend *CLIBackend) error {
+				return backend.SendInput(context.Background(), SendInputRequest{Session: "request-session", PaneID: "terminal_5", Text: "hello"})
+			},
+		},
+		{
+			name: "dump screen",
+			invoke: func(backend *CLIBackend) error {
+				_, err := backend.DumpScreen(context.Background(), DumpScreenRequest{Session: "request-session", PaneID: "terminal_5"})
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeRunner{results: []fakeResult{{result: tt.result}}}
+			backend := NewBackend(Options{Session: "default-session", Runner: runner})
+
+			if err := tt.invoke(backend); err != nil {
+				t.Fatalf("request error = %v", err)
+			}
+			if !reflect.DeepEqual(runner.commands[0].Args[:2], wantPrefix) {
+				t.Fatalf("command prefix = %#v, want %#v", runner.commands[0].Args[:2], wantPrefix)
+			}
+		})
+	}
+}
+
+func TestBackendRequestSessionFallsBackToOptionsSession(t *testing.T) {
+	runner := &fakeRunner{results: []fakeResult{{result: CommandResult{Stdout: "terminal_5\n"}}}}
+	backend := NewBackend(Options{Session: "default-session", Runner: runner})
+
+	if _, err := backend.CreatePane(context.Background(), CreatePaneRequest{}); err != nil {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+
+	wantPrefix := []string{"--session", "default-session"}
+	if !reflect.DeepEqual(runner.commands[0].Args[:2], wantPrefix) {
+		t.Fatalf("command prefix = %#v, want %#v", runner.commands[0].Args[:2], wantPrefix)
+	}
+}
+
+func TestSubscribeRequestUsesRequestSession(t *testing.T) {
+	backend := NewBackend(Options{Session: "default-session"})
+
+	spec, err := backend.SubscribeCommand(SubscribeRequest{Session: "request-session", PaneID: "terminal_5"})
+	if err != nil {
+		t.Fatalf("SubscribeCommand() error = %v", err)
+	}
+
+	wantPrefix := []string{"--session", "request-session"}
+	if !reflect.DeepEqual(spec.Args[:2], wantPrefix) {
+		t.Fatalf("command prefix = %#v, want %#v", spec.Args[:2], wantPrefix)
+	}
+}
+
 func TestCreatePaneParsesReturnedPaneID(t *testing.T) {
 	runner := &fakeRunner{
 		results: []fakeResult{
@@ -265,7 +368,7 @@ func TestListPanesParsesJSONMetadata(t *testing.T) {
 	}
 	backend := NewBackend(Options{Runner: runner})
 
-	panes, err := backend.ListPanes(context.Background())
+	panes, err := backend.ListPanes(context.Background(), ListPanesRequest{})
 	if err != nil {
 		t.Fatalf("ListPanes() error = %v", err)
 	}
@@ -293,7 +396,7 @@ func TestListPanesSurfacesMalformedJSON(t *testing.T) {
 	}
 	backend := NewBackend(Options{Runner: runner})
 
-	_, err := backend.ListPanes(context.Background())
+	_, err := backend.ListPanes(context.Background(), ListPanesRequest{})
 	if err == nil {
 		t.Fatal("ListPanes() error = nil, want malformed JSON error")
 	}
