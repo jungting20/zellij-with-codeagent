@@ -101,6 +101,7 @@ func runSubmit(args []string, stdin io.Reader, stdout, stderr io.Writer, newClie
 	socketPath := fs.String("socket", cli.DefaultSocketPath, "agentd Unix socket path")
 	timeout := fs.Duration("timeout", 10*time.Second, "request timeout")
 	filePath := fs.String("file", "", "AI-generated /v1/requests execution_plan envelope file, or - for stdin")
+	zellijSessionFlag := fs.String("zellij-session", "", "physical Zellij session; defaults to ZELLIJ_SESSION_NAME")
 	showUI := fs.Bool("ui", false, "print planner status UI to stderr")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -110,9 +111,27 @@ func runSubmit(args []string, stdin io.Reader, stdout, stderr io.Writer, newClie
 		return 2
 	}
 
-	plan, err := loadValidatedPlan(*filePath, stdin)
+	plan, err := loadDecodedPlan(*filePath, stdin)
 	if err != nil {
+		fmt.Fprintf(stderr, "submit decode failed: %v\n", err)
+		return 1
+	}
+	sessionCandidate := plan.Payload.ZellijSession
+	if strings.TrimSpace(*zellijSessionFlag) != "" {
+		sessionCandidate = *zellijSessionFlag
+	}
+	resolvedSession, err := cli.ResolveZellijSession(sessionCandidate)
+	if err != nil {
+		fmt.Fprintf(stderr, "resolve zellij session: %v\n", err)
+		return 1
+	}
+	plan.Payload.ZellijSession = resolvedSession
+	if err := planner.ValidateExecutionPlan(plan); err != nil {
 		fmt.Fprintf(stderr, "submit validation failed: %v\n", err)
+		return 1
+	}
+	if err := rebuildExecutionPlanEnvelope(&plan); err != nil {
+		fmt.Fprintf(stderr, "submit encode failed: %v\n", err)
 		return 1
 	}
 	if *showUI {
@@ -145,6 +164,7 @@ func runTUI(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient 
 	mockSource := fs.String("mock-source", defaultMockSource(), "mock top-level source file for the URL")
 	requestID := fs.String("request-id", "", "request id override")
 	agentRoleBin := fs.String("agent-role-bin", "", "agent-role binary used by generated panes")
+	zellijSessionFlag := fs.String("zellij-session", "", "physical Zellij session; defaults to ZELLIJ_SESSION_NAME")
 	dryRun := fs.Bool("dry-run", false, "print the /v1/requests envelope without submitting it")
 	autoSubmit := fs.Bool("auto-submit", false, "submit without interactive confirmation")
 	if err := fs.Parse(args); err != nil {
@@ -153,6 +173,11 @@ func runTUI(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient 
 	if fs.NArg() != 0 {
 		fmt.Fprintf(stderr, "unexpected arguments: %s\n", strings.Join(fs.Args(), " "))
 		return 2
+	}
+	zellijSession, err := cli.ResolveZellijSession(*zellijSessionFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "resolve zellij session: %v\n", err)
+		return 1
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
@@ -167,7 +192,7 @@ func runTUI(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient 
 	fmt.Fprintf(stderr, "mock_source=%s\n", *mockSource)
 	fmt.Fprintln(stderr)
 
-	var err error
+	err = nil
 	*goal, err = promptChat(reader, stderr, *goal)
 	if err != nil {
 		fmt.Fprintf(stderr, "read request failed: %v\n", err)
@@ -198,6 +223,7 @@ func runTUI(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient 
 	payload, err := planner.BuildPagePlan(planner.PagePlanRequest{
 		URL:              *targetURL,
 		CWD:              *cwd,
+		ZellijSession:    zellijSession,
 		AgentRoleBin:     pagePlanAgentRoleBin(*agentRoleBin, cfg),
 		AgentRoleCommand: pagePlanAgentRoleCommand(*agentRoleBin, cfg),
 	}, resolved)
@@ -268,6 +294,7 @@ func runPage(args []string, stdout, stderr io.Writer, newClient ClientFactory, c
 	requestID := fs.String("request-id", "", "request id override")
 	mockSource := fs.String("mock-source", "", "mock top-level source file for the URL")
 	agentRoleBin := fs.String("agent-role-bin", "", "agent-role binary used by generated panes")
+	zellijSessionFlag := fs.String("zellij-session", "", "physical Zellij session; defaults to ZELLIJ_SESSION_NAME")
 	dryRun := fs.Bool("dry-run", false, "print the /v1/requests envelope without submitting it")
 	showUI := fs.Bool("ui", false, "print planner status UI to stderr")
 	if err := fs.Parse(args); err != nil {
@@ -283,6 +310,11 @@ func runPage(args []string, stdout, stderr io.Writer, newClient ClientFactory, c
 	}
 	if strings.TrimSpace(*mockSource) == "" {
 		*mockSource = defaultMockSource()
+	}
+	zellijSession, err := cli.ResolveZellijSession(*zellijSessionFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "resolve zellij session: %v\n", err)
+		return 1
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
@@ -306,6 +338,7 @@ func runPage(args []string, stdout, stderr io.Writer, newClient ClientFactory, c
 		URL:              *targetURL,
 		CWD:              *cwd,
 		Session:          *session,
+		ZellijSession:    zellijSession,
 		AgentRoleBin:     pagePlanAgentRoleBin(*agentRoleBin, cfg),
 		AgentRoleCommand: pagePlanAgentRoleCommand(*agentRoleBin, cfg),
 	}, resolved)
@@ -349,6 +382,17 @@ func runPage(args []string, stdout, stderr io.Writer, newClient ClientFactory, c
 }
 
 func loadValidatedPlan(filePath string, stdin io.Reader) (planner.ValidatedExecutionPlan, error) {
+	plan, err := loadDecodedPlan(filePath, stdin)
+	if err != nil {
+		return planner.ValidatedExecutionPlan{}, err
+	}
+	if err := planner.ValidateExecutionPlan(plan); err != nil {
+		return planner.ValidatedExecutionPlan{}, err
+	}
+	return plan, nil
+}
+
+func loadDecodedPlan(filePath string, stdin io.Reader) (planner.ValidatedExecutionPlan, error) {
 	if strings.TrimSpace(filePath) == "" {
 		return planner.ValidatedExecutionPlan{}, errors.New("--file is required")
 	}
@@ -362,7 +406,16 @@ func loadValidatedPlan(filePath string, stdin io.Reader) (planner.ValidatedExecu
 	if err != nil {
 		return planner.ValidatedExecutionPlan{}, err
 	}
-	return planner.ParseExecutionPlanEnvelope(data)
+	return planner.DecodeExecutionPlanEnvelope(data)
+}
+
+func rebuildExecutionPlanEnvelope(plan *planner.ValidatedExecutionPlan) error {
+	payload, err := json.Marshal(plan.Payload)
+	if err != nil {
+		return err
+	}
+	plan.Envelope.Payload = payload
+	return nil
 }
 
 func writeEnvelope(w io.Writer, envelope transport.RequestEnvelope) error {

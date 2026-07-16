@@ -14,6 +14,13 @@ import (
 	"zellij-with-codeagent/internal/transport"
 )
 
+func TestMain(m *testing.M) {
+	if err := os.Setenv("ZELLIJ_SESSION_NAME", "test-session"); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
+
 func TestRunPageDryRunPrintsCanonicalEnvelope(t *testing.T) {
 	client := &fakeAgentClient{}
 	var stdout, stderr bytes.Buffer
@@ -24,6 +31,7 @@ func TestRunPageDryRunPrintsCanonicalEnvelope(t *testing.T) {
 		"--cwd", "/tmp/app",
 		"--mock-source", "/tmp/app/src/pages/example/aa.tsx",
 		"--agent-role-bin", "/tmp/runtime/bin/agent-role",
+		"--zellij-session", "flag-session",
 		"--dry-run",
 	}, &stdout, &stderr, fakeFactory(client))
 
@@ -47,12 +55,16 @@ func TestRunPageDryRunPrintsCanonicalEnvelope(t *testing.T) {
 	if payload.Session != "page-example-aa" || len(payload.Tabs) != 1 || len(payload.Tabs[0].Panes) != 4 {
 		t.Fatalf("payload = %#v, want page-example-aa with four panes", payload)
 	}
+	if payload.ZellijSession != "flag-session" {
+		t.Fatalf("payload.ZellijSession = %q, want flag-session", payload.ZellijSession)
+	}
 	if strings.Contains(stdout.String(), "resolved_source") {
 		t.Fatalf("dry-run output contains legacy resolved_source: %s", stdout.String())
 	}
 }
 
 func TestRunPageSubmitsGeneratedPlan(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "env-session")
 	client := &fakeAgentClient{}
 	var stdout, stderr bytes.Buffer
 
@@ -75,6 +87,9 @@ func TestRunPageSubmitsGeneratedPlan(t *testing.T) {
 	}
 	if client.payload.Session != "page-example-aa" || len(client.payload.Tabs[0].Panes) != 4 {
 		t.Fatalf("payload = %#v, want page-example-aa with four panes", client.payload)
+	}
+	if client.payload.ZellijSession != "env-session" {
+		t.Fatalf("payload.ZellijSession = %q, want env-session", client.payload.ZellijSession)
 	}
 	if !strings.Contains(stderr.String(), "[AI PLANNER]") || !strings.Contains(stderr.String(), "source=/tmp/app/src/pages/example/aa.tsx") {
 		t.Fatalf("stderr = %q, want planner UI", stderr.String())
@@ -116,6 +131,7 @@ func TestRunValidateAcceptsAIEnvelopeFile(t *testing.T) {
 		"request_id": "req_ai_json",
 		"payload": {
 			"session": "page-example-aa",
+			"zellij_session": "physical-a",
 			"layout": "triple-horizontal",
 			"tabs": [
 				{"name": "page-example-aa", "panes": [{"id": "page-editor", "role": "editor"}]}
@@ -160,11 +176,13 @@ func TestRunValidateRejectsLegacyPayloadFields(t *testing.T) {
 }
 
 func TestRunSubmitValidatesAndSubmitsAIEnvelopeFile(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "env-session")
 	planPath := writePlanFile(t, `{
 		"type": "execution_plan",
 		"request_id": "req_ai_submit",
 		"payload": {
 			"session": "page-example-aa",
+			"zellij_session": "file-session",
 			"layout": "triple-horizontal",
 			"tabs": [
 				{"name": "page-example-aa", "panes": [{"id": "page-editor", "role": "editor"}]}
@@ -174,7 +192,7 @@ func TestRunSubmitValidatesAndSubmitsAIEnvelopeFile(t *testing.T) {
 	client := &fakeAgentClient{}
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"submit", "--socket", "/tmp/custom.sock", "--file", planPath, "--ui"}, &stdout, &stderr, fakeFactory(client))
+	code := run([]string{"submit", "--socket", "/tmp/custom.sock", "--file", planPath, "--zellij-session", "flag-session", "--ui"}, &stdout, &stderr, fakeFactory(client))
 
 	if code != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
@@ -184,6 +202,9 @@ func TestRunSubmitValidatesAndSubmitsAIEnvelopeFile(t *testing.T) {
 	}
 	if client.payload.Session != "page-example-aa" {
 		t.Fatalf("payload = %#v, want page-example-aa", client.payload)
+	}
+	if client.payload.ZellijSession != "flag-session" {
+		t.Fatalf("payload.ZellijSession = %q, want flag-session", client.payload.ZellijSession)
 	}
 	if !strings.Contains(stderr.String(), "[AI PLANNER]") || !strings.Contains(stdout.String(), "request=req_ai_submit") {
 		t.Fatalf("stdout=%q stderr=%q, want UI and submit summary", stdout.String(), stderr.String())
@@ -203,7 +224,43 @@ func TestRunSubmitRequiresFile(t *testing.T) {
 	}
 }
 
+func TestRunSubmitUsesEnvironmentZellijSession(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "env-session")
+	planPath := writePlanFile(t, `{
+		"type":"execution_plan",
+		"request_id":"req_env_submit",
+		"payload":{"session":"page-example-aa","tabs":[{"panes":[{"id":"page-editor"}]}]}
+	}`)
+	client := &fakeAgentClient{}
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"submit", "--file", planPath}, &stdout, &stderr, fakeFactory(client))
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if client.payload.ZellijSession != "env-session" {
+		t.Fatalf("payload.ZellijSession = %q, want env-session", client.payload.ZellijSession)
+	}
+}
+
+func TestPlannerSubmissionHelpDocumentsZellijSession(t *testing.T) {
+	for _, command := range []string{"page", "tui", "submit"} {
+		t.Run(command, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := run([]string{command, "--help"}, &stdout, &stderr, fakeFactory(&fakeAgentClient{}))
+			if code != 2 {
+				t.Fatalf("run() exit code = %d, want 2 for flag help", code)
+			}
+			if !strings.Contains(stderr.String(), "-zellij-session string") || !strings.Contains(stderr.String(), "physical Zellij session; defaults to ZELLIJ_SESSION_NAME") {
+				t.Fatalf("stderr = %q, want zellij session help", stderr.String())
+			}
+		})
+	}
+}
+
 func TestRunTUIDryRunPrintsEnvelopeFromNaturalLanguageRequest(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "env-session")
 	client := &fakeAgentClient{}
 	var stdout, stderr bytes.Buffer
 
@@ -226,6 +283,13 @@ func TestRunTUIDryRunPrintsEnvelopeFromNaturalLanguageRequest(t *testing.T) {
 	}
 	if envelope.Type != transport.RequestTypeExecutionPlan || envelope.RequestID != "req_page-example-aa" {
 		t.Fatalf("envelope = %#v, want execution_plan req_page-example-aa", envelope)
+	}
+	var payload transport.ExecutionPlanPayload
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		t.Fatalf("payload decode error = %v", err)
+	}
+	if payload.ZellijSession != "env-session" {
+		t.Fatalf("payload.ZellijSession = %q, want env-session", payload.ZellijSession)
 	}
 	if !strings.Contains(stderr.String(), "[AI PLANNER]") || !strings.Contains(stderr.String(), "agentd=ok(test)") || !strings.Contains(stderr.String(), "request_text=localhost:8000/example/aa") || !strings.Contains(stderr.String(), "mock_source=") {
 		t.Fatalf("stderr = %q, want TUI natural language summary", stderr.String())

@@ -42,6 +42,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 	timeout := fs.Duration("timeout", 10*time.Second, "request timeout")
 	cwdFlag := fs.String("cwd", "", "working directory for the tab-network pane")
 	session := fs.String("session", "", "execution session/task id override")
+	zellijSessionFlag := fs.String("zellij-session", "", "physical Zellij session; defaults to ZELLIJ_SESSION_NAME")
 	dryRun := fs.Bool("dry-run", false, "print the /v1/requests envelope without submitting it")
 	noWatch := fs.Bool("no-watch", false, "start one tab-network pane instead of watching new Chrome tabs")
 	if err := fs.Parse(args); err != nil {
@@ -53,10 +54,16 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 		fmt.Fprintf(stderr, "resolve cwd: %v\n", err)
 		return 1
 	}
+	zellijSession, err := cli.ResolveZellijSession(*zellijSessionFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "resolve zellij session: %v\n", err)
+		return 1
+	}
 
 	payload, err := chrome.BuildPlan(chrome.PlanRequest{
 		CWD:            cwd,
 		Session:        *session,
+		ZellijSession:  zellijSession,
 		SocketPath:     *socketPath,
 		RoleCommand:    cfg.DefaultRoleCommand,
 		TabNetworkArgs: fs.Args(),
@@ -116,6 +123,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "    \tworking directory for the tab-network pane")
 	fmt.Fprintln(w, "  --session string")
 	fmt.Fprintln(w, "    \texecution session/task id override")
+	fmt.Fprintln(w, "  --zellij-session string")
+	fmt.Fprintln(w, "    \tphysical Zellij session; defaults to ZELLIJ_SESSION_NAME")
 	fmt.Fprintln(w, "  --dry-run")
 	fmt.Fprintln(w, "    \tprint the /v1/requests envelope without submitting it")
 	fmt.Fprintln(w, "  --no-watch")

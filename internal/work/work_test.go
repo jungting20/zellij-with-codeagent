@@ -7,16 +7,20 @@ import (
 
 func TestBuildPlanCreatesMixedWorkPanes(t *testing.T) {
 	payload, err := BuildPlan(PlanRequest{
-		Goal:        "implement the mixed work command",
-		CWD:         "/tmp/app",
-		RoleCommand: []string{"/tmp/bin/zellij-agent", "role"},
-		Project:     goProjectDetection(),
+		Goal:          "implement the mixed work command",
+		CWD:           "/tmp/app",
+		ZellijSession: "physical-a",
+		RoleCommand:   []string{"/tmp/bin/zellij-agent", "role"},
+		Project:       goProjectDetection(),
 	})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
 	if payload.Session == "" || !strings.HasPrefix(payload.Session, "work-implement-the-mixed-work-command-") {
 		t.Fatalf("Session = %q, want stable work slug", payload.Session)
+	}
+	if payload.ZellijSession != "physical-a" {
+		t.Fatalf("payload.ZellijSession = %q, want physical-a", payload.ZellijSession)
 	}
 	if payload.Layout != "triple-horizontal" {
 		t.Fatalf("Layout = %q, want triple-horizontal", payload.Layout)

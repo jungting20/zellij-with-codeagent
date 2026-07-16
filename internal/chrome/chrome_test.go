@@ -10,11 +10,12 @@ func TestBuildPlanCreatesChromeTabNetworkSupervisorPaneByDefault(t *testing.T) {
 	now := time.Date(2026, 7, 8, 12, 34, 56, 123456789, time.UTC)
 
 	payload, err := BuildPlan(PlanRequest{
-		CWD:         "/repo",
-		SocketPath:  "/tmp/agentd.sock",
-		Session:     "chrome-debug",
-		RoleCommand: []string{"/tmp/bin/zellij-agent", "role"},
-		Now:         func() time.Time { return now },
+		CWD:           "/repo",
+		ZellijSession: "physical-a",
+		SocketPath:    "/tmp/agentd.sock",
+		Session:       "chrome-debug",
+		RoleCommand:   []string{"/tmp/bin/zellij-agent", "role"},
+		Now:           func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
@@ -22,6 +23,9 @@ func TestBuildPlanCreatesChromeTabNetworkSupervisorPaneByDefault(t *testing.T) {
 
 	if payload.Session != "chrome-debug" || payload.Layout != "single-tab" {
 		t.Fatalf("payload session/layout = %q/%q, want chrome-debug/single-tab", payload.Session, payload.Layout)
+	}
+	if payload.ZellijSession != "physical-a" {
+		t.Fatalf("payload.ZellijSession = %q, want physical-a", payload.ZellijSession)
 	}
 	if len(payload.Tabs) != 1 {
 		t.Fatalf("len(Tabs) = %d, want 1", len(payload.Tabs))

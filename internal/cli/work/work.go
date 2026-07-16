@@ -41,6 +41,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 	timeout := fs.Duration("timeout", 15*time.Second, "request timeout")
 	cwdFlag := fs.String("cwd", "", "application working directory")
 	session := fs.String("session", "", "execution session/task id override")
+	zellijSessionFlag := fs.String("zellij-session", "", "physical Zellij session; defaults to ZELLIJ_SESSION_NAME")
 	dryRun := fs.Bool("dry-run", false, "print the /v1/requests envelope without submitting it")
 	autoTest := fs.Bool("auto-test", false, "run the detected project test command once")
 	if err := fs.Parse(args); err != nil {
@@ -63,14 +64,20 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 		fmt.Fprintf(stderr, "detect project: %v\n", err)
 		return 1
 	}
+	zellijSession, err := cli.ResolveZellijSession(*zellijSessionFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "resolve zellij session: %v\n", err)
+		return 1
+	}
 
 	payload, err := workplan.BuildPlan(workplan.PlanRequest{
-		Goal:        goal,
-		CWD:         cwd,
-		Session:     *session,
-		RoleCommand: cfg.DefaultRoleCommand,
-		AutoTest:    *autoTest,
-		Project:     project,
+		Goal:          goal,
+		CWD:           cwd,
+		Session:       *session,
+		ZellijSession: zellijSession,
+		RoleCommand:   cfg.DefaultRoleCommand,
+		AutoTest:      *autoTest,
+		Project:       project,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "build work plan: %v\n", err)
@@ -125,6 +132,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "    \tapplication working directory")
 	fmt.Fprintln(w, "  --session string")
 	fmt.Fprintln(w, "    \texecution session/task id override")
+	fmt.Fprintln(w, "  --zellij-session string")
+	fmt.Fprintln(w, "    \tphysical Zellij session; defaults to ZELLIJ_SESSION_NAME")
 	fmt.Fprintln(w, "  --dry-run")
 	fmt.Fprintln(w, "    \tprint the /v1/requests envelope without submitting it")
 	fmt.Fprintln(w, "  --auto-test")

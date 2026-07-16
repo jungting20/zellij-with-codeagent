@@ -13,6 +13,7 @@ import (
 
 	"zellij-with-codeagent/internal/cli"
 	"zellij-with-codeagent/internal/debate"
+	"zellij-with-codeagent/internal/planner"
 	"zellij-with-codeagent/internal/transport"
 )
 
@@ -251,6 +252,7 @@ func runPlan(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient
 	fs, opts := newFlagSet("plan", stderr)
 	filePath := fs.String("file", "", "JSON execution plan file, or - for stdin")
 	requestID := fs.String("request-id", "", "request id override")
+	zellijSessionFlag := fs.String("zellij-session", "", "physical Zellij session; defaults to ZELLIJ_SESSION_NAME")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -259,11 +261,31 @@ func runPlan(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient
 		return 2
 	}
 
-	payload, resolvedRequestID, err := loadExecutionPlan(*filePath, stdin)
+	plan, err := loadExecutionPlan(*filePath, stdin)
 	if err != nil {
-		fmt.Fprintf(stderr, "read execution plan: %v\n", err)
+		fmt.Fprintf(stderr, "plan decode failed: %v\n", err)
 		return 1
 	}
+	sessionCandidate := plan.Payload.ZellijSession
+	if strings.TrimSpace(*zellijSessionFlag) != "" {
+		sessionCandidate = *zellijSessionFlag
+	}
+	zellijSession, err := cli.ResolveZellijSession(sessionCandidate)
+	if err != nil {
+		fmt.Fprintf(stderr, "resolve zellij session: %v\n", err)
+		return 1
+	}
+	plan.Payload.ZellijSession = zellijSession
+	if err := planner.ValidateExecutionPlan(plan); err != nil {
+		fmt.Fprintf(stderr, "plan validation failed: %v\n", err)
+		return 1
+	}
+	if err := rebuildExecutionPlanEnvelope(&plan); err != nil {
+		fmt.Fprintf(stderr, "plan encode failed: %v\n", err)
+		return 1
+	}
+	payload := plan.Payload
+	resolvedRequestID := plan.Envelope.RequestID
 	if *requestID != "" {
 		resolvedRequestID = *requestID
 	}
@@ -293,21 +315,28 @@ func runDebate(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 	configPath := fs.String("config", "", "YAML file defining debate agent commands")
 	cwd := fs.String("cwd", ".", "working directory for coding-agent panes")
 	agentRoleBin := fs.String("agent-role-bin", "", "zellij-agent binary used by generated panes")
+	zellijSessionFlag := fs.String("zellij-session", "", "physical Zellij session; defaults to ZELLIJ_SESSION_NAME")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	zellijSession, err := cli.ResolveZellijSession(*zellijSessionFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "resolve zellij session: %v\n", err)
+		return 1
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
 
 	result, err := debate.Run(ctx, newClient(opts.socketPath, opts.timeout), debate.Options{
-		Topic:        *topic,
-		Agents:       debate.ParseAgents(*agentsCSV),
-		Rounds:       *rounds,
-		AgentTimeout: *agentTimeout,
-		ConfigPath:   *configPath,
-		CWD:          *cwd,
-		AgentRoleBin: *agentRoleBin,
+		Topic:         *topic,
+		Agents:        debate.ParseAgents(*agentsCSV),
+		Rounds:        *rounds,
+		AgentTimeout:  *agentTimeout,
+		ConfigPath:    *configPath,
+		CWD:           *cwd,
+		AgentRoleBin:  *agentRoleBin,
+		ZellijSession: zellijSession,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -456,7 +485,7 @@ func parseInterspersed(fs *flag.FlagSet, args []string) error {
 	return fs.Parse(append(flagArgs, positional...))
 }
 
-func loadExecutionPlan(filePath string, stdin io.Reader) (transport.ExecutionPlanPayload, string, error) {
+func loadExecutionPlan(filePath string, stdin io.Reader) (planner.ValidatedExecutionPlan, error) {
 	var data []byte
 	var err error
 	if filePath == "-" {
@@ -465,29 +494,18 @@ func loadExecutionPlan(filePath string, stdin io.Reader) (transport.ExecutionPla
 		data, err = os.ReadFile(filePath)
 	}
 	if err != nil {
-		return transport.ExecutionPlanPayload{}, "", err
+		return planner.ValidatedExecutionPlan{}, err
 	}
+	return planner.DecodeExecutionPlanEnvelope(data)
+}
 
-	var envelope transport.RequestEnvelope
-	if err := json.Unmarshal(data, &envelope); err == nil && (envelope.Type != "" || len(envelope.Payload) > 0) {
-		if envelope.Type != transport.RequestTypeExecutionPlan {
-			return transport.ExecutionPlanPayload{}, "", fmt.Errorf("unsupported request type %q", envelope.Type)
-		}
-		if len(envelope.Payload) == 0 {
-			return transport.ExecutionPlanPayload{}, "", errors.New("execution_plan payload is required")
-		}
-		var payload transport.ExecutionPlanPayload
-		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			return transport.ExecutionPlanPayload{}, "", err
-		}
-		return payload, envelope.RequestID, nil
+func rebuildExecutionPlanEnvelope(plan *planner.ValidatedExecutionPlan) error {
+	payload, err := json.Marshal(plan.Payload)
+	if err != nil {
+		return err
 	}
-
-	var payload transport.ExecutionPlanPayload
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return transport.ExecutionPlanPayload{}, "", err
-	}
-	return payload, "", nil
+	plan.Envelope.Payload = payload
+	return nil
 }
 
 func readTextPayload(text, filePath string, stdin io.Reader) (string, error) {

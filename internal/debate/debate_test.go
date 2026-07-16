@@ -31,6 +31,13 @@ func TestWaitForMarkersAcceptsCompactMarkerWithoutFieldSpaces(t *testing.T) {
 	}
 }
 
+func TestExecutionPlanCarriesZellijSession(t *testing.T) {
+	payload := executionPlan("request-a", "physical-a", nil, coordinatorSpec{})
+	if payload.ZellijSession != "physical-a" {
+		t.Fatalf("payload.ZellijSession = %q, want physical-a", payload.ZellijSession)
+	}
+}
+
 type markerEventClient struct {
 	events []transport.Event
 }

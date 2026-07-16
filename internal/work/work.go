@@ -13,12 +13,13 @@ import (
 var ErrInvalidPlanRequest = errors.New("work: invalid plan request")
 
 type PlanRequest struct {
-	Goal        string
-	CWD         string
-	Session     string
-	RoleCommand []string
-	AutoTest    bool
-	Project     ProjectDetection
+	Goal          string
+	CWD           string
+	Session       string
+	ZellijSession string
+	RoleCommand   []string
+	AutoTest      bool
+	Project       ProjectDetection
 }
 
 func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
@@ -37,8 +38,9 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 	roleCommand := normalizeRoleCommand(req.RoleCommand)
 
 	return transport.ExecutionPlanPayload{
-		Session: session,
-		Layout:  "triple-horizontal",
+		Session:       session,
+		ZellijSession: strings.TrimSpace(req.ZellijSession),
+		Layout:        "triple-horizontal",
 		Tabs: []transport.ExecutionPlanTab{
 			{
 				Name: session,

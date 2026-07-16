@@ -17,6 +17,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if err := os.Setenv("ZELLIJ_SESSION_NAME", "test-session"); err != nil {
+		panic(err)
+	}
 	restore := ctlcli.SetDebateDelayForTesting(func(context.Context, time.Duration) error {
 		return nil
 	})
@@ -85,22 +88,30 @@ func TestRunStatusPrintsRuntimeSummary(t *testing.T) {
 
 func TestRunPlanSubmitsExecutionPlanFile(t *testing.T) {
 	planPath := writeTempFile(t, `{
-		"session": "feature-auth",
-		"layout": "triple-horizontal",
-		"tabs": [
-			{"name": "main", "panes": [{"id": "planner", "role": "planner"}]}
-		]
+		"type": "execution_plan",
+		"request_id": "req_file",
+		"payload": {
+			"session": "feature-auth",
+			"zellij_session": "file-session",
+			"layout": "triple-horizontal",
+			"tabs": [
+				{"name": "main", "panes": [{"id": "planner", "role": "planner"}]}
+			]
+		}
 	}`)
 	client := &fakeAgentClient{}
 	var stdout, stderr bytes.Buffer
 
-	code := run([]string{"plan", "--file", planPath, "--request-id", "req_123"}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
+	code := run([]string{"plan", "--file", planPath, "--request-id", "req_123", "--zellij-session", "flag-session"}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client))
 
 	if code != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
 	if client.planRequestID != "req_123" || client.planPayload.Session != "feature-auth" {
 		t.Fatalf("submitted plan = request %q payload %#v, want feature-auth", client.planRequestID, client.planPayload)
+	}
+	if client.planPayload.ZellijSession != "flag-session" {
+		t.Fatalf("plan zellij session = %q, want flag-session", client.planPayload.ZellijSession)
 	}
 	if len(client.planPayload.Tabs) != 1 || client.planPayload.Tabs[0].Panes[0].ID != "planner" {
 		t.Fatalf("submitted tabs = %#v, want planner pane", client.planPayload.Tabs)
@@ -111,6 +122,7 @@ func TestRunPlanSubmitsExecutionPlanFile(t *testing.T) {
 }
 
 func TestRunDebateSubmitsPlan(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "env-session")
 	client := &fakeAgentClient{streamEventsFromInputs: true}
 	var stdout, stderr bytes.Buffer
 
@@ -131,6 +143,9 @@ func TestRunDebateSubmitsPlan(t *testing.T) {
 	}
 	if client.planPayload.Session == "" || client.planPayload.Layout != "debate" {
 		t.Fatalf("plan payload = %#v, want debate session/layout", client.planPayload)
+	}
+	if client.planPayload.ZellijSession != "env-session" {
+		t.Fatalf("plan zellij session = %q, want env-session", client.planPayload.ZellijSession)
 	}
 	if len(client.planPayload.Tabs) != 1 {
 		t.Fatalf("plan tabs = %d, want 1", len(client.planPayload.Tabs))
@@ -641,6 +656,7 @@ func TestRunDebateFailsWhenOverallTimeoutExpiresBeforeAgentTimeout(t *testing.T)
 }
 
 func TestRunPlanAcceptsRequestEnvelopeFromStdin(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "env-session")
 	input := `{
 		"type": "execution_plan",
 		"request_id": "req_from_stdin",
@@ -661,6 +677,24 @@ func TestRunPlanAcceptsRequestEnvelopeFromStdin(t *testing.T) {
 	}
 	if client.planRequestID != "req_from_stdin" || client.planPayload.Session != "demo" {
 		t.Fatalf("submitted plan = request %q payload %#v, want stdin envelope", client.planRequestID, client.planPayload)
+	}
+	if client.planPayload.ZellijSession != "env-session" {
+		t.Fatalf("plan zellij session = %q, want env-session", client.planPayload.ZellijSession)
+	}
+}
+
+func TestCtlSubmissionHelpDocumentsZellijSession(t *testing.T) {
+	for _, command := range []string{"plan", "debate"} {
+		t.Run(command, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := run([]string{command, "--help"}, strings.NewReader(""), &stdout, &stderr, fakeFactory(&fakeAgentClient{}))
+			if code != 2 {
+				t.Fatalf("run() exit code = %d, want 2 for flag help", code)
+			}
+			if !strings.Contains(stderr.String(), "-zellij-session string") || !strings.Contains(stderr.String(), "physical Zellij session; defaults to ZELLIJ_SESSION_NAME") {
+				t.Fatalf("stderr = %q, want zellij session help", stderr.String())
+			}
+		})
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 )
 
 func TestRunDryRunPrintsChromeExecutionPlanEnvelope(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "env-session")
 	cwd := t.TempDir()
 	client := &fakeAgentClient{}
 	var stdout, stderr bytes.Buffer
@@ -22,6 +23,7 @@ func TestRunDryRunPrintsChromeExecutionPlanEnvelope(t *testing.T) {
 	code := Run([]string{
 		"--cwd", cwd,
 		"--session", "chrome-debug",
+		"--zellij-session", "flag-session",
 		"--dry-run",
 		"--", "--port", "9333", "--no-launch",
 	}, strings.NewReader(""), &stdout, &stderr, fakeFactory(client), Config{
@@ -49,6 +51,9 @@ func TestRunDryRunPrintsChromeExecutionPlanEnvelope(t *testing.T) {
 	if payload.Session != "chrome-debug" || payload.Layout != "single-tab" || payload.Tabs[0].Name != "chrome" {
 		t.Fatalf("payload = %#v, want chrome-debug single chrome tab", payload)
 	}
+	if payload.ZellijSession != "flag-session" {
+		t.Fatalf("payload.ZellijSession = %q, want flag-session", payload.ZellijSession)
+	}
 	gotCommand := payload.Tabs[0].Panes[0].Command
 	wantCommand := []string{
 		"/tmp/bin/zellij-agent", "role", "tab-network",
@@ -64,6 +69,38 @@ func TestRunDryRunPrintsChromeExecutionPlanEnvelope(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty dry-run stderr", stderr.String())
+	}
+}
+
+func TestRunDryRunUsesEnvironmentZellijSession(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "env-session")
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--cwd", t.TempDir(), "--dry-run"}, strings.NewReader(""), &stdout, &stderr, fakeFactory(&fakeAgentClient{}), Config{Now: fixedNow})
+	if code != 0 {
+		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	var envelope transport.RequestEnvelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatalf("Unmarshal(envelope) error = %v", err)
+	}
+	var payload transport.ExecutionPlanPayload
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		t.Fatalf("Unmarshal(payload) error = %v", err)
+	}
+	if payload.ZellijSession != "env-session" {
+		t.Fatalf("payload.ZellijSession = %q, want env-session", payload.ZellijSession)
+	}
+}
+
+func TestRunRejectsMissingZellijSession(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "")
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--cwd", t.TempDir(), "--dry-run"}, strings.NewReader(""), &stdout, &stderr, fakeFactory(&fakeAgentClient{}), Config{Now: fixedNow})
+	if code != 1 {
+		t.Fatalf("Run() exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "resolve zellij session: zellij session is required") {
+		t.Fatalf("stderr = %q, want resolver error", stderr.String())
 	}
 }
 
@@ -146,6 +183,7 @@ func TestRunHelpPrintsUsageToStdout(t *testing.T) {
 				t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
 			}
 			if !strings.Contains(stdout.String(), "Usage: zellij-agent chrome") ||
+				!strings.Contains(stdout.String(), "--zellij-session string") ||
 				!strings.Contains(stdout.String(), "--socket") ||
 				!strings.Contains(stdout.String(), "--dry-run") ||
 				!strings.Contains(stdout.String(), "--no-watch") ||

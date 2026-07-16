@@ -24,13 +24,14 @@ type Client interface {
 }
 
 type Options struct {
-	Topic        string
-	Agents       []string
-	Rounds       int
-	AgentTimeout time.Duration
-	ConfigPath   string
-	CWD          string
-	AgentRoleBin string
+	Topic         string
+	Agents        []string
+	Rounds        int
+	AgentTimeout  time.Duration
+	ConfigPath    string
+	CWD           string
+	AgentRoleBin  string
+	ZellijSession string
 }
 
 type Result struct {
@@ -82,7 +83,7 @@ func Run(ctx context.Context, client Client, opts Options) (Result, error) {
 	}
 
 	requestID := fmt.Sprintf("debate_%d", time.Now().UnixNano())
-	payload := executionPlan(requestID, agentSpecs, coordinatorSpec)
+	payload := executionPlan(requestID, opts.ZellijSession, agentSpecs, coordinatorSpec)
 	response, err := client.SubmitExecutionPlan(ctx, requestID, payload)
 	if err != nil {
 		return Result{}, fmt.Errorf("agentctl debate plan failed: %w", err)
@@ -496,7 +497,7 @@ func SetDelayForTesting(fn func(context.Context, time.Duration) error) func() {
 	}
 }
 
-func executionPlan(requestID string, agents []agentSpec, coordinator coordinatorSpec) transport.ExecutionPlanPayload {
+func executionPlan(requestID, zellijSession string, agents []agentSpec, coordinator coordinatorSpec) transport.ExecutionPlanPayload {
 	panes := []transport.ExecutionPlanPane{
 		{
 			ID:      "debate-coordinator",
@@ -516,8 +517,9 @@ func executionPlan(requestID string, agents []agentSpec, coordinator coordinator
 		})
 	}
 	return transport.ExecutionPlanPayload{
-		Session: requestID,
-		Layout:  "debate",
+		Session:       requestID,
+		ZellijSession: zellijSession,
+		Layout:        "debate",
 		Tabs: []transport.ExecutionPlanTab{
 			{
 				Name:  requestID,

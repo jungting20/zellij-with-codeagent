@@ -14,6 +14,7 @@ var ErrInvalidPlanRequest = errors.New("chrome: invalid plan request")
 type PlanRequest struct {
 	CWD            string
 	Session        string
+	ZellijSession  string
 	SocketPath     string
 	RoleCommand    []string
 	TabNetworkArgs []string
@@ -55,8 +56,9 @@ func BuildPlan(req PlanRequest) (transport.ExecutionPlanPayload, error) {
 	}
 
 	return transport.ExecutionPlanPayload{
-		Session: session,
-		Layout:  "single-tab",
+		Session:       session,
+		ZellijSession: strings.TrimSpace(req.ZellijSession),
+		Layout:        "single-tab",
 		Tabs: []transport.ExecutionPlanTab{
 			{
 				Name: "chrome",

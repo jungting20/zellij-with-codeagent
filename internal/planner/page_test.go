@@ -28,9 +28,10 @@ func TestMockSourceResolverRequiresSource(t *testing.T) {
 
 func TestBuildPagePlanCreatesFourPagePanes(t *testing.T) {
 	payload, err := BuildPagePlan(PagePlanRequest{
-		URL:          "http://localhost:8000/example/aa",
-		CWD:          "/tmp/app",
-		AgentRoleBin: "/tmp/runtime/bin/agent-role",
+		URL:           "http://localhost:8000/example/aa",
+		CWD:           "/tmp/app",
+		ZellijSession: "physical-a",
+		AgentRoleBin:  "/tmp/runtime/bin/agent-role",
 	}, ResolveSourceResult{
 		URL:        "http://localhost:8000/example/aa",
 		SourcePath: "/tmp/app/src/pages/example/aa.tsx",
@@ -41,6 +42,9 @@ func TestBuildPagePlanCreatesFourPagePanes(t *testing.T) {
 	}
 	if payload.Session != "page-example-aa" || payload.Layout != "triple-horizontal" {
 		t.Fatalf("payload header = %#v, want page-example-aa triple-horizontal", payload)
+	}
+	if payload.ZellijSession != "physical-a" {
+		t.Fatalf("payload.ZellijSession = %q, want physical-a", payload.ZellijSession)
 	}
 	if len(payload.Tabs) != 1 || len(payload.Tabs[0].Panes) != 4 {
 		t.Fatalf("tabs = %#v, want one tab with four panes", payload.Tabs)

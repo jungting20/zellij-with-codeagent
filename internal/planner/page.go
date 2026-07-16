@@ -17,6 +17,7 @@ type PagePlanRequest struct {
 	URL              string
 	CWD              string
 	Session          string
+	ZellijSession    string
 	AgentRoleBin     string
 	AgentRoleCommand []string
 }
@@ -44,8 +45,9 @@ func BuildPagePlan(req PagePlanRequest, resolved ResolveSourceResult) (transport
 	agentRoleCommand := normalizeRoleCommand(req.AgentRoleCommand, req.AgentRoleBin)
 
 	return transport.ExecutionPlanPayload{
-		Session: session,
-		Layout:  "triple-horizontal",
+		Session:       session,
+		ZellijSession: strings.TrimSpace(req.ZellijSession),
+		Layout:        "triple-horizontal",
 		Tabs: []transport.ExecutionPlanTab{
 			{
 				Name: session,
