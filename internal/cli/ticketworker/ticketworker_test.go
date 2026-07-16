@@ -217,6 +217,34 @@ func TestRunManagerPreservesZellijSessionOnContextCancellation(t *testing.T) {
 	}
 }
 
+func TestRunManagerPassesTimeoutToStartupReadiness(t *testing.T) {
+	root := t.TempDir()
+	writeValidConfig(t, root)
+	var gotOptions ticketworker.ManagerOptions
+	cfg := testCLIConfig(root, &fakeClient{})
+	cfg.NewManager = func(opts ticketworker.ManagerOptions) (Manager, error) {
+		gotOptions = opts
+		return &fakeManager{err: context.Canceled}, nil
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{
+		"manager", "--cwd", root,
+		"--config", ticketworker.ConfigPath(root),
+		"--task", "tickets",
+		"--anchor", "ticket-worker-manager",
+		"--zellij-session", "physical-a",
+		"--timeout", "3s",
+	}, strings.NewReader(""), &stdout, &stderr, cfg)
+
+	if code != 0 {
+		t.Fatalf("manager code = %d, stderr=%q", code, stderr.String())
+	}
+	if gotOptions.StartupTimeout != 3*time.Second {
+		t.Fatalf("startup timeout = %s, want 3s", gotOptions.StartupTimeout)
+	}
+}
+
 func TestRunManagerAppliesExplicitMaxWorkersOverride(t *testing.T) {
 	root := t.TempDir()
 	writeValidConfig(t, root)

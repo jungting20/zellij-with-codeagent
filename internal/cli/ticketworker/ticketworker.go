@@ -258,7 +258,7 @@ func runManager(args []string, stdout, stderr io.Writer, cfg Config) int {
 	manager, err := newManager(ticketworker.ManagerOptions{
 		Client: client, Config: workerConfig,
 		TaskID: *taskID, AnchorPaneID: *anchor, CWD: cwd, Log: stdout,
-		ZellijSession: *zellijSession,
+		ZellijSession: *zellijSession, StartupTimeout: *timeout,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "create ticket-worker manager: %v\n", err)

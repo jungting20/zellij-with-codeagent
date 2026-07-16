@@ -188,7 +188,7 @@ After replacing the example command with the project's worker entrypoint, start 
 ./bin/zellij-agent ticket-worker start
 ```
 
-`start` validates the complete configuration before submitting a new `ticket-worker` tab. The initial plan contains exactly two bootstrap panes: the deterministic worker manager and a read-only dashboard monitor. The manager then creates up to `max_workers` worker panes in that same tab. A one-run capacity override does not change the file:
+`start` validates the complete configuration before submitting a new `ticket-worker` tab. The initial plan contains exactly two bootstrap panes: the deterministic worker manager and a read-only dashboard monitor. The manager waits until its registered anchor pane is visible in the runtime before creating workers, then creates up to `max_workers` worker panes in that same tab. The `--timeout` value bounds both transport requests and this startup-readiness wait. A one-run capacity override does not change the file:
 
 ```bash
 ./bin/zellij-agent ticket-worker start --max-workers 5 --session tickets --zellij-session physical-a
@@ -216,7 +216,7 @@ The project worker command owns the ticket workflow. It must atomically claim it
 
 Completion requires an output line from the watched logical pane whose surrounding whitespace is trimmed and then exactly equals `completion_marker`. Substrings do not match, and an identical marker from another pane cannot complete the watched worker. Process exit, pane-close events, unchanged output, and silence are not completion signals.
 
-When a worker matches the marker, the manager closes that logical pane through the runtime and makes its slot eligible for refill on the next polling tick. Create failures leave a slot empty for a later retry. Watch failures and marker-less exits leave the worker unresolved. Close failures keep the slot occupied, so replacements cannot exceed configured capacity.
+When a worker matches the marker, the manager closes that logical pane through the runtime and makes its slot eligible for refill on the next polling tick. A worker may print the exact marker and exit immediately; if closing then reports that the runtime record is already absent, the manager reconciles runtime state and releases the slot. Create failures leave a slot empty for a later retry. Watch failures and marker-less exits leave the worker unresolved. Other close failures keep the slot occupied, so replacements cannot exceed configured capacity.
 
 Canceling or closing the manager stops marker watches and future creation but performs zero worker close or cleanup calls; existing worker panes are deliberately preserved. Version 1 does not recover or adopt those panes after a manager or daemon restart, persist pool state, automatically retry stalled workers, or handle failed/waiting worker policy. Starting another manager while prior workers remain is an operator error. The monitor is read-only and cannot create, close, retry, or send input to workers.
 
