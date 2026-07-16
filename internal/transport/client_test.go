@@ -16,11 +16,12 @@ func TestClientCreatePaneOverUnixSocket(t *testing.T) {
 	defer cleanup()
 
 	response, err := client.CreatePane(context.Background(), CreatePaneRequest{
-		ID:      "pane-1",
-		TaskID:  "task-1",
-		Role:    "test",
-		NewTab:  true,
-		TabName: "agentd-test",
+		ID:            "pane-1",
+		TaskID:        "task-1",
+		Role:          "test",
+		ZellijSession: "physical-a",
+		NewTab:        true,
+		TabName:       "agentd-test",
 	})
 	if err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
@@ -140,8 +141,9 @@ func TestClientSubmitExecutionPlan(t *testing.T) {
 	defer cleanup()
 
 	response, err := client.SubmitExecutionPlan(context.Background(), "req_123", ExecutionPlanPayload{
-		Session: "feature-auth",
-		Layout:  "triple-horizontal",
+		Session:       "feature-auth",
+		ZellijSession: "physical-a",
+		Layout:        "triple-horizontal",
 		Tabs: []ExecutionPlanTab{
 			{
 				Name: "feature-auth",
@@ -158,7 +160,7 @@ func TestClientSubmitExecutionPlan(t *testing.T) {
 	if response.RequestID != "req_123" || len(response.Tabs) != 1 || len(response.Tabs[0].Panes) != 2 {
 		t.Fatalf("SubmitExecutionPlan() = %#v, want req_123 and one tab with two panes", response)
 	}
-	if !service.applyPlanCalled || service.applyPlanReq.Session != "feature-auth" {
+	if !service.applyPlanCalled || service.applyPlanReq.Session != "feature-auth" || service.applyPlanReq.ZellijSession != "physical-a" {
 		t.Fatalf("runtime request = %#v, want execution plan applied", service.applyPlanReq)
 	}
 }

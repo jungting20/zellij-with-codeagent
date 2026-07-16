@@ -83,6 +83,7 @@
     ```json
     {
       "session": "feature-auth-fix",
+      "zellij_session": "gregarious-iguanadon",
       "layout": "triple-horizontal",
       "tabs": [
         {
@@ -105,6 +106,20 @@
       ]
     }
     ```
+*   **직접 Pane 생성 요청 (`CreatePaneRequest`)**:
+    ```json
+    {
+      "id": "coder",
+      "task_id": "feature-auth-fix",
+      "zellij_session": "gregarious-iguanadon",
+      "role": "editor",
+      "new_tab": true,
+      "tab_name": "feature-auth-fix"
+    }
+    ```
+
+`session`은 하나의 작업에 속한 Pane을 논리적으로 그룹화하는 식별자이고, `zellij_session`은 명령을 실행할 물리적 Zellij 세션을 선택합니다. 두 값은 목적이 다르므로 실행 계획과 직접 Pane 생성 요청에서 각각 명시해야 합니다.
+
 *   **실행 계획 응답 타입 (`ExecutionPlanResponse`)**:
     *   데몬에 의해 할당된 실제 Zellij 메타데이터를 매핑하여 Planner에게 응답.
     ```json
@@ -142,6 +157,7 @@ HTTP API 계층(`internal/transport`)에서 JSON을 파싱하여 Go 내부 서�
     type CreatePaneRequest struct {
         ID          PaneID      // "coder"
         TaskID      TaskID      // "feature-auth-fix"
+        ZellijSession string    // "gregarious-iguanadon"
         AgentID     AgentID     // "agent-llm"
         Role        string      // "editor"
         Name        string      // "coder"

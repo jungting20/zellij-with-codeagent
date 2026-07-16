@@ -23,7 +23,7 @@ func TestServerCreatePane(t *testing.T) {
 	service := newFakeRuntimeService()
 	server := newTestServer(t, service)
 
-	body := strings.NewReader(`{"id":"pane-1","task_id":"task-1","agent_id":"agent-1","role":"test","same_tab_as_pane_id":"manager","tab_name":"agentd-test","command":["go","test"],"cwd":"."}`)
+	body := strings.NewReader(`{"id":"pane-1","task_id":"task-1","zellij_session":"physical-a","agent_id":"agent-1","role":"test","same_tab_as_pane_id":"manager","tab_name":"agentd-test","command":["go","test"],"cwd":"."}`)
 	request := httptest.NewRequest(http.MethodPost, "/v1/panes", body)
 	response := httptest.NewRecorder()
 
@@ -37,6 +37,9 @@ func TestServerCreatePane(t *testing.T) {
 	}
 	if service.createReq.SameTabAsPaneID != "manager" {
 		t.Fatalf("CreatePane request SameTabAsPaneID = %q, want manager", service.createReq.SameTabAsPaneID)
+	}
+	if service.createReq.ZellijSession != "physical-a" {
+		t.Fatalf("CreatePane request ZellijSession = %q, want physical-a", service.createReq.ZellijSession)
 	}
 	var decoded CreatePaneResponse
 	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
@@ -85,6 +88,7 @@ func TestServerCreatePaneWithRoles(t *testing.T) {
 			payload := fmt.Sprintf(`{
 				"id": "pane-%s",
 				"task_id": "task-%s",
+				"zellij_session": "physical-a",
 				"agent_id": "agent-%s",
 				"role": "%s",
 				"new_tab": true,
@@ -461,6 +465,9 @@ func (f *fakeRuntimeService) CreatePane(_ context.Context, req rt.CreatePaneRequ
 	defer f.mu.Unlock()
 	f.createCalled = true
 	f.createReq = req
+	if strings.TrimSpace(req.ZellijSession) == "" {
+		return rt.CreatePaneResponse{}, rt.ErrZellijSessionRequired
+	}
 	if f.createErr != nil {
 		return rt.CreatePaneResponse{}, f.createErr
 	}
@@ -588,6 +595,9 @@ func (f *fakeRuntimeService) ApplyExecutionPlan(_ context.Context, req rt.ApplyE
 	defer f.mu.Unlock()
 	f.applyPlanCalled = true
 	f.applyPlanReq = req
+	if strings.TrimSpace(req.ZellijSession) == "" {
+		return rt.ApplyExecutionPlanResponse{}, rt.ErrZellijSessionRequired
+	}
 	tabID := rt.ZellijTabID(7)
 
 	var tabs []rt.ExecutionPlanTabResult
@@ -689,6 +699,7 @@ func TestServerSubmitExecutionPlan(t *testing.T) {
 		"request_id":"req_123",
 		"payload":{
 			"session":"feature-auth",
+			"zellij_session":"physical-a",
 			"layout":"triple-horizontal",
 			"tabs":[
 				{
@@ -712,7 +723,7 @@ func TestServerSubmitExecutionPlan(t *testing.T) {
 	if !service.applyPlanCalled {
 		t.Fatal("ApplyExecutionPlan was not called")
 	}
-	if service.applyPlanReq.RequestID != "req_123" || service.applyPlanReq.Session != "feature-auth" {
+	if service.applyPlanReq.RequestID != "req_123" || service.applyPlanReq.Session != "feature-auth" || service.applyPlanReq.ZellijSession != "physical-a" {
 		t.Fatalf("ApplyExecutionPlan request = %#v, want req_123 feature-auth", service.applyPlanReq)
 	}
 	if len(service.applyPlanReq.Tabs) != 1 || len(service.applyPlanReq.Tabs[0].Panes) != 2 || service.applyPlanReq.Tabs[0].Panes[0].ID != "planner" {
@@ -725,6 +736,36 @@ func TestServerSubmitExecutionPlan(t *testing.T) {
 	}
 	if decoded.RequestID != "req_123" || len(decoded.Tabs) != 1 || len(decoded.Tabs[0].Panes) != 2 {
 		t.Fatalf("response = %#v, want echoed request_id and tabs with panes", decoded)
+	}
+}
+
+func TestServerCreatePaneMissingZellijSessionReturnsBadRequest(t *testing.T) {
+	service := newFakeRuntimeService()
+	server := newTestServer(t, service)
+	request := httptest.NewRequest(http.MethodPost, "/v1/panes", strings.NewReader(`{"id":"pane-1"}`))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusBadRequest, response.Body.String())
+	}
+}
+
+func TestServerSubmitExecutionPlanMissingZellijSessionReturnsBadRequest(t *testing.T) {
+	service := newFakeRuntimeService()
+	server := newTestServer(t, service)
+	request := httptest.NewRequest(http.MethodPost, "/v1/requests", strings.NewReader(`{
+		"type":"execution_plan",
+		"request_id":"req_123",
+		"payload":{"session":"feature-auth","tabs":[{"name":"main","panes":[{"id":"planner"}]}]}
+	}`))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusBadRequest, response.Body.String())
 	}
 }
 

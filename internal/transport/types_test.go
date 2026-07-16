@@ -1,25 +1,38 @@
 package transport
 
 import (
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	rt "zellij-with-codeagent/internal/runtime"
 )
 
+func TestExecutionPlanPayloadJSONIncludesZellijSession(t *testing.T) {
+	payload, err := json.Marshal(ExecutionPlanPayload{ZellijSession: "physical-a"})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(payload), `"zellij_session":"physical-a"`) {
+		t.Fatalf("marshaled payload = %s, want zellij_session", payload)
+	}
+}
+
 func TestCreatePaneRequestToRuntimePreservesPayloadFields(t *testing.T) {
 	tabID := 7
 	source := CreatePaneRequest{
-		ID:          "pane-1",
-		TaskID:      "task-1",
-		AgentID:     "agent-1",
-		Role:        "coder",
-		Name:        "worker",
-		NewTab:      true,
-		TabName:     "main",
-		ZellijTabID: &tabID,
-		Command:     []string{"go", "test"},
-		CWD:         "/tmp/work",
+		ID:            "pane-1",
+		TaskID:        "task-1",
+		AgentID:       "agent-1",
+		Role:          "coder",
+		Name:          "worker",
+		ZellijSession: "physical-a",
+		NewTab:        true,
+		TabName:       "main",
+		ZellijTabID:   &tabID,
+		Command:       []string{"go", "test"},
+		CWD:           "/tmp/work",
 	}
 
 	converted := source.ToRuntime()
@@ -29,6 +42,7 @@ func TestCreatePaneRequestToRuntimePreservesPayloadFields(t *testing.T) {
 		converted.AgentID != "agent-1" ||
 		converted.Role != "coder" ||
 		converted.Name != "worker" ||
+		converted.ZellijSession != "physical-a" ||
 		!converted.NewTab ||
 		converted.TabName != "main" ||
 		converted.ZellijTabID == nil ||
@@ -72,8 +86,9 @@ func TestSendMessageRequestToRuntimePreservesPayload(t *testing.T) {
 
 func TestExecutionPlanPayloadToRuntimePreservesNestedPayload(t *testing.T) {
 	source := ExecutionPlanPayload{
-		Session: "feature-auth",
-		Layout:  "triple-horizontal",
+		Session:       "feature-auth",
+		ZellijSession: "physical-a",
+		Layout:        "triple-horizontal",
 		Tabs: []ExecutionPlanTab{{
 			Name: "frontend",
 			Panes: []ExecutionPlanPane{{
@@ -90,7 +105,7 @@ func TestExecutionPlanPayloadToRuntimePreservesNestedPayload(t *testing.T) {
 
 	converted := source.ToRuntime("req-1")
 
-	if converted.RequestID != "req-1" || converted.Session != "feature-auth" || converted.Layout != "triple-horizontal" {
+	if converted.RequestID != "req-1" || converted.Session != "feature-auth" || converted.ZellijSession != "physical-a" || converted.Layout != "triple-horizontal" {
 		t.Fatalf("ExecutionPlanPayload.ToRuntime() = %#v, want envelope fields preserved", converted)
 	}
 	if len(converted.Tabs) != 1 || converted.Tabs[0].Name != "frontend" || len(converted.Tabs[0].Panes) != 1 {
@@ -108,6 +123,21 @@ func TestExecutionPlanPayloadToRuntimePreservesNestedPayload(t *testing.T) {
 	source.Tabs[0].Panes[0].Command[0] = "mutated"
 	if !reflect.DeepEqual(pane.Command, []string{"npm", "test"}) {
 		t.Fatalf("ExecutionPlanPayload.ToRuntime() command = %#v, want cloned command", pane.Command)
+	}
+}
+
+func TestExecutionPlanPayloadToRuntimePreservesZellijSessionWithNilTabs(t *testing.T) {
+	converted := (ExecutionPlanPayload{
+		Session:       "feature-auth",
+		ZellijSession: "physical-a",
+		Tabs:          nil,
+	}).ToRuntime("req-1")
+
+	if converted.ZellijSession != "physical-a" {
+		t.Fatalf("ExecutionPlanPayload.ToRuntime() ZellijSession = %q, want physical-a", converted.ZellijSession)
+	}
+	if converted.Tabs != nil {
+		t.Fatalf("ExecutionPlanPayload.ToRuntime() tabs = %#v, want nil", converted.Tabs)
 	}
 }
 

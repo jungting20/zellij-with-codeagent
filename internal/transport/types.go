@@ -12,6 +12,7 @@ import (
 type CreatePaneRequest struct {
 	ID              string   `json:"id,omitempty"`
 	TaskID          string   `json:"task_id,omitempty"`
+	ZellijSession   string   `json:"zellij_session"`
 	AgentID         string   `json:"agent_id,omitempty"`
 	Role            string   `json:"role,omitempty"`
 	Name            string   `json:"name,omitempty"`
@@ -157,9 +158,10 @@ type RequestEnvelope struct {
 }
 
 type ExecutionPlanPayload struct {
-	Session string             `json:"session"`
-	Layout  string             `json:"layout"`
-	Tabs    []ExecutionPlanTab `json:"tabs"`
+	Session       string             `json:"session"`
+	ZellijSession string             `json:"zellij_session"`
+	Layout        string             `json:"layout"`
+	Tabs          []ExecutionPlanTab `json:"tabs"`
 }
 
 type ExecutionPlanTab struct {
@@ -227,6 +229,7 @@ func (req CreatePaneRequest) ToRuntime() rt.CreatePaneRequest {
 	return rt.CreatePaneRequest{
 		ID:              rt.PaneID(req.ID),
 		TaskID:          rt.TaskID(req.TaskID),
+		ZellijSession:   req.ZellijSession,
 		AgentID:         rt.AgentID(req.AgentID),
 		Role:            req.Role,
 		Name:            req.Name,
@@ -430,10 +433,11 @@ func outputSummariesFromRuntime(summaries []rt.PaneOutputSummary) []PaneOutputSu
 func (payload ExecutionPlanPayload) ToRuntime(reqID string) rt.ApplyExecutionPlanRequest {
 	if payload.Tabs == nil {
 		return rt.ApplyExecutionPlanRequest{
-			RequestID: reqID,
-			Session:   payload.Session,
-			Layout:    payload.Layout,
-			Tabs:      nil,
+			RequestID:     reqID,
+			Session:       payload.Session,
+			ZellijSession: payload.ZellijSession,
+			Layout:        payload.Layout,
+			Tabs:          nil,
 		}
 	}
 	tabs := make([]rt.ExecutionPlanTabSpec, 0, len(payload.Tabs))
@@ -441,10 +445,11 @@ func (payload ExecutionPlanPayload) ToRuntime(reqID string) rt.ApplyExecutionPla
 		tabs = append(tabs, tab.ToRuntime())
 	}
 	return rt.ApplyExecutionPlanRequest{
-		RequestID: reqID,
-		Session:   payload.Session,
-		Layout:    payload.Layout,
-		Tabs:      tabs,
+		RequestID:     reqID,
+		Session:       payload.Session,
+		ZellijSession: payload.ZellijSession,
+		Layout:        payload.Layout,
+		Tabs:          tabs,
 	}
 }
 

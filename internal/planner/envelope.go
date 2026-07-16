@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"zellij-with-codeagent/internal/transport"
 )
@@ -18,6 +19,17 @@ type ValidatedExecutionPlan struct {
 }
 
 func ParseExecutionPlanEnvelope(data []byte) (ValidatedExecutionPlan, error) {
+	plan, err := DecodeExecutionPlanEnvelope(data)
+	if err != nil {
+		return ValidatedExecutionPlan{}, err
+	}
+	if err := ValidateExecutionPlan(plan); err != nil {
+		return ValidatedExecutionPlan{}, err
+	}
+	return plan, nil
+}
+
+func DecodeExecutionPlanEnvelope(data []byte) (ValidatedExecutionPlan, error) {
 	var envelope transport.RequestEnvelope
 	if err := decodeStrict(data, &envelope); err != nil {
 		return ValidatedExecutionPlan{}, fmt.Errorf("%w: %v", ErrInvalidExecutionPlanEnvelope, err)
@@ -39,16 +51,20 @@ func ParseExecutionPlanEnvelope(data []byte) (ValidatedExecutionPlan, error) {
 	if err := decodeStrict(envelope.Payload, &payload); err != nil {
 		return ValidatedExecutionPlan{}, fmt.Errorf("%w: invalid payload: %v", ErrInvalidExecutionPlanEnvelope, err)
 	}
-	if err := validateExecutionPlanPayload(payload); err != nil {
-		return ValidatedExecutionPlan{}, err
-	}
 
 	return ValidatedExecutionPlan{Envelope: envelope, Payload: payload}, nil
+}
+
+func ValidateExecutionPlan(plan ValidatedExecutionPlan) error {
+	return validateExecutionPlanPayload(plan.Payload)
 }
 
 func validateExecutionPlanPayload(payload transport.ExecutionPlanPayload) error {
 	if payload.Session == "" {
 		return fmt.Errorf("%w: payload.session is required", ErrInvalidExecutionPlanEnvelope)
+	}
+	if strings.TrimSpace(payload.ZellijSession) == "" {
+		return fmt.Errorf("%w: payload.zellij_session is required", ErrInvalidExecutionPlanEnvelope)
 	}
 	if len(payload.Tabs) == 0 {
 		return fmt.Errorf("%w: payload.tabs must contain at least one tab", ErrInvalidExecutionPlanEnvelope)
