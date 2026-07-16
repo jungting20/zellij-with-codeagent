@@ -4,39 +4,64 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"zellij-with-codeagent/internal/eventbus"
 	"zellij-with-codeagent/internal/registry"
 	"zellij-with-codeagent/internal/zellij"
 )
 
+type livePaneKey struct {
+	session registry.SessionID
+	paneID  registry.ZellijPaneID
+}
+
 func (s *Service) Reconcile(ctx context.Context, _ ReconcileRequest) (ReconcileResponse, error) {
-	livePanes, err := s.backend.ListPanes(ctx, zellij.ListPanesRequest{})
-	if err != nil {
-		s.publishRuntimeHealth(fmt.Sprintf("reconcile failed: %v", err))
-		return ReconcileResponse{}, err
-	}
-
-	liveByZellijID := make(map[registry.ZellijPaneID]zellij.Pane, len(livePanes))
-	for _, pane := range livePanes {
-		if pane.IsPlugin || pane.ID == "" {
-			continue
-		}
-		liveByZellijID[registry.ZellijPaneID(pane.ID)] = pane
-	}
-
 	records := s.registry.ListPanes()
-	managedByZellijID := make(map[registry.ZellijPaneID]bool, len(records))
+	sessionSet := make(map[registry.SessionID]bool)
+	for _, record := range records {
+		if !isTerminalStatus(record.Status) {
+			sessionSet[record.SessionID] = true
+		}
+	}
+
+	sessions := make([]registry.SessionID, 0, len(sessionSet))
+	for sessionID := range sessionSet {
+		sessions = append(sessions, sessionID)
+	}
+	sort.Slice(sessions, func(i, j int) bool { return sessions[i] < sessions[j] })
+
+	liveByKey := make(map[livePaneKey]zellij.Pane)
+	liveKeys := make([]livePaneKey, 0)
+	for _, sessionID := range sessions {
+		livePanes, err := s.backend.ListPanes(ctx, zellij.ListPanesRequest{Session: string(sessionID)})
+		if err != nil {
+			s.publishRuntimeHealth(fmt.Sprintf("reconcile failed for session %q: %v", sessionID, err))
+			return ReconcileResponse{}, err
+		}
+		for _, pane := range livePanes {
+			if pane.IsPlugin || pane.ID == "" {
+				continue
+			}
+			key := livePaneKey{session: sessionID, paneID: registry.ZellijPaneID(pane.ID)}
+			if _, exists := liveByKey[key]; !exists {
+				liveKeys = append(liveKeys, key)
+			}
+			liveByKey[key] = pane
+		}
+	}
+
+	managedByKey := make(map[livePaneKey]bool, len(records))
 	response := ReconcileResponse{
 		Panes: make([]Pane, 0, len(records)),
 	}
 
 	for _, record := range records {
 		if record.ZellijPaneID != "" {
-			managedByZellijID[record.ZellijPaneID] = true
+			managedByKey[livePaneKey{session: record.SessionID, paneID: record.ZellijPaneID}] = true
 		}
 
-		reconciled, err := s.reconcileRecord(record, liveByZellijID)
+		reconciled, err := s.reconcileRecord(record, liveByKey)
 		if err != nil {
 			if errors.Is(err, registry.ErrNotFound) || errors.Is(err, registry.ErrStaleRecord) {
 				continue
@@ -57,16 +82,16 @@ func (s *Service) Reconcile(ctx context.Context, _ ReconcileRequest) (ReconcileR
 		}
 	}
 
-	for id := range liveByZellijID {
-		if !managedByZellijID[id] {
-			response.Unmanaged = append(response.Unmanaged, ZellijPaneID(id))
+	for _, key := range liveKeys {
+		if !managedByKey[key] {
+			response.Unmanaged = append(response.Unmanaged, ZellijPaneID(key.paneID))
 		}
 	}
 
 	return response, nil
 }
 
-func (s *Service) reconcileRecord(record registry.PaneRecord, liveByZellijID map[registry.ZellijPaneID]zellij.Pane) (registry.PaneRecord, error) {
+func (s *Service) reconcileRecord(record registry.PaneRecord, liveByKey map[livePaneKey]zellij.Pane) (registry.PaneRecord, error) {
 	if record.Status == registry.PaneStatusExited {
 		removed, err := s.registry.RemovePaneGeneration(record.ID, record.Generation)
 		if err == nil && s.subs != nil {
@@ -86,7 +111,7 @@ func (s *Service) reconcileRecord(record registry.PaneRecord, liveByZellijID map
 		return current, nil
 	}
 
-	live, ok := liveByZellijID[record.ZellijPaneID]
+	live, ok := liveByKey[livePaneKey{session: record.SessionID, paneID: record.ZellijPaneID}]
 	if !ok {
 		updated, err := s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusLost, "zellij pane missing during reconcile")
 		if err == nil && s.subs != nil {

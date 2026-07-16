@@ -233,8 +233,9 @@ func (s *Service) SendInput(ctx context.Context, req SendInputRequest) error {
 	}
 
 	err = s.backend.SendInput(ctx, zellij.SendInputRequest{
-		PaneID: zellij.PaneID(record.ZellijPaneID),
-		Text:   req.Text,
+		Session: string(record.SessionID),
+		PaneID:  zellij.PaneID(record.ZellijPaneID),
+		Text:    req.Text,
 	})
 	if err != nil {
 		_, _ = s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusError, err.Error())
@@ -270,8 +271,9 @@ func (s *Service) SendMessage(ctx context.Context, req SendMessageRequest) (Send
 	deliveredText := formatPaneMessage(fromRecord.ID, messageType, req.Body)
 
 	if err := s.backend.SendInput(ctx, zellij.SendInputRequest{
-		PaneID: zellij.PaneID(toRecord.ZellijPaneID),
-		Text:   deliveredText,
+		Session: string(toRecord.SessionID),
+		PaneID:  zellij.PaneID(toRecord.ZellijPaneID),
+		Text:    deliveredText,
 	}); err != nil {
 		_, _ = s.registry.UpdatePaneStatusGeneration(toRecord.ID, toRecord.Generation, registry.PaneStatusError, err.Error())
 		return SendMessageResponse{}, err
@@ -323,9 +325,10 @@ func (s *Service) SnapshotOutput(ctx context.Context, req SnapshotOutputRequest)
 	}
 
 	output, err := s.backend.DumpScreen(ctx, zellij.DumpScreenRequest{
-		PaneID: zellij.PaneID(record.ZellijPaneID),
-		Full:   req.Full,
-		ANSI:   req.ANSI,
+		Session: string(record.SessionID),
+		PaneID:  zellij.PaneID(record.ZellijPaneID),
+		Full:    req.Full,
+		ANSI:    req.ANSI,
 	})
 	if err != nil {
 		_, _ = s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusError, err.Error())
@@ -350,7 +353,8 @@ func (s *Service) ClosePane(ctx context.Context, req ClosePaneRequest) (ClosePan
 	}
 
 	err = s.backend.ClosePane(ctx, zellij.ClosePaneRequest{
-		PaneID: zellij.PaneID(record.ZellijPaneID),
+		Session: string(record.SessionID),
+		PaneID:  zellij.PaneID(record.ZellijPaneID),
 	})
 	if err != nil {
 		updated, updateErr := s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusError, err.Error())
@@ -392,10 +396,13 @@ func (s *Service) lookupPane(id PaneID) (registry.PaneRecord, error) {
 }
 
 func sameManagedTab(a, b registry.PaneRecord) bool {
+	if a.SessionID == "" || a.SessionID != b.SessionID {
+		return false
+	}
 	if a.ZellijTabID != nil && b.ZellijTabID != nil {
 		return *a.ZellijTabID == *b.ZellijTabID
 	}
-	return a.SessionID != "" && a.SessionID == b.SessionID && a.TabID != "" && a.TabID == b.TabID
+	return a.TabID != "" && a.TabID == b.TabID
 }
 
 func formatPaneMessage(from registry.PaneID, messageType, body string) string {

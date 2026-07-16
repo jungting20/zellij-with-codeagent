@@ -121,6 +121,41 @@ func TestSubscriptionManagerPublishesRawOutputAndUpdatesRegistry(t *testing.T) {
 	}
 }
 
+func TestSubscriptionManagerRoutesSubscriptionByRecordSession(t *testing.T) {
+	reg := registry.New()
+	if _, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID: "pane-1", SessionID: "session-a", ZellijPaneID: "terminal_5",
+	}); err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+	backend := &fakeBackend{}
+	runner := &scriptedSubscriptionRunner{}
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{
+		Registry: reg,
+		Backend:  backend,
+		Bus:      eventbus.New(),
+		Runner:   runner,
+	})
+
+	mgr.StartPane("pane-1")
+	deadline := time.Now().Add(time.Second)
+	for {
+		backend.mu.Lock()
+		requests := append([]zellij.SubscribeRequest(nil), backend.subscribeRequests...)
+		backend.mu.Unlock()
+		if len(requests) > 0 {
+			if got := requests[0].Session; got != "session-a" {
+				t.Fatalf("subscribe session = %q, want session-a", got)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for subscribe request")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestSubscriptionManagerDedupesIdenticalViewport(t *testing.T) {
 	reg := registry.New()
 	bus := eventbus.New()

@@ -370,11 +370,84 @@ func TestSendInputResolvesLogicalPaneID(t *testing.T) {
 	}
 
 	want := []zellij.SendInputRequest{{
-		PaneID: "terminal_5",
-		Text:   "go test ./...\n",
+		Session: "test-session",
+		PaneID:  "terminal_5",
+		Text:    "go test ./...\n",
 	}}
 	if !reflect.DeepEqual(backend.sendRequests, want) {
 		t.Fatalf("backend SendInput requests = %#v, want %#v", backend.sendRequests, want)
+	}
+}
+
+func TestServiceRoutesFollowUpOperationsByRecordSession(t *testing.T) {
+	tabID := ZellijTabID(7)
+	backend := &fakeBackend{
+		createIDs: []zellij.PaneID{"terminal_a", "terminal_b_from", "terminal_b_to"},
+		listPanes: []zellij.Pane{
+			{ID: "terminal_a", TabID: 7},
+			{ID: "terminal_b_from", TabID: 7},
+			{ID: "terminal_b_to", TabID: 7},
+		},
+		dumpOutput: "session output",
+	}
+	service := newTestService(backend)
+	for _, req := range []CreatePaneRequest{
+		{ID: "pane-a", ZellijSession: "session-a", ZellijTabID: &tabID},
+		{ID: "pane-b-from", ZellijSession: "session-b", ZellijTabID: &tabID},
+		{ID: "pane-b-to", ZellijSession: "session-b", ZellijTabID: &tabID},
+	} {
+		if _, err := service.CreatePane(context.Background(), req); err != nil {
+			t.Fatalf("CreatePane(%s) error = %v", req.ID, err)
+		}
+	}
+
+	if err := service.SendInput(context.Background(), SendInputRequest{PaneID: "pane-a", Text: "input"}); err != nil {
+		t.Fatalf("SendInput() error = %v", err)
+	}
+	if _, err := service.SendMessage(context.Background(), SendMessageRequest{FromPaneID: "pane-b-from", ToPaneID: "pane-b-to", Body: "message"}); err != nil {
+		t.Fatalf("SendMessage() error = %v", err)
+	}
+	if _, err := service.SnapshotOutput(context.Background(), SnapshotOutputRequest{PaneID: "pane-b-to"}); err != nil {
+		t.Fatalf("SnapshotOutput() error = %v", err)
+	}
+	if _, err := service.ClosePane(context.Background(), ClosePaneRequest{PaneID: "pane-a"}); err != nil {
+		t.Fatalf("ClosePane() error = %v", err)
+	}
+
+	if got := backend.sendRequests[0].Session; got != "session-a" {
+		t.Fatalf("send input session = %q, want session-a", got)
+	}
+	if got := backend.sendRequests[1].Session; got != "session-b" {
+		t.Fatalf("send message session = %q, want session-b", got)
+	}
+	if got := backend.dumpRequests[0].Session; got != "session-b" {
+		t.Fatalf("snapshot session = %q, want session-b", got)
+	}
+	if got := backend.closeRequests[0].Session; got != "session-a" {
+		t.Fatalf("close session = %q, want session-a", got)
+	}
+}
+
+func TestSendMessageRejectsMatchingTabIDFromDifferentSessions(t *testing.T) {
+	reg := registry.New()
+	tabID := registry.ZellijTabID(7)
+	for _, req := range []registry.RegisterPaneRequest{
+		{ID: "from", SessionID: "session-a", ZellijPaneID: "terminal_1", ZellijTabID: &tabID},
+		{ID: "to", SessionID: "session-b", ZellijPaneID: "terminal_2", ZellijTabID: &tabID},
+	} {
+		if _, err := reg.RegisterPane(req); err != nil {
+			t.Fatalf("RegisterPane(%s) error = %v", req.ID, err)
+		}
+	}
+	backend := &fakeBackend{}
+	service := NewService(Options{Registry: reg, Backend: backend})
+
+	_, err := service.SendMessage(context.Background(), SendMessageRequest{FromPaneID: "from", ToPaneID: "to", Body: "no crossover"})
+	if !errors.Is(err, ErrInvalidMessage) {
+		t.Fatalf("SendMessage() error = %v, want %v", err, ErrInvalidMessage)
+	}
+	if len(backend.sendRequests) != 0 {
+		t.Fatalf("SendInput requests = %#v, want none", backend.sendRequests)
 	}
 }
 
@@ -549,9 +622,10 @@ func TestSnapshotOutputUpdatesPaneOutput(t *testing.T) {
 		t.Fatalf("SnapshotOutput() response = %#v, want output stored on pane", response)
 	}
 	want := []zellij.DumpScreenRequest{{
-		PaneID: "terminal_5",
-		Full:   true,
-		ANSI:   true,
+		Session: "test-session",
+		PaneID:  "terminal_5",
+		Full:    true,
+		ANSI:    true,
 	}}
 	if !reflect.DeepEqual(backend.dumpRequests, want) {
 		t.Fatalf("backend DumpScreen requests = %#v, want %#v", backend.dumpRequests, want)
@@ -608,7 +682,7 @@ func TestClosePaneMarksRecordClosed(t *testing.T) {
 	if response.Pane.Status != PaneStatusClosed {
 		t.Fatalf("ClosePane() status = %q, want %q", response.Pane.Status, PaneStatusClosed)
 	}
-	want := []zellij.ClosePaneRequest{{PaneID: "terminal_5"}}
+	want := []zellij.ClosePaneRequest{{Session: "test-session", PaneID: "terminal_5"}}
 	if !reflect.DeepEqual(backend.closeRequests, want) {
 		t.Fatalf("backend ClosePane requests = %#v, want %#v", backend.closeRequests, want)
 	}
@@ -774,15 +848,18 @@ type fakeBackend struct {
 	dumpOutputs []string
 	dumpErrors  []error
 
-	createRequests    []zellij.CreatePaneRequest
-	createTabRequests []zellij.CreateTabRequest
-	closeRequests     []zellij.ClosePaneRequest
-	closeTabRequests  []zellij.CloseTabRequest
-	closeContextErrs  []error
-	sendRequests      []zellij.SendInputRequest
-	dumpRequests      []zellij.DumpScreenRequest
-	listCalls         []struct{}
-	listRequests      []zellij.ListPanesRequest
+	createRequests     []zellij.CreatePaneRequest
+	createTabRequests  []zellij.CreateTabRequest
+	closeRequests      []zellij.ClosePaneRequest
+	closeTabRequests   []zellij.CloseTabRequest
+	closeContextErrs   []error
+	sendRequests       []zellij.SendInputRequest
+	dumpRequests       []zellij.DumpScreenRequest
+	listCalls          []struct{}
+	listRequests       []zellij.ListPanesRequest
+	subscribeRequests  []zellij.SubscribeRequest
+	listPanesBySession map[string][]zellij.Pane
+	listErrBySession   map[string]error
 
 	beforeCreatePane func(context.Context, zellij.CreatePaneRequest, int) error
 	beforeClosePane  func(context.Context, zellij.ClosePaneRequest) error
@@ -903,9 +980,16 @@ func (b *fakeBackend) ListPanes(_ context.Context, req zellij.ListPanesRequest) 
 	if b.listErr != nil {
 		return nil, b.listErr
 	}
+	if err := b.listErrBySession[req.Session]; err != nil {
+		return nil, err
+	}
 
-	panes := make([]zellij.Pane, len(b.listPanes))
-	copy(panes, b.listPanes)
+	panesForSession := b.listPanes
+	if b.listPanesBySession != nil {
+		panesForSession = b.listPanesBySession[req.Session]
+	}
+	panes := make([]zellij.Pane, len(panesForSession))
+	copy(panes, panesForSession)
 	return panes, nil
 }
 
@@ -933,6 +1017,9 @@ func (b *fakeBackend) DumpScreen(ctx context.Context, req zellij.DumpScreenReque
 }
 
 func (b *fakeBackend) SubscribeCommand(req zellij.SubscribeRequest) (zellij.CommandSpec, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.subscribeRequests = append(b.subscribeRequests, req)
 	return zellij.CommandSpec{}, nil
 }
 

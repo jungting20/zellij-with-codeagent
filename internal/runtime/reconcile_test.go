@@ -83,6 +83,67 @@ func TestReconcileListFailureLeavesRegistryIntactAndPublishesHealth(t *testing.T
 	}
 }
 
+func TestReconcileMultipleSessionsUsesCompositePaneIdentity(t *testing.T) {
+	backend := &fakeBackend{listPanesBySession: map[string][]zellij.Pane{
+		"session-a": {{ID: "terminal_1", TabID: 1}},
+		"session-b": {{ID: "terminal_unmanaged", TabID: 2}},
+	}}
+	reg := registry.New()
+	for _, req := range []registry.RegisterPaneRequest{
+		{ID: "pane-a", SessionID: "session-a", ZellijPaneID: "terminal_1"},
+		{ID: "pane-b", SessionID: "session-b", ZellijPaneID: "terminal_1"},
+	} {
+		if _, err := reg.RegisterPane(req); err != nil {
+			t.Fatalf("RegisterPane(%s) error = %v", req.ID, err)
+		}
+	}
+	service := NewService(Options{Registry: reg, Backend: backend})
+
+	response, err := service.Reconcile(context.Background(), ReconcileRequest{})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if got := backend.listRequests; len(got) != 2 || got[0].Session != "session-a" || got[1].Session != "session-b" {
+		t.Fatalf("ListPanes requests = %#v, want sorted session-a and session-b", got)
+	}
+	assertPaneStatus(t, service, "pane-a", PaneStatusRunning)
+	assertPaneStatus(t, service, "pane-b", PaneStatusLost)
+	if len(response.Unmanaged) != 1 || response.Unmanaged[0] != "terminal_unmanaged" {
+		t.Fatalf("Reconcile() unmanaged = %#v, want terminal_unmanaged", response.Unmanaged)
+	}
+}
+
+func TestReconcileMultipleSessionsListFailureLeavesAllRecordsIntact(t *testing.T) {
+	backend := &fakeBackend{
+		listPanesBySession: map[string][]zellij.Pane{
+			"session-a": {},
+		},
+		listErrBySession: map[string]error{
+			"session-b": errors.New("session-b list failed"),
+		},
+	}
+	reg := registry.New()
+	for _, req := range []registry.RegisterPaneRequest{
+		{ID: "pane-a", SessionID: "session-a", ZellijPaneID: "terminal_a"},
+		{ID: "pane-b", SessionID: "session-b", ZellijPaneID: "terminal_b"},
+	} {
+		if _, err := reg.RegisterPane(req); err != nil {
+			t.Fatalf("RegisterPane(%s) error = %v", req.ID, err)
+		}
+	}
+	service := NewService(Options{Registry: reg, Backend: backend})
+
+	_, err := service.Reconcile(context.Background(), ReconcileRequest{})
+	if err == nil || !strings.Contains(err.Error(), "session-b list failed") {
+		t.Fatalf("Reconcile() error = %v, want session-b list failure", err)
+	}
+	if got := backend.listRequests; len(got) != 2 || got[0].Session != "session-a" || got[1].Session != "session-b" {
+		t.Fatalf("ListPanes requests = %#v, want sorted session-a and session-b", got)
+	}
+	assertPaneStatus(t, service, "pane-a", PaneStatusStarting)
+	assertPaneStatus(t, service, "pane-b", PaneStatusStarting)
+}
+
 func TestReconcileRecordDoesNotMutateReusedPaneGeneration(t *testing.T) {
 	service := newTestService(&fakeBackend{})
 	oldRecord, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
@@ -105,7 +166,7 @@ func TestReconcileRecordDoesNotMutateReusedPaneGeneration(t *testing.T) {
 		t.Fatalf("RegisterPane(new) error = %v", err)
 	}
 
-	_, err = service.reconcileRecord(oldRecord, map[registry.ZellijPaneID]zellij.Pane{})
+	_, err = service.reconcileRecord(oldRecord, map[livePaneKey]zellij.Pane{})
 	if !errors.Is(err, registry.ErrStaleRecord) {
 		t.Fatalf("reconcileRecord(old) error = %v, want %v", err, registry.ErrStaleRecord)
 	}
@@ -140,8 +201,8 @@ func TestReconcileRecordDoesNotReturnReusedPaneFromNoMutationBranch(t *testing.T
 		t.Fatalf("RegisterPane(new) error = %v", err)
 	}
 
-	_, err = service.reconcileRecord(oldRecord, map[registry.ZellijPaneID]zellij.Pane{
-		"terminal_old": {ID: "terminal_old"},
+	_, err = service.reconcileRecord(oldRecord, map[livePaneKey]zellij.Pane{
+		{session: oldRecord.SessionID, paneID: "terminal_old"}: {ID: "terminal_old"},
 	})
 	if !errors.Is(err, registry.ErrStaleRecord) {
 		t.Fatalf("reconcileRecord(old running) error = %v, want %v", err, registry.ErrStaleRecord)

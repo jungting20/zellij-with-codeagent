@@ -227,8 +227,9 @@ func (m *SubscriptionManager) run(record registry.PaneRecord, subscription *pane
 	}()
 
 	spec, err := m.opts.Backend.SubscribeCommand(zellij.SubscribeRequest{
-		PaneID: zellij.PaneID(record.ZellijPaneID),
-		JSON:   true,
+		Session: string(record.SessionID),
+		PaneID:  zellij.PaneID(record.ZellijPaneID),
+		JSON:    true,
 	})
 	if err != nil {
 		if m.subscriptionIsCurrent(record, subscription) {

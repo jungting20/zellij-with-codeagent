@@ -27,7 +27,7 @@ func TestCleanupClosesOnlyMatchingManagedPanes(t *testing.T) {
 	if len(response.Closed) != 1 || response.Closed[0].ID != "pane-test" {
 		t.Fatalf("Cleanup() closed = %#v, want pane-test", response.Closed)
 	}
-	wantClose := []zellij.ClosePaneRequest{{PaneID: "terminal_test"}}
+	wantClose := []zellij.ClosePaneRequest{{Session: "test-session", PaneID: "terminal_test"}}
 	if !reflect.DeepEqual(backend.closeRequests, wantClose) {
 		t.Fatalf("backend ClosePane requests = %#v, want %#v", backend.closeRequests, wantClose)
 	}
@@ -53,7 +53,7 @@ func TestCleanupContinuesAfterPartialFailure(t *testing.T) {
 		t.Fatalf("Cleanup() error = %v, want %v", err, ErrCleanupPartial)
 	}
 
-	wantClose := []zellij.ClosePaneRequest{{PaneID: "terminal_bad"}, {PaneID: "terminal_good"}}
+	wantClose := []zellij.ClosePaneRequest{{Session: "test-session", PaneID: "terminal_bad"}, {Session: "test-session", PaneID: "terminal_good"}}
 	if !reflect.DeepEqual(backend.closeRequests, wantClose) {
 		t.Fatalf("backend ClosePane requests = %#v, want both panes attempted", backend.closeRequests)
 	}
@@ -83,11 +83,28 @@ func TestCleanupReportsUnknownRequestedPane(t *testing.T) {
 	if len(response.Failed) != 1 || response.Failed[0].Pane.ID != "missing" || response.Failed[0].Error != ErrPaneNotFound.Error() {
 		t.Fatalf("Cleanup() failed = %#v, want missing pane not found", response.Failed)
 	}
-	if !reflect.DeepEqual(backend.closeRequests, []zellij.ClosePaneRequest{{PaneID: "terminal_5"}}) {
+	if !reflect.DeepEqual(backend.closeRequests, []zellij.ClosePaneRequest{{Session: "test-session", PaneID: "terminal_5"}}) {
 		t.Fatalf("backend ClosePane requests = %#v, want only requested pane", backend.closeRequests)
 	}
 	assertPaneMissing(t, service, "pane-1")
 	assertPaneStatus(t, service, "pane-2", PaneStatusStarting)
+}
+
+func TestCleanupRoutesCloseByRecordSession(t *testing.T) {
+	backend := &fakeBackend{createIDs: []zellij.PaneID{"terminal_a", "terminal_b"}}
+	service := newTestService(backend)
+	mustCreatePane(t, service, CreatePaneRequest{ID: "pane-a", ZellijSession: "session-a"})
+	mustCreatePane(t, service, CreatePaneRequest{ID: "pane-b", ZellijSession: "session-b"})
+
+	if _, err := service.Cleanup(context.Background(), CleanupRequest{}); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	if got := backend.closeRequests[0].Session; got != "session-a" {
+		t.Fatalf("first close session = %q, want session-a", got)
+	}
+	if got := backend.closeRequests[1].Session; got != "session-b" {
+		t.Fatalf("second close session = %q, want session-b", got)
+	}
 }
 
 func TestCleanupReleasesMatchingTerminalRecord(t *testing.T) {

@@ -37,7 +37,7 @@ func (s *Service) Cleanup(ctx context.Context, req CleanupRequest) (CleanupRespo
 			continue
 		}
 
-		if err := s.backend.ClosePane(ctx, zellij.ClosePaneRequest{PaneID: zellij.PaneID(record.ZellijPaneID)}); err != nil {
+		if err := s.backend.ClosePane(ctx, zellij.ClosePaneRequest{Session: string(record.SessionID), PaneID: zellij.PaneID(record.ZellijPaneID)}); err != nil {
 			updated, updateErr := s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusError, err.Error())
 			if errors.Is(updateErr, registry.ErrNotFound) || errors.Is(updateErr, registry.ErrStaleRecord) {
 				record.Status = registry.PaneStatusClosed
