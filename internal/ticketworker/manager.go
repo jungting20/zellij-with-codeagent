@@ -1,8 +1,9 @@
 package ticketworker
 
 import (
-	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -43,6 +44,7 @@ type ManagerOptions struct {
 	ReadyPollInterval time.Duration
 	Tick              <-chan time.Time
 	Log               io.Writer
+	ManagerID         string
 }
 
 type managerSlotState uint8
@@ -57,14 +59,15 @@ const (
 )
 
 type managerSlot struct {
-	state       managerSlotState
-	ticket      Ticket
-	paneID      string
-	marker      string
-	prompt      string
-	paneCreated bool
-	done        bool
-	lastError   error
+	state             managerSlotState
+	ticket            Ticket
+	paneID            string
+	marker            string
+	prompt            string
+	paneCreated       bool
+	creationUncertain bool
+	done              bool
+	lastError         error
 }
 
 type Manager struct {
@@ -81,6 +84,7 @@ type Manager struct {
 	readyPollInterval time.Duration
 	tick              <-chan time.Time
 	log               io.Writer
+	managerID         string
 	slots             []managerSlot
 	stream            *transport.EventStream
 }
@@ -140,12 +144,44 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	if log == nil {
 		log = io.Discard
 	}
+	managerID := strings.TrimSpace(opts.ManagerID)
+	if managerID == "" {
+		generated, err := newManagerID()
+		if err != nil {
+			return nil, err
+		}
+		managerID = generated
+	}
+	if !validManagerID(managerID) {
+		return nil, fmt.Errorf("ticket manager ID must contain only letters, digits, hyphens, or underscores")
+	}
 	return &Manager{
 		store: opts.Store, client: opts.Client, config: opts.Config,
 		root: root, taskID: taskID, anchorPaneID: anchorPaneID, zellijSession: zellijSession, roleBin: roleBin,
 		startupTimeout: startupTimeout, pollInterval: pollInterval, readyPollInterval: readyPollInterval,
-		tick: opts.Tick, log: log, slots: make([]managerSlot, opts.Config.MaxWorkers),
+		tick: opts.Tick, log: log, managerID: managerID, slots: make([]managerSlot, opts.Config.MaxWorkers),
 	}, nil
+}
+
+func newManagerID() (string, error) {
+	var value [8]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", fmt.Errorf("generate ticket manager ID: %w", err)
+	}
+	return hex.EncodeToString(value[:]), nil
+}
+
+func validManagerID(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (m *Manager) Run(ctx context.Context) error {
@@ -278,7 +314,7 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 	}
 	slot.state = managerSlotStarting
 	slot.ticket = ticket
-	slot.paneID = "ticket-coding-" + strconv.FormatInt(ticket.ID, 10)
+	slot.paneID = "ticket-coding-" + m.managerID + "-" + strconv.FormatInt(ticket.ID, 10)
 	slot.prompt, slot.marker, err = RenderTicketPrompt(m.config, ticket)
 	if err != nil {
 		m.logf("render ticket=%d failed: %v", ticket.ID, err)
@@ -293,7 +329,13 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 	}
 	if _, err := m.client.CreatePane(ctx, req); err != nil {
 		m.logf("create ticket=%d pane=%s failed: %v", ticket.ID, slot.paneID, err)
-		m.requeueWithoutPane(ctx, slot)
+		if safeCreateFailure(err) {
+			m.requeueWithoutPane(ctx, slot)
+		} else {
+			slot.state = managerSlotCleanupFailed
+			slot.creationUncertain = true
+			slot.lastError = err
+		}
 		return true
 	}
 	slot.paneCreated = true
@@ -312,6 +354,14 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 	slot.state = managerSlotWorking
 	m.logf("started ticket=%d pane=%s", ticket.ID, slot.paneID)
 	return false
+}
+
+func safeCreateFailure(err error) bool {
+	var clientErr *transport.ClientError
+	if !errors.As(err, &clientErr) {
+		return false
+	}
+	return clientErr.APIError.Code == transport.CodeBadRequest || clientErr.APIError.Code == transport.CodeNotFound
 }
 
 func (m *Manager) waitForInputReady(ctx context.Context, paneID string) error {
@@ -345,26 +395,40 @@ func (m *Manager) handleEvent(ctx context.Context, event transport.Event) {
 	if event.Type != string(eventbus.TypeRawOutput) {
 		return
 	}
+	if event.TaskID != m.taskID {
+		return
+	}
 	for i := range m.slots {
 		slot := &m.slots[i]
 		if slot.state != managerSlotWorking || slot.paneID != event.PaneID {
 			continue
 		}
-		if containsExactLine(event.Message, slot.marker) {
+		if containsExactLine(event.Message, slot.marker) && m.workerExists(ctx, slot) {
 			m.completeSlot(ctx, slot)
 		}
 		return
 	}
 }
 
-func containsExactLine(output, marker string) bool {
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	for scanner.Scan() {
-		if strings.TrimSpace(scanner.Text()) == marker {
+func (m *Manager) workerExists(ctx context.Context, slot *managerSlot) bool {
+	response, err := m.client.InspectRuntime(ctx)
+	if err != nil {
+		m.logf("inspect worker pane=%s failed: %v", slot.paneID, err)
+		return false
+	}
+	for _, pane := range response.Panes {
+		if m.matchesWorkerPane(pane, slot, false) {
 			return true
 		}
 	}
 	return false
+}
+
+func (m *Manager) matchesWorkerPane(pane transport.Pane, slot *managerSlot, requireActive bool) bool {
+	if pane.ID != slot.paneID || pane.TaskID != m.taskID || pane.SessionID != m.zellijSession || pane.Role != "coding-agent" {
+		return false
+	}
+	return !requireActive || pane.Status == "starting" || pane.Status == "running"
 }
 
 func (m *Manager) completeSlot(ctx context.Context, slot *managerSlot) {
@@ -411,6 +475,11 @@ func (m *Manager) retryClose(ctx context.Context, slot *managerSlot) {
 }
 
 func (m *Manager) retryCleanup(ctx context.Context, slot *managerSlot) {
+	if slot.creationUncertain {
+		if !m.resolveUncertainCreation(ctx, slot) {
+			return
+		}
+	}
 	if slot.paneCreated {
 		closed, err := m.closeOrAbsent(ctx, slot.paneID)
 		if !closed {
@@ -424,6 +493,22 @@ func (m *Manager) retryCleanup(ctx context.Context, slot *managerSlot) {
 		return
 	}
 	*slot = managerSlot{}
+}
+
+func (m *Manager) resolveUncertainCreation(ctx context.Context, slot *managerSlot) bool {
+	response, err := m.client.InspectRuntime(ctx)
+	if err != nil {
+		slot.lastError = err
+		return false
+	}
+	for _, pane := range response.Panes {
+		if m.matchesWorkerPane(pane, slot, false) {
+			slot.creationUncertain = false
+			slot.paneCreated = true
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) closeOrAbsent(ctx context.Context, paneID string) (bool, error) {
@@ -467,7 +552,7 @@ func (m *Manager) recoverSnapshots(ctx context.Context) {
 			m.logf("snapshot recovery pane=%s failed: %v", slot.paneID, err)
 			continue
 		}
-		if containsExactLine(response.Output, slot.marker) {
+		if m.matchesWorkerPane(response.Pane, slot, true) && containsExactLine(response.Output, slot.marker) {
 			m.completeSlot(ctx, slot)
 		}
 	}
@@ -481,6 +566,10 @@ func (m *Manager) shutdown() error {
 	for i := range m.slots {
 		slot := &m.slots[i]
 		if slot.state == managerSlotEmpty {
+			continue
+		}
+		if slot.creationUncertain && !m.resolveUncertainCreation(cleanupCtx, slot) {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("ticket %d pane creation outcome is unknown", slot.ticket.ID))
 			continue
 		}
 		if slot.paneCreated {

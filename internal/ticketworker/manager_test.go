@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,7 +34,7 @@ func TestManagerWaitsForAnchorThenFillsConfiguredCapacity(t *testing.T) {
 	}
 	for i, req := range client.created() {
 		wantID := int64(i + 1)
-		if req.ID != "ticket-coding-"+string(rune('0'+wantID)) || req.Role != "coding-agent" || req.TaskID != "tickets" || req.SameTabAsPaneID != "ticket-manager" || req.ZellijSession != "physical-a" {
+		if req.ID != "ticket-coding-run-a-"+string(rune('0'+wantID)) || req.Role != "coding-agent" || req.TaskID != "tickets" || req.SameTabAsPaneID != "ticket-manager" || req.ZellijSession != "physical-a" {
 			t.Fatalf("create[%d] = %#v", i, req)
 		}
 		wantCommand := []string{"zellij-agent", "role", "coding-agent", "/repo"}
@@ -93,9 +94,36 @@ func TestManagerDoesNotClaimWhenInitialStreamFails(t *testing.T) {
 	}
 }
 
+func TestNewManagerGeneratesDistinctInstanceIDs(t *testing.T) {
+	store := &fakeManagerStore{}
+	client := newFakeManagerClient()
+	opts := ManagerOptions{
+		Store: store, Client: client,
+		Config: Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour, PromptTemplate: "Ticket {{ .ID }}"},
+		Root:   "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
+	}
+	first, err := NewManager(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewManager(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.managerID == second.managerID || !validManagerID(first.managerID) || !validManagerID(second.managerID) {
+		t.Fatalf("manager IDs = %q, %q", first.managerID, second.managerID)
+	}
+}
+
 func TestManagerIgnoresPromptEchoAndCompletesExactMarker(t *testing.T) {
 	store := &fakeManagerStore{ready: []Ticket{managerTicket(42)}}
 	client := newFakeManagerClient()
+	var closeBeforeDone atomic.Bool
+	client.beforeClose = func() {
+		if len(store.transitions()) == 0 {
+			closeBeforeDone.Store(true)
+		}
+	}
 	stream := newFakeEventStream()
 	client.streams = []*fakeEventStream{stream}
 	manager := newTestManager(t, store, client, 1)
@@ -107,7 +135,7 @@ func TestManagerIgnoresPromptEchoAndCompletesExactMarker(t *testing.T) {
 	if len(prompt) == 0 || prompt[len(prompt)-1] != '\n' {
 		t.Fatalf("submitted prompt = %q, want trailing newline to send Enter", prompt)
 	}
-	stream.events <- transport.Event{Type: "raw_output", PaneID: "ticket-coding-42", Message: prompt}
+	stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-42", Message: prompt}
 	time.Sleep(20 * time.Millisecond)
 	if len(store.transitions()) != 0 || len(client.closed()) != 0 {
 		t.Fatalf("prompt echo completed ticket: transitions=%v closes=%v", store.transitions(), client.closed())
@@ -117,22 +145,27 @@ func TestManagerIgnoresPromptEchoAndCompletesExactMarker(t *testing.T) {
 		"ZELLIJ_AGENT_TICKET_DONE 42 suffix",
 		"ZELLIJ_AGENT_TICKET_DONE 43",
 	} {
-		stream.events <- transport.Event{Type: "raw_output", PaneID: "ticket-coding-42", Message: output}
+		stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-42", Message: output}
 	}
 	time.Sleep(20 * time.Millisecond)
 	if len(store.transitions()) != 0 {
 		t.Fatalf("non-exact output completed ticket: %v", store.transitions())
 	}
+	stream.events <- transport.Event{Type: "raw_output", TaskID: "wrong-task", PaneID: "ticket-coding-run-a-42", Message: "ZELLIJ_AGENT_TICKET_DONE 42"}
+	time.Sleep(20 * time.Millisecond)
+	if len(store.transitions()) != 0 {
+		t.Fatalf("wrong-task event completed ticket: %v", store.transitions())
+	}
 
-	stream.events <- transport.Event{Type: "raw_output", PaneID: "ticket-coding-42", Message: "work\n  ZELLIJ_AGENT_TICKET_DONE 42  \n"}
+	stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-42", Message: "work\n  ZELLIJ_AGENT_TICKET_DONE 42  \n"}
 	waitFor(t, func() bool { return len(store.transitions()) == 1 && len(client.closed()) == 1 })
 	if call := store.transitions()[0]; call.id != 42 || call.action != ActionDone {
 		t.Fatalf("transition = %#v", call)
 	}
-	if sequence := append(store.callSequence(), client.callSequence()...); indexOf(sequence, "done:42") < 0 {
-		t.Fatalf("call sequence = %#v", sequence)
+	if closeBeforeDone.Load() {
+		t.Fatal("coding-agent pane closed before ticket reached done")
 	}
-	stream.events <- transport.Event{Type: "raw_output", PaneID: "ticket-coding-42", Message: "ZELLIJ_AGENT_TICKET_DONE 42"}
+	stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-42", Message: "ZELLIJ_AGENT_TICKET_DONE 42"}
 	time.Sleep(20 * time.Millisecond)
 	if len(store.transitions()) != 1 || len(client.closed()) != 1 {
 		t.Fatalf("duplicate marker repeated completion")
@@ -153,7 +186,7 @@ func TestManagerRetriesDoneBeforeClosing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(client.inputs()) == 1 })
-	stream.events <- transport.Event{Type: "raw_output", PaneID: "ticket-coding-7", Message: "ZELLIJ_AGENT_TICKET_DONE 7"}
+	stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-7", Message: "ZELLIJ_AGENT_TICKET_DONE 7"}
 	waitFor(t, func() bool { return len(store.transitions()) == 1 })
 	if len(client.closed()) != 0 {
 		t.Fatal("pane closed before done persisted")
@@ -166,10 +199,10 @@ func TestManagerRetriesDoneBeforeClosing(t *testing.T) {
 	}
 }
 
-func TestManagerCreateFailureRequeuesClaimedTicket(t *testing.T) {
+func TestManagerSafeCreateFailureRequeuesClaimedTicket(t *testing.T) {
 	store := &fakeManagerStore{ready: []Ticket{managerTicket(9)}}
 	client := newFakeManagerClient()
-	client.createErrors = []error{errors.New("create failed")}
+	client.createErrors = []error{&transport.ClientError{APIError: transport.APIError{Code: transport.CodeBadRequest, Message: "invalid target"}}}
 	client.streams = []*fakeEventStream{newFakeEventStream()}
 	manager := newTestManager(t, store, client, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -181,6 +214,25 @@ func TestManagerCreateFailureRequeuesClaimedTicket(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestManagerUncertainCreateFailureRetainsTicket(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(15)}}
+	client := newFakeManagerClient()
+	client.createErrors = []error{errors.New("connection reset after request")}
+	client.streams = []*fakeEventStream{newFakeEventStream()}
+	manager := newTestManager(t, store, client, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.created()) == 1 })
+	time.Sleep(20 * time.Millisecond)
+	if len(store.requeues()) != 0 {
+		t.Fatalf("uncertain create was requeued: %v", store.requeues())
+	}
+	cancel()
+	if err := <-done; err == nil || len(store.requeues()) != 0 {
+		t.Fatalf("shutdown error=%v requeues=%v", err, store.requeues())
 	}
 }
 
@@ -215,14 +267,14 @@ func TestManagerCloseFailureRetainsCapacityUntilPaneAbsent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(client.inputs()) == 1 })
-	stream.events <- transport.Event{Type: "raw_output", PaneID: "ticket-coding-21", Message: "ZELLIJ_AGENT_TICKET_DONE 21"}
+	stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-21", Message: "ZELLIJ_AGENT_TICKET_DONE 21"}
 	waitFor(t, func() bool { return len(client.closed()) == 1 })
 	ticks <- time.Now()
 	waitFor(t, func() bool { return len(client.closed()) == 2 })
 	if len(client.created()) != 1 {
 		t.Fatalf("capacity refilled while pane present: creates=%d", len(client.created()))
 	}
-	client.setPaneAbsent("ticket-coding-21", true)
+	client.setPaneAbsent("ticket-coding-run-a-21", true)
 	ticks <- time.Now()
 	waitFor(t, func() bool { return len(client.created()) == 2 })
 	cancel()
@@ -235,7 +287,7 @@ func TestManagerCloseFailureWithRuntimeErrorStatusRetainsCapacity(t *testing.T) 
 	store := &fakeManagerStore{ready: []Ticket{managerTicket(23), managerTicket(24)}}
 	client := newFakeManagerClient()
 	client.closeErrors = []error{errors.New("backend close failed")}
-	client.setPaneStatus("ticket-coding-23", "error")
+	client.setPaneStatus("ticket-coding-run-a-23", "error")
 	stream := newFakeEventStream()
 	client.streams = []*fakeEventStream{stream}
 	ticks := make(chan time.Time, 1)
@@ -243,7 +295,7 @@ func TestManagerCloseFailureWithRuntimeErrorStatusRetainsCapacity(t *testing.T) 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(client.inputs()) == 1 })
-	stream.events <- transport.Event{Type: "raw_output", PaneID: "ticket-coding-23", Message: "ZELLIJ_AGENT_TICKET_DONE 23"}
+	stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-23", Message: "ZELLIJ_AGENT_TICKET_DONE 23"}
 	waitFor(t, func() bool { return len(client.closed()) == 1 })
 	if len(client.created()) != 1 {
 		t.Fatalf("error-status pane released capacity: creates=%d", len(client.created()))
@@ -264,7 +316,7 @@ func TestManagerStreamLossPausesClaimsUntilReconnect(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(client.inputs()) == 1 })
-	first.events <- transport.Event{Type: "raw_output", PaneID: "ticket-coding-31", Message: "ZELLIJ_AGENT_TICKET_DONE 31"}
+	first.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-31", Message: "ZELLIJ_AGENT_TICKET_DONE 31"}
 	waitFor(t, func() bool { return len(client.closed()) == 1 })
 	first.errs <- errors.New("stream lost")
 	time.Sleep(10 * time.Millisecond)
@@ -295,7 +347,7 @@ func TestManagerReconnectsAndRecoversMarkerFromSnapshot(t *testing.T) {
 	waitFor(t, func() bool { return len(client.inputs()) == 1 })
 	first.errs <- errors.New("stream lost")
 	waitFor(t, func() bool { return client.streamCalls() == 1 })
-	client.setSnapshot("ticket-coding-11", "work\nZELLIJ_AGENT_TICKET_DONE 11\n")
+	client.setSnapshot("ticket-coding-run-a-11", "work\nZELLIJ_AGENT_TICKET_DONE 11\n")
 	ticks <- time.Now()
 	waitFor(t, func() bool {
 		return client.streamCalls() == 2 && len(store.transitions()) == 1 && len(client.closed()) == 1
@@ -315,12 +367,37 @@ func TestManagerRecoversDroppedMarkerEventFromPeriodicSnapshot(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(client.inputs()) == 1 })
-	client.setSnapshot("ticket-coding-12", "work\nZELLIJ_AGENT_TICKET_DONE 12\n")
+	client.setSnapshot("ticket-coding-run-a-12", "work\nZELLIJ_AGENT_TICKET_DONE 12\n")
 	ticks <- time.Now()
 	waitFor(t, func() bool { return len(store.transitions()) == 1 && len(client.closed()) == 1 })
 	if client.streamCalls() != 1 {
 		t.Fatalf("stream calls = %d, want existing stream retained", client.streamCalls())
 	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagerRejectsMarkerSnapshotWithWrongWorkerIdentity(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(14)}}
+	client := newFakeManagerClient()
+	client.streams = []*fakeEventStream{newFakeEventStream()}
+	ticks := make(chan time.Time, 2)
+	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.inputs()) == 1 })
+	client.setSnapshot("ticket-coding-run-a-14", "ZELLIJ_AGENT_TICKET_DONE 14\n")
+	client.setSnapshotPane("ticket-coding-run-a-14", transport.Pane{ID: "ticket-coding-run-a-14", TaskID: "tickets", SessionID: "wrong-session", Role: "coding-agent", Status: "running"})
+	ticks <- time.Now()
+	time.Sleep(20 * time.Millisecond)
+	if len(store.transitions()) != 0 {
+		t.Fatalf("wrong-session snapshot completed ticket: %v", store.transitions())
+	}
+	client.setSnapshotPane("ticket-coding-run-a-14", transport.Pane{ID: "ticket-coding-run-a-14", TaskID: "tickets", SessionID: "physical-a", Role: "coding-agent", Status: "running"})
+	ticks <- time.Now()
+	waitFor(t, func() bool { return len(store.transitions()) == 1 })
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -355,7 +432,7 @@ func newTestManagerWithTicks(t *testing.T, store *fakeManagerStore, client *fake
 		Store: store, Client: client,
 		Config: Config{Version: 1, MaxWorkers: capacity, PollInterval: time.Hour, PromptTemplate: "Ticket {{ .ID }}: {{ .Title }}"},
 		Root:   "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
-		StartupTimeout: 200 * time.Millisecond, ReadyPollInterval: time.Millisecond, Tick: ticks, Log: io.Discard,
+		StartupTimeout: 200 * time.Millisecond, ReadyPollInterval: time.Millisecond, Tick: ticks, Log: io.Discard, ManagerID: "run-a",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -397,7 +474,6 @@ type fakeManagerStore struct {
 	transitionCalls  []managerTransitionCall
 	transitionErrors []error
 	requeueCalls     []int64
-	sequence         []string
 }
 
 func (f *fakeManagerStore) Next(context.Context) (Ticket, error) {
@@ -417,7 +493,6 @@ func (f *fakeManagerStore) Transition(_ context.Context, id int64, action Action
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.transitionCalls = append(f.transitionCalls, managerTransitionCall{id: id, action: action})
-	f.sequence = append(f.sequence, "done:"+itoa(id))
 	if len(f.transitionErrors) > 0 {
 		err := f.transitionErrors[0]
 		f.transitionErrors = f.transitionErrors[1:]
@@ -446,11 +521,6 @@ func (f *fakeManagerStore) requeues() []int64 {
 	defer f.mu.Unlock()
 	return append([]int64(nil), f.requeueCalls...)
 }
-func (f *fakeManagerStore) callSequence() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.sequence...)
-}
 
 type fakeInput struct {
 	paneID string
@@ -471,29 +541,30 @@ func (f *fakeEventStream) transportStream() *transport.EventStream {
 }
 
 type fakeManagerClient struct {
-	mu              sync.Mutex
-	anchorReady     bool
-	anchorTaskID    string
-	anchorSessionID string
-	inspectCalls    int
-	streamQueue     []*fakeEventStream
-	streams         []*fakeEventStream
-	streamCallN     int
-	createRequests  []transport.CreatePaneRequest
-	createErrors    []error
-	inputRequests   []fakeInput
-	inputErrors     []error
-	snapshots       map[string]string
-	closeRequests   []string
-	closeErrors     []error
-	sequence        []string
-	beforeClose     func()
-	absentPanes     map[string]bool
-	paneStatuses    map[string]string
+	mu                sync.Mutex
+	anchorReady       bool
+	anchorTaskID      string
+	anchorSessionID   string
+	inspectCalls      int
+	streamQueue       []*fakeEventStream
+	streams           []*fakeEventStream
+	streamCallN       int
+	createRequests    []transport.CreatePaneRequest
+	successfulCreates map[string]bool
+	createErrors      []error
+	inputRequests     []fakeInput
+	inputErrors       []error
+	snapshots         map[string]string
+	snapshotPanes     map[string]transport.Pane
+	closeRequests     []string
+	closeErrors       []error
+	beforeClose       func()
+	absentPanes       map[string]bool
+	paneStatuses      map[string]string
 }
 
 func newFakeManagerClient() *fakeManagerClient {
-	return &fakeManagerClient{anchorReady: true, anchorTaskID: "tickets", anchorSessionID: "physical-a", snapshots: map[string]string{}, absentPanes: map[string]bool{}, paneStatuses: map[string]string{}}
+	return &fakeManagerClient{anchorReady: true, anchorTaskID: "tickets", anchorSessionID: "physical-a", successfulCreates: map[string]bool{}, snapshots: map[string]string{}, snapshotPanes: map[string]transport.Pane{}, absentPanes: map[string]bool{}, paneStatuses: map[string]string{}}
 }
 
 func (f *fakeManagerClient) CreatePane(_ context.Context, req transport.CreatePaneRequest) (transport.CreatePaneResponse, error) {
@@ -507,6 +578,7 @@ func (f *fakeManagerClient) CreatePane(_ context.Context, req transport.CreatePa
 			return transport.CreatePaneResponse{}, err
 		}
 	}
+	f.successfulCreates[req.ID] = true
 	return transport.CreatePaneResponse{Pane: transport.Pane{ID: req.ID, TaskID: req.TaskID, SessionID: req.ZellijSession}}, nil
 }
 
@@ -529,7 +601,11 @@ func (f *fakeManagerClient) SnapshotOutput(_ context.Context, paneID string, _ t
 	if !ok {
 		output = "›"
 	}
-	return transport.SnapshotOutputResponse{Pane: transport.Pane{ID: paneID}, Output: output}, nil
+	pane, ok := f.snapshotPanes[paneID]
+	if !ok {
+		pane = transport.Pane{ID: paneID, TaskID: "tickets", SessionID: "physical-a", Role: "coding-agent", Status: "running"}
+	}
+	return transport.SnapshotOutputResponse{Pane: pane, Output: output}, nil
 }
 
 func (f *fakeManagerClient) ClosePane(_ context.Context, paneID string) (transport.ClosePaneResponse, error) {
@@ -539,7 +615,6 @@ func (f *fakeManagerClient) ClosePane(_ context.Context, paneID string) (transpo
 		f.beforeClose()
 	}
 	f.closeRequests = append(f.closeRequests, paneID)
-	f.sequence = append(f.sequence, "close:"+paneID)
 	if len(f.closeErrors) > 0 {
 		err := f.closeErrors[0]
 		f.closeErrors = f.closeErrors[1:]
@@ -559,6 +634,9 @@ func (f *fakeManagerClient) InspectRuntime(context.Context) (transport.InspectRu
 	}
 	panes := []transport.Pane{{ID: "ticket-manager", TaskID: f.anchorTaskID, SessionID: f.anchorSessionID, Status: "running"}}
 	for _, req := range f.createRequests {
+		if !f.successfulCreates[req.ID] {
+			continue
+		}
 		if f.absentPanes[req.ID] {
 			continue
 		}
@@ -566,7 +644,7 @@ func (f *fakeManagerClient) InspectRuntime(context.Context) (transport.InspectRu
 		if status == "" {
 			status = "running"
 		}
-		panes = append(panes, transport.Pane{ID: req.ID, TaskID: req.TaskID, SessionID: req.ZellijSession, Status: status})
+		panes = append(panes, transport.Pane{ID: req.ID, TaskID: req.TaskID, SessionID: req.ZellijSession, Role: req.Role, Status: status})
 	}
 	return transport.InspectRuntimeResponse{Panes: panes}, nil
 }
@@ -592,6 +670,11 @@ func (f *fakeManagerClient) setSnapshot(id, output string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.snapshots[id] = output
+}
+func (f *fakeManagerClient) setSnapshotPane(id string, pane transport.Pane) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snapshotPanes[id] = pane
 }
 func (f *fakeManagerClient) setPaneAbsent(id string, absent bool) {
 	f.mu.Lock()
@@ -628,32 +711,4 @@ func (f *fakeManagerClient) closed() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.closeRequests...)
-}
-func (f *fakeManagerClient) callSequence() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.sequence...)
-}
-
-func itoa(id int64) string {
-	if id == 0 {
-		return "0"
-	}
-	var digits [20]byte
-	i := len(digits)
-	for id > 0 {
-		i--
-		digits[i] = byte('0' + id%10)
-		id /= 10
-	}
-	return string(digits[i:])
-}
-
-func indexOf(values []string, want string) int {
-	for i, value := range values {
-		if value == want {
-			return i
-		}
-	}
-	return -1
 }
