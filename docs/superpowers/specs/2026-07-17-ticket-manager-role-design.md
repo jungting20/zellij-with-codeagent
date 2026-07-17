@@ -141,7 +141,8 @@ inside double quotes and inside an instruction sentence, never as a standalone
 line. Therefore the terminal echo of the submitted prompt does not satisfy the
 exact-line predicate. The LLM is explicitly told to omit the quotes when it
 prints the final standalone marker. Rendering fails before pane creation if a
-custom template or ticket field would place the exact marker on its own line.
+custom template or ticket field contains the exact marker anywhere, preventing
+terminal line wrapping from turning prompt echo into a standalone screen row.
 
 Repeated full-snapshot `raw_output` events are harmless: once a slot leaves
 `working`, duplicate marker observations for that pane are ignored.
@@ -168,10 +169,11 @@ specific `in_progress` ticket back to `ready`, clears `started_at`, and updates
 - A render failure requeues the claimed ticket immediately because no worker
   pane exists. A definitive validation/not-found create failure does the same.
   Other create errors are treated as outcome-unknown: the slot retains the
-  in-progress ticket until runtime inspection finds and closes the matching
-  pane. If absence cannot distinguish a failed request from an unmanaged
-  residual pane, the manager retains the slot and reports an unsafe cleanup on
-  shutdown rather than risking duplicate ticket execution.
+  in-progress ticket, inspects for the matching pane, and retries the same
+  logical create request when absent. A successful retry or a pane discovered
+  before/after it is closed before requeue. If transport failures keep the
+  outcome unknown, the manager retains the slot and reports an unsafe cleanup
+  on shutdown rather than risking duplicate ticket execution.
 - Readiness or input failure first closes the created pane. Only confirmed close
   or confirmed runtime absence permits requeue and slot release.
 - If worker cleanup cannot be confirmed, the slot remains occupied and the

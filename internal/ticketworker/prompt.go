@@ -35,8 +35,8 @@ func RenderTicketPrompt(cfg Config, ticket Ticket) (string, string, error) {
 	if body == "" {
 		return "", "", fmt.Errorf("rendered prompt must not be empty")
 	}
-	if containsExactLine(body, marker) {
-		return "", "", fmt.Errorf("rendered prompt must not contain completion marker %q as a standalone line", marker)
+	if strings.Contains(body, marker) {
+		return "", "", fmt.Errorf("rendered prompt must not contain completion marker %q", marker)
 	}
 	instruction := fmt.Sprintf("작업을 모두 완료한 뒤 마지막 줄에 따옴표 없이 %q만 출력하세요.", marker)
 	return body + "\n\n" + instruction, marker, nil

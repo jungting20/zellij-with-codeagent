@@ -64,6 +64,7 @@ type managerSlot struct {
 	paneID            string
 	marker            string
 	prompt            string
+	createRequest     transport.CreatePaneRequest
 	paneCreated       bool
 	creationUncertain bool
 	done              bool
@@ -327,6 +328,7 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 		Role: "coding-agent", Name: slot.paneID, SameTabAsPaneID: m.anchorPaneID,
 		Command: []string{m.roleBin, "role", "coding-agent", m.root}, CWD: m.root,
 	}
+	slot.createRequest = req
 	if _, err := m.client.CreatePane(ctx, req); err != nil {
 		m.logf("create ticket=%d pane=%s failed: %v", ticket.ID, slot.paneID, err)
 		if safeCreateFailure(err) {
@@ -497,6 +499,25 @@ func (m *Manager) retryCleanup(ctx context.Context, slot *managerSlot) {
 
 func (m *Manager) resolveUncertainCreation(ctx context.Context, slot *managerSlot) bool {
 	response, err := m.client.InspectRuntime(ctx)
+	if err != nil {
+		slot.lastError = err
+		return false
+	}
+	for _, pane := range response.Panes {
+		if m.matchesWorkerPane(pane, slot, false) {
+			slot.creationUncertain = false
+			slot.paneCreated = true
+			return true
+		}
+	}
+	if _, err := m.client.CreatePane(ctx, slot.createRequest); err == nil {
+		slot.creationUncertain = false
+		slot.paneCreated = true
+		return true
+	} else {
+		slot.lastError = err
+	}
+	response, err = m.client.InspectRuntime(ctx)
 	if err != nil {
 		slot.lastError = err
 		return false

@@ -217,22 +217,52 @@ func TestManagerSafeCreateFailureRequeuesClaimedTicket(t *testing.T) {
 	}
 }
 
-func TestManagerUncertainCreateFailureRetainsTicket(t *testing.T) {
+func TestManagerUncertainCreateFailureRetriesSamePaneThenRequeues(t *testing.T) {
 	store := &fakeManagerStore{ready: []Ticket{managerTicket(15)}}
 	client := newFakeManagerClient()
 	client.createErrors = []error{errors.New("connection reset after request")}
 	client.streams = []*fakeEventStream{newFakeEventStream()}
-	manager := newTestManager(t, store, client, 1)
+	ticks := make(chan time.Time, 1)
+	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(client.created()) == 1 })
-	time.Sleep(20 * time.Millisecond)
 	if len(store.requeues()) != 0 {
 		t.Fatalf("uncertain create was requeued: %v", store.requeues())
 	}
+	ticks <- time.Now()
+	waitFor(t, func() bool {
+		return len(client.created()) == 2 && len(client.closed()) == 1 && len(store.requeues()) == 1
+	})
+	created := client.created()
+	if created[0].ID != created[1].ID {
+		t.Fatalf("retried pane IDs = %q, %q", created[0].ID, created[1].ID)
+	}
 	cancel()
-	if err := <-done; err == nil || len(store.requeues()) != 0 {
-		t.Fatalf("shutdown error=%v requeues=%v", err, store.requeues())
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagerUncertainCreateFailureCleansPaneCreatedBeforeResponseLoss(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(16)}}
+	client := newFakeManagerClient()
+	client.createErrors = []error{errors.New("connection reset after create")}
+	client.createOnError = true
+	client.streams = []*fakeEventStream{newFakeEventStream()}
+	ticks := make(chan time.Time, 1)
+	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.created()) == 1 })
+	ticks <- time.Now()
+	waitFor(t, func() bool { return len(client.closed()) == 1 && len(store.requeues()) == 1 })
+	if len(client.created()) != 1 {
+		t.Fatalf("existing pane should be discovered before retry: creates=%d", len(client.created()))
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -552,6 +582,7 @@ type fakeManagerClient struct {
 	createRequests    []transport.CreatePaneRequest
 	successfulCreates map[string]bool
 	createErrors      []error
+	createOnError     bool
 	inputRequests     []fakeInput
 	inputErrors       []error
 	snapshots         map[string]string
@@ -575,6 +606,9 @@ func (f *fakeManagerClient) CreatePane(_ context.Context, req transport.CreatePa
 		err := f.createErrors[0]
 		f.createErrors = f.createErrors[1:]
 		if err != nil {
+			if f.createOnError {
+				f.successfulCreates[req.ID] = true
+			}
 			return transport.CreatePaneResponse{}, err
 		}
 	}
