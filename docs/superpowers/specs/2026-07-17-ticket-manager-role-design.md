@@ -83,8 +83,9 @@ startup timeout or cancellation creates no coding panes and claims no tickets.
 
 ## Slot and Queue Lifecycle
 
-The manager allocates exactly `config.max_workers` slots. Each slot records its
-ticket ID, deterministic logical pane ID, and one of these states:
+The manager allocates exactly `config.max_workers` slots. Each manager process
+generates a random instance ID, and each slot records its ticket ID, logical
+pane ID, and one of these states:
 
 - `empty`
 - `starting`
@@ -110,9 +111,9 @@ For an empty slot:
    작업을 모두 완료한 뒤 마지막 줄에 따옴표 없이 "ZELLIJ_AGENT_TICKET_DONE <ID>"만 출력하세요.
    ```
 
-5. Create logical pane `ticket-coding-<ID>` in the anchor's tab with role
-   `coding-agent`, the requested task and physical session, repository-root
-   working directory, and command:
+5. Create logical pane `ticket-coding-<MANAGER_ID>-<ID>` in the anchor's tab
+   with role `coding-agent`, the requested task and physical session,
+   repository-root working directory, and command:
 
    ```text
    <role-bin> role coding-agent <repository-root>
@@ -139,7 +140,8 @@ Prefix and substring matches are forbidden. The prompt contains the marker
 inside double quotes and inside an instruction sentence, never as a standalone
 line. Therefore the terminal echo of the submitted prompt does not satisfy the
 exact-line predicate. The LLM is explicitly told to omit the quotes when it
-prints the final standalone marker.
+prints the final standalone marker. Rendering fails before pane creation if a
+custom template or ticket field would place the exact marker on its own line.
 
 Repeated full-snapshot `raw_output` events are harmless: once a slot leaves
 `working`, duplicate marker observations for that pane are ignored.
@@ -163,8 +165,13 @@ The store gains a manager-only requeue operation that atomically changes one
 specific `in_progress` ticket back to `ready`, clears `started_at`, and updates
 `updated_at`. It is not exposed as a new user-facing queue command.
 
-- Render or pane-create failure requeues the claimed ticket immediately because
-  no worker pane remains active.
+- A render failure requeues the claimed ticket immediately because no worker
+  pane exists. A definitive validation/not-found create failure does the same.
+  Other create errors are treated as outcome-unknown: the slot retains the
+  in-progress ticket until runtime inspection finds and closes the matching
+  pane. If absence cannot distinguish a failed request from an unmanaged
+  residual pane, the manager retains the slot and reports an unsafe cleanup on
+  shutdown rather than risking duplicate ticket execution.
 - Readiness or input failure first closes the created pane. Only confirmed close
   or confirmed runtime absence permits requeue and slot release.
 - If worker cleanup cannot be confirmed, the slot remains occupied and the
@@ -225,13 +232,12 @@ Role package tests use fake executables or injected dependencies and do not
 start interactive Codex. Catalog and dispatcher tests verify metadata, argument
 requirements, dispatch, and child exit-code preservation.
 
-Documentation adds the role to
-`/Users/in05908_mac/.config/pi/docs/agent-roles.md` as required by the repository
-role workflow, creating that file if it does not exist. It records exact usage,
-options, purpose, config/database requirements, agentd and Zellij requirements,
-and the completion-marker contract.
+Documentation adds the role to the current user's
+`~/.config/pi/docs/agent-roles.md`. It records exact usage, options, purpose,
+config/database requirements, agentd and Zellij requirements, and the
+completion-marker contract.
 
-Final verification runs focused package tests, `go test ./...`, builds
-`bin/agent-role`, confirms `./bin/agent-role roles` lists `ticket-manager`, then
-builds `bin/zellij-agent` and atomically registers it at
+Final verification runs focused package tests, `go test ./...`, `go vet ./...`,
+builds the compatibility and unified binaries, confirms
+`./bin/zellij-agent role ticket-manager --help`, then atomically registers it at
 `~/.config/custom-cli/zellij-agent` according to the repository instructions.
