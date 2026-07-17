@@ -449,10 +449,29 @@ func TestInitIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	deps := Dependencies{StartDirectory: root}
-	for range 2 {
-		var stdout, stderr bytes.Buffer
-		if code := Run(context.Background(), []string{"init"}, &stdout, &stderr, deps); code != ExitOK {
-			t.Fatalf("init exit = %d, stderr = %q", code, stderr.String())
+	var stdout, stderr bytes.Buffer
+	if code := Run(context.Background(), []string{"init"}, &stdout, &stderr, deps); code != ExitOK {
+		t.Fatalf("init exit = %d, stderr = %q", code, stderr.String())
+	}
+	for _, path := range []string{ticketworker.DatabasePath(root), ticketworker.ConfigPath(root)} {
+		if !strings.Contains(stdout.String(), path) {
+			t.Fatalf("init stdout = %q, missing %q", stdout.String(), path)
 		}
+	}
+	custom := "version: 1\nmax_workers: 1\npoll_interval: 5s\nprompt_template: custom {{ .ID }}\n"
+	if err := os.WriteFile(ticketworker.ConfigPath(root), []byte(custom), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(context.Background(), []string{"init"}, &stdout, &stderr, deps); code != ExitOK {
+		t.Fatalf("second init exit = %d, stderr = %q", code, stderr.String())
+	}
+	data, err := os.ReadFile(ticketworker.ConfigPath(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != custom {
+		t.Fatalf("config after second init = %q, want %q", data, custom)
 	}
 }

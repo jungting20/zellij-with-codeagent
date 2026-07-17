@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"zellij-with-codeagent/internal/ticketworker"
 	"zellij-with-codeagent/internal/transport"
 )
 
@@ -65,6 +67,16 @@ func TestRunDispatchesTicketWorkerInit(t *testing.T) {
 	databasePath := filepath.Join(root, ".zellij-agent", "ticket-worker", "tickets.db")
 	if _, err := os.Stat(databasePath); err != nil {
 		t.Fatalf("database stat error = %v", err)
+	}
+	if _, err := os.Stat(ticketworker.ConfigPath(root)); err != nil {
+		t.Fatalf("config stat error = %v", err)
+	}
+	cfg, err := ticketworker.LoadConfig(root)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if cfg.MaxWorkers != 3 || cfg.PollInterval != 30*time.Second {
+		t.Fatalf("config defaults = %+v", cfg)
 	}
 	ignored, err := os.ReadFile(filepath.Join(root, ".gitignore"))
 	if err != nil || !strings.Contains(string(ignored), ".zellij-agent/ticket-worker/") {

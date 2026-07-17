@@ -55,6 +55,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, dependenc
 			return reportError(stderr, false, err)
 		}
 		fmt.Fprintf(stdout, "initialized ticket-worker database: %s\n", ticketworker.DatabasePath(root))
+		fmt.Fprintf(stdout, "initialized ticket-worker config: %s\n", ticketworker.ConfigPath(root))
 		return ExitOK
 	}
 

@@ -66,10 +66,29 @@ func TestInitializeProjectIsIdempotentAndUpdatesGitignoreOnce(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("bin/"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for range 2 {
-		if err := InitializeProject(context.Background(), root, nil); err != nil {
-			t.Fatal(err)
-		}
+	if err := InitializeProject(context.Background(), root, nil); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(root)
+	if err != nil {
+		t.Fatalf("LoadConfig() after init error = %v", err)
+	}
+	if cfg.MaxWorkers != 3 || cfg.PollInterval.String() != "30s" {
+		t.Fatalf("initialized config = %+v", cfg)
+	}
+	customConfig := "version: 1\nmax_workers: 2\npoll_interval: 1m\nprompt_template: custom {{ .Title }}\n"
+	if err := os.WriteFile(ConfigPath(root), []byte(customConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := InitializeProject(context.Background(), root, nil); err != nil {
+		t.Fatal(err)
+	}
+	preserved, err := os.ReadFile(ConfigPath(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(preserved) != customConfig {
+		t.Fatalf("config after second init = %q, want %q", preserved, customConfig)
 	}
 	db, err := sql.Open("sqlite", DatabasePath(root))
 	if err != nil {
@@ -86,6 +105,32 @@ func TestInitializeProjectIsIdempotentAndUpdatesGitignoreOnce(t *testing.T) {
 	}
 	if got := strings.Count(string(data), ignoreEntry); got != 1 {
 		t.Fatalf(".gitignore = %q, entry count = %d", data, got)
+	}
+}
+
+func TestInitializeProjectConfigFailurePreservesDatabase(t *testing.T) {
+	root := newRepositoryRoot(t)
+	workerPath := filepath.Join(root, ".zellij-agent", "worker")
+	if err := os.MkdirAll(filepath.Dir(workerPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(workerPath, []byte("blocks config directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := InitializeProject(context.Background(), root, nil)
+	if err == nil || !strings.Contains(err.Error(), "ticket-worker config") {
+		t.Fatalf("InitializeProject() error = %v, want config initialization error", err)
+	}
+	if _, err := os.Stat(DatabasePath(root)); err != nil {
+		t.Fatalf("database stat after config failure = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), ignoreEntry) {
+		t.Fatalf(".gitignore after config failure = %q, missing %q", data, ignoreEntry)
 	}
 }
 

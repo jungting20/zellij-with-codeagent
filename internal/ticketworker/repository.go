@@ -45,7 +45,13 @@ func InitializeProject(ctx context.Context, root string, now func() time.Time) e
 	if err := store.Close(); err != nil {
 		return fmt.Errorf("close ticket database: %w", err)
 	}
-	return ensureGitignore(root)
+	if err := ensureGitignore(root); err != nil {
+		return err
+	}
+	if _, _, err := EnsureConfig(root); err != nil {
+		return fmt.Errorf("initialize ticket-worker config: %w", err)
+	}
+	return nil
 }
 
 func OpenExisting(ctx context.Context, root string, now func() time.Time) (*Store, error) {
