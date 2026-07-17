@@ -104,6 +104,9 @@ func TestManagerIgnoresPromptEchoAndCompletesExactMarker(t *testing.T) {
 	waitFor(t, func() bool { return len(client.inputs()) == 1 })
 
 	prompt := client.inputs()[0].req.Text
+	if len(prompt) == 0 || prompt[len(prompt)-1] != '\n' {
+		t.Fatalf("submitted prompt = %q, want trailing newline to send Enter", prompt)
+	}
 	stream.events <- transport.Event{Type: "raw_output", PaneID: "ticket-coding-42", Message: prompt}
 	time.Sleep(20 * time.Millisecond)
 	if len(store.transitions()) != 0 || len(client.closed()) != 0 {

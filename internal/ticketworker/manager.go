@@ -303,7 +303,7 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 		m.retryCleanup(ctx, slot)
 		return true
 	}
-	if err := m.client.SendInput(ctx, slot.paneID, transport.SendInputRequest{Text: slot.prompt}); err != nil {
+	if err := m.client.SendInput(ctx, slot.paneID, transport.SendInputRequest{Text: slot.prompt + "\n"}); err != nil {
 		slot.lastError = err
 		slot.state = managerSlotCleanupFailed
 		m.retryCleanup(ctx, slot)
