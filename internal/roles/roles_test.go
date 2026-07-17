@@ -25,8 +25,11 @@ func TestAllIncludesRoleDescriptions(t *testing.T) {
 	if !ok {
 		t.Fatalf("Lookup(%q) not found", RoleCodingAgent)
 	}
-	if len(spec.Arguments) != 1 || spec.Arguments[0].Name != "path" || !spec.Arguments[0].Required {
-		t.Fatalf("Lookup(%q) arguments = %#v, want required path argument", RoleCodingAgent, spec.Arguments)
+	if spec.Usage != "coding-agent [--yolo] <path>" {
+		t.Fatalf("Lookup(%q) usage = %q, want coding-agent [--yolo] <path>", RoleCodingAgent, spec.Usage)
+	}
+	if len(spec.Arguments) != 2 || spec.Arguments[0].Name != "path" || !spec.Arguments[0].Required || spec.Arguments[1].Name != "--yolo" || spec.Arguments[1].Required {
+		t.Fatalf("Lookup(%q) arguments = %#v, want required path and optional --yolo", RoleCodingAgent, spec.Arguments)
 	}
 }
 

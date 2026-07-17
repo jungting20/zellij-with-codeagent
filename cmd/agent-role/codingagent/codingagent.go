@@ -2,7 +2,9 @@ package codingagent
 
 import (
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,11 +33,14 @@ func Run(args []string) int {
 }
 
 func prepare(args []string) (*exec.Cmd, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("usage: agent-role coding-agent <path>")
+	fs := flag.NewFlagSet("coding-agent", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	yolo := fs.Bool("yolo", false, "bypass Codex approvals and sandboxing")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
+		return nil, fmt.Errorf("usage: agent-role coding-agent [--yolo] <path>")
 	}
 
-	repoPath, err := resolveRepositoryPath(args[0])
+	repoPath, err := resolveRepositoryPath(fs.Arg(0))
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +50,11 @@ func prepare(args []string) (*exec.Cmd, error) {
 		return nil, fmt.Errorf("codex executable not found on PATH")
 	}
 
-	cmd := exec.Command(codexPath)
+	var codexArgs []string
+	if *yolo {
+		codexArgs = append(codexArgs, "--dangerously-bypass-approvals-and-sandbox")
+	}
+	cmd := exec.Command(codexPath, codexArgs...)
 	cmd.Dir = repoPath
 	return cmd, nil
 }

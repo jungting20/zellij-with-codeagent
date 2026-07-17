@@ -219,9 +219,10 @@ registered only once. Queue and lifecycle commands are:
 `start` creates one runtime-managed `ticket-manager` pane in a new
 `ticket-worker` tab. The manager claims the oldest `ready` tickets, starts up to
 `max_workers` coding-agent panes beside itself, and continues polling for new
-tickets. It uses `--zellij-session` when supplied or `ZELLIJ_SESSION_NAME` when
-run inside Zellij. The unified CLI automatically starts the local daemon when
-needed.
+tickets. Every coding-agent created by the manager runs in YOLO mode, bypassing
+Codex approvals and sandboxing. The manager uses `--zellij-session` when
+supplied or `ZELLIJ_SESSION_NAME` when run inside Zellij. The unified CLI
+automatically starts the local daemon when needed.
 
 `next` remains the explicit manual claim operation: it atomically moves the
 oldest `ready` ticket to `in_progress`. Add `--json` to ticket data commands

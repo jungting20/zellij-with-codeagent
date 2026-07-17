@@ -108,10 +108,11 @@ var specs = []RoleSpec{
 	},
 	{
 		Name:        RoleCodingAgent,
-		Usage:       "coding-agent <path>",
+		Usage:       "coding-agent [--yolo] <path>",
 		Description: "Runs Codex coding agent in the repository containing the target path.",
 		Arguments: []ArgumentSpec{
 			{Name: "path", Required: true, Description: "File or directory path inside the repository where Codex should run."},
+			{Name: "--yolo", Required: false, Description: "Bypass Codex approvals and sandboxing."},
 		},
 	},
 	{

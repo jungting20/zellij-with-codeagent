@@ -37,7 +37,7 @@ func TestManagerWaitsForAnchorThenFillsConfiguredCapacity(t *testing.T) {
 		if req.ID != "ticket-coding-run-a-"+string(rune('0'+wantID)) || req.Role != "coding-agent" || req.TaskID != "tickets" || req.SameTabAsPaneID != "ticket-manager" || req.ZellijSession != "physical-a" {
 			t.Fatalf("create[%d] = %#v", i, req)
 		}
-		wantCommand := []string{"zellij-agent", "role", "coding-agent", "/repo"}
+		wantCommand := []string{"zellij-agent", "role", "coding-agent", "--yolo", "/repo"}
 		if len(req.Command) != len(wantCommand) {
 			t.Fatalf("command = %#v", req.Command)
 		}
