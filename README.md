@@ -155,6 +155,51 @@ Arguments after `--` configure the watcher, for example `--port 9333
 --no-launch`. Use `--no-watch` before `--` to create one `tab-network` pane
 instead of watching for new tabs.
 
+### Ticket Worker SQLite Queue
+
+`zellij-agent ticket-worker` manages a ticket queue stored inside each Git
+project. Initialize it from the project root or any nested directory:
+
+```bash
+./bin/zellij-agent ticket-worker init
+```
+
+Initialization creates
+`.zellij-agent/ticket-worker/tickets.db` at the Git root and adds
+`.zellij-agent/ticket-worker/` to the root `.gitignore`. It is idempotent:
+running it again preserves existing tickets and does not duplicate the ignore
+entry. Other ticket commands never create a database implicitly and report an
+initialization error until `init` succeeds.
+
+Register a ticket from an approved Superpowers design and implementation plan:
+
+```bash
+./bin/zellij-agent ticket-worker add \
+  --title "Add search" \
+  --summary "Implement indexed search" \
+  --spec docs/superpowers/specs/2026-07-17-search-design.md \
+  --plan docs/superpowers/plans/2026-07-17-search.md
+```
+
+The spec and plan must be existing Markdown files under
+`docs/superpowers/specs/` and `docs/superpowers/plans/`. A plan can be
+registered only once. Queue and lifecycle commands are:
+
+```bash
+./bin/zellij-agent ticket-worker list [--status ready]
+./bin/zellij-agent ticket-worker next
+./bin/zellij-agent ticket-worker show ID
+./bin/zellij-agent ticket-worker start ID
+./bin/zellij-agent ticket-worker done ID
+./bin/zellij-agent ticket-worker cancel ID
+./bin/zellij-agent ticket-worker reopen ID
+```
+
+Add `--json` to any command except `init` for machine-readable ticket output
+and structured errors. `next` atomically claims the oldest `ready` ticket and
+moves it to `in_progress`. This release provides queue persistence and ticket
+management only; it does not start worker panes or coding agents.
+
 ### Planner Commands
 
 `zellij-agent ctl plan` accepts either a raw execution plan payload or a full `/v1/requests` envelope.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -19,6 +20,8 @@ import (
 	"zellij-with-codeagent/internal/dashboard"
 	"zellij-with-codeagent/internal/transport"
 )
+
+var getWorkingDirectory = os.Getwd
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -53,7 +56,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "dashboard":
 		return dashboardcli.Run(args[1:], stdin, stdout, stderr, newDashboardClient, dashboardcli.Config{})
 	case "ticket-worker":
-		return ticketworkercli.Run(args[1:], stdout, stderr)
+		cwd, err := getWorkingDirectory()
+		if err != nil {
+			fmt.Fprintf(stderr, "determine working directory: %v\n", err)
+			return ticketworkercli.ExitDatabase
+		}
+		return ticketworkercli.Run(context.Background(), args[1:], stdout, stderr, ticketworkercli.Dependencies{
+			StartDirectory: cwd,
+			Now:            time.Now,
+		})
 	case "code-review":
 		return codereviewcli.Run(args[1:], stdout, stderr)
 	case "debate-background":
@@ -122,7 +133,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  dashboard")
 	fmt.Fprintln(w, "           Supervise the managed runtime in a live TUI")
 	fmt.Fprintln(w, "  ticket-worker")
-	fmt.Fprintln(w, "           Reserved placeholder; not implemented")
+	fmt.Fprintln(w, "           Manage a project-local SQLite ticket queue")
 	fmt.Fprintln(w, "  code-review")
 	fmt.Fprintln(w, "           Review the latest git diff with debate-background")
 	fmt.Fprintln(w, "  debate-background")

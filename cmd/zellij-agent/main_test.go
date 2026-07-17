@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -36,16 +37,38 @@ func TestRunDispatchesTicketWorkerHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	for _, want := range []string{"Usage: zellij-agent ticket-worker", "not implemented"} {
+	for _, want := range []string{"Usage: zellij-agent ticket-worker", "init", "add", "list", "next", "show", "start", "done", "cancel", "reopen"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, missing %q", stdout.String(), want)
 		}
 	}
-	if strings.Contains(stdout.String(), "init") || strings.Contains(stdout.String(), "start") {
-		t.Fatalf("stdout = %q, want no former subcommands", stdout.String())
-	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunDispatchesTicketWorkerInit(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := getWorkingDirectory
+	getWorkingDirectory = func() (string, error) { return root, nil }
+	t.Cleanup(func() { getWorkingDirectory = original })
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"ticket-worker", "init"}, strings.NewReader(""), &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	databasePath := filepath.Join(root, ".zellij-agent", "ticket-worker", "tickets.db")
+	if _, err := os.Stat(databasePath); err != nil {
+		t.Fatalf("database stat error = %v", err)
+	}
+	ignored, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+	if err != nil || !strings.Contains(string(ignored), ".zellij-agent/ticket-worker/") {
+		t.Fatalf(".gitignore = %q, error = %v", ignored, err)
 	}
 }
 
