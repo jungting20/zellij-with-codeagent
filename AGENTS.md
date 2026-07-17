@@ -28,3 +28,5 @@ Recent history mostly uses short `feat:` commits, sometimes with Korean descript
 ## Agent-Specific Instructions
 
 Do not bypass the runtime boundary by calling Zellij directly from planners or clients. Route pane creation, input, snapshots, events, reconciliation, and cleanup through `RuntimeService` or the local transport wrappers.
+
+Except for background logic, every feature addition must begin by creating a default role.
