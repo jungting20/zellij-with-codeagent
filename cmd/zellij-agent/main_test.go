@@ -36,10 +36,13 @@ func TestRunDispatchesTicketWorkerHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	for _, want := range []string{"Usage: zellij-agent ticket-worker", "init", "start"} {
+	for _, want := range []string{"Usage: zellij-agent ticket-worker", "not implemented"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, missing %q", stdout.String(), want)
 		}
+	}
+	if strings.Contains(stdout.String(), "init") || strings.Contains(stdout.String(), "start") {
+		t.Fatalf("stdout = %q, want no former subcommands", stdout.String())
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())

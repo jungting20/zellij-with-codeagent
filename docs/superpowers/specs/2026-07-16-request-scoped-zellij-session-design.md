@@ -40,7 +40,7 @@ The backend's configured session may remain available for direct low-level calle
 
 ## Creation Flows
 
-Unified CLI commands that submit execution plans, including work, ticket-worker, Chrome, planner, debate, and control-plane submission paths, expose or resolve `--zellij-session` consistently. Direct pane-creation callers use the same resolver at their CLI boundary.
+Unified CLI commands that submit execution plans, including work, Chrome, planner, debate, and control-plane submission paths, expose or resolve `--zellij-session` consistently. Direct pane-creation callers use the same resolver at their CLI boundary.
 
 The flow is:
 
@@ -53,7 +53,7 @@ CLI flag or CLI environment
   -> registry PaneRecord.SessionID
 ```
 
-Long-lived components that create panes after the initial execution plan must preserve the resolved session explicitly. In particular, the ticket-worker manager receives the initial physical session and includes it in every worker `CreatePaneRequest`. Watcher and role processes that submit later plans follow the same rule rather than depending on the daemon environment.
+Long-lived components that create panes after the initial execution plan must preserve the resolved session explicitly. Watcher and role processes that submit later plans follow the same rule rather than depending on the daemon environment.
 
 ## Target Validation
 
@@ -93,7 +93,6 @@ Automated tests cover:
 - two physical sessions managed concurrently by one runtime.
 - follow-up input, snapshot, close, subscription, cleanup, and reconciliation routing to the pane record's session.
 - same-tab anchor session mismatch rejection.
-- ticket-worker manager, monitor, and worker panes retaining one physical session.
 - dry-run output containing the resolved `zellij_session`.
 - unchanged logical `session` and `task_id` behavior.
 

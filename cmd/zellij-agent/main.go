@@ -53,10 +53,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "dashboard":
 		return dashboardcli.Run(args[1:], stdin, stdout, stderr, newDashboardClient, dashboardcli.Config{})
 	case "ticket-worker":
-		return ticketworkercli.Run(args[1:], stdin, stdout, stderr, ticketworkercli.Config{
-			Executable: []string{executablePath()},
-			NewClient:  newTicketWorkerClient,
-		})
+		return ticketworkercli.Run(args[1:], stdout, stderr)
 	case "code-review":
 		return codereviewcli.Run(args[1:], stdout, stderr)
 	case "debate-background":
@@ -87,10 +84,6 @@ func newChromeClient(socketPath string, timeout time.Duration) chromecli.AgentCl
 }
 
 func newDashboardClient(socketPath string, timeout time.Duration) dashboard.Client {
-	return newAutoStartClient(socketPath, timeout)
-}
-
-func newTicketWorkerClient(socketPath string, timeout time.Duration) ticketworkercli.Client {
 	return newAutoStartClient(socketPath, timeout)
 }
 
@@ -129,7 +122,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  dashboard")
 	fmt.Fprintln(w, "           Supervise the managed runtime in a live TUI")
 	fmt.Fprintln(w, "  ticket-worker")
-	fmt.Fprintln(w, "           Launch a project ticket-worker pane pool")
+	fmt.Fprintln(w, "           Reserved placeholder; not implemented")
 	fmt.Fprintln(w, "  code-review")
 	fmt.Fprintln(w, "           Review the latest git diff with debate-background")
 	fmt.Fprintln(w, "  debate-background")
