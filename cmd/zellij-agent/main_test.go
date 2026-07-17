@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	ticketworkercli "zellij-with-codeagent/internal/cli/ticketworker"
 	"zellij-with-codeagent/internal/ticketworker"
 	"zellij-with-codeagent/internal/transport"
 )
@@ -44,8 +46,69 @@ func TestRunDispatchesTicketWorkerHelp(t *testing.T) {
 			t.Fatalf("stdout = %q, missing %q", stdout.String(), want)
 		}
 	}
+	if !strings.Contains(stdout.String(), "start   Start the ticket manager pane") || strings.Contains(stdout.String(), "Move a ready ticket to in_progress") {
+		t.Fatalf("stdout = %q, want manager start description", stdout.String())
+	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+type fakeTicketWorkerClient struct {
+	requestID string
+	payload   transport.ExecutionPlanPayload
+}
+
+func (c *fakeTicketWorkerClient) SubmitExecutionPlan(_ context.Context, requestID string, payload transport.ExecutionPlanPayload) (transport.ExecutionPlanResponse, error) {
+	c.requestID = requestID
+	c.payload = payload
+	pane := payload.Tabs[0].Panes[0]
+	return transport.ExecutionPlanResponse{
+		RequestID: requestID,
+		Session:   payload.Session,
+		Layout:    payload.Layout,
+		Tabs: []transport.ExecutionPlanTabResponse{
+			{Name: payload.Tabs[0].Name, Panes: []transport.Pane{{ID: pane.ID, Role: pane.Role, Status: "starting"}}},
+		},
+	}, nil
+}
+
+func TestUnifiedTicketWorkerStartDispatchesPlan(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ticketworker.InitializeProject(context.Background(), root, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ZELLIJ_SESSION_NAME", "physical-a")
+
+	originalGetwd := getWorkingDirectory
+	getWorkingDirectory = func() (string, error) { return root, nil }
+	t.Cleanup(func() { getWorkingDirectory = originalGetwd })
+	client := &fakeTicketWorkerClient{}
+	originalFactory := newTicketWorkerClient
+	newTicketWorkerClient = func(string, time.Duration) ticketworkercli.AgentClient { return client }
+	t.Cleanup(func() { newTicketWorkerClient = originalFactory })
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"ticket-worker", "start"}, strings.NewReader(""), &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if client.requestID != ticketworker.StartRequestID(client.payload.Session) {
+		t.Fatalf("request ID = %q, payload = %#v", client.requestID, client.payload)
+	}
+	pane := client.payload.Tabs[0].Panes[0]
+	wantPrefix := []string{executablePath(), "role", "ticket-manager"}
+	if pane.Role != "ticket-manager" || len(pane.Command) < len(wantPrefix) {
+		t.Fatalf("pane = %#v", pane)
+	}
+	for i, want := range wantPrefix {
+		if pane.Command[i] != want {
+			t.Fatalf("command = %#v, want prefix %#v", pane.Command, wantPrefix)
+		}
 	}
 }
 

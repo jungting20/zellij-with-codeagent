@@ -170,7 +170,7 @@ Initialization creates `.zellij-agent/ticket-worker/tickets.db` and
 running it again preserves existing tickets, does not duplicate the ignore
 entry, and never overwrites an existing worker config.
 
-The generated worker config contains the future coding-agent capacity, polling
+The generated worker config contains the coding-agent capacity, polling
 cadence, and per-ticket prompt template:
 
 ```yaml
@@ -210,16 +210,23 @@ registered only once. Queue and lifecycle commands are:
 ./bin/zellij-agent ticket-worker list [--status ready]
 ./bin/zellij-agent ticket-worker next
 ./bin/zellij-agent ticket-worker show ID
-./bin/zellij-agent ticket-worker start ID
+./bin/zellij-agent ticket-worker start [--zellij-session NAME]
 ./bin/zellij-agent ticket-worker done ID
 ./bin/zellij-agent ticket-worker cancel ID
 ./bin/zellij-agent ticket-worker reopen ID
 ```
 
-Add `--json` to any command except `init` for machine-readable ticket output
-and structured errors. `next` atomically claims the oldest `ready` ticket and
-moves it to `in_progress`. This release provides queue persistence and ticket
-management only; it does not start worker panes or coding agents.
+`start` creates one runtime-managed `ticket-manager` pane in a new
+`ticket-worker` tab. The manager claims the oldest `ready` tickets, starts up to
+`max_workers` coding-agent panes beside itself, and continues polling for new
+tickets. It uses `--zellij-session` when supplied or `ZELLIJ_SESSION_NAME` when
+run inside Zellij. The unified CLI automatically starts the local daemon when
+needed.
+
+`next` remains the explicit manual claim operation: it atomically moves the
+oldest `ready` ticket to `in_progress`. Add `--json` to ticket data commands
+other than `init` and `start` for machine-readable output and structured
+errors.
 
 ### Planner Commands
 

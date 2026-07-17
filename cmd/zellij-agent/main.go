@@ -64,6 +64,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return ticketworkercli.Run(context.Background(), args[1:], stdout, stderr, ticketworkercli.Dependencies{
 			StartDirectory: cwd,
 			Now:            time.Now,
+			Executable:     []string{executablePath()},
+			NewClient:      newTicketWorkerClient,
 		})
 	case "code-review":
 		return codereviewcli.Run(args[1:], stdout, stderr)
@@ -91,6 +93,10 @@ func newWorkClient(socketPath string, timeout time.Duration) workcli.AgentClient
 }
 
 func newChromeClient(socketPath string, timeout time.Duration) chromecli.AgentClient {
+	return newAutoStartClient(socketPath, timeout)
+}
+
+var newTicketWorkerClient ticketworkercli.ClientFactory = func(socketPath string, timeout time.Duration) ticketworkercli.AgentClient {
 	return newAutoStartClient(socketPath, timeout)
 }
 
