@@ -19,6 +19,13 @@ func FindRoot(start string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve start directory: %w", err)
 	}
+	info, err := os.Stat(current)
+	if err != nil {
+		return "", fmt.Errorf("inspect start path: %w", err)
+	}
+	if !info.IsDir() {
+		current = filepath.Dir(current)
+	}
 	for {
 		if _, err := os.Stat(filepath.Join(current, ".git")); err == nil {
 			return current, nil

@@ -321,6 +321,62 @@ func TestNextReturnsEmptyQueueAfterReadyTicketsLeaveQueue(t *testing.T) {
 	}
 }
 
+func TestRequeueMovesInProgressTicketToReadyAndClearsStartedAt(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	now := fixedNow
+	store, err := Open(context.Background(), root, filepath.Join(root, ".local", "tickets.db"), func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	spec, plan := writeArtifacts(t, root, "requeue")
+	created, err := store.Add(context.Background(), CreateInput{Title: "Retry", Summary: "Retry safely", SpecPath: spec, PlanPath: plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = fixedNow.Add(time.Minute)
+	claimed, err := store.Next(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = fixedNow.Add(2 * time.Minute)
+	requeued, err := store.Requeue(context.Background(), claimed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requeued.Status != StatusReady || requeued.StartedAt != nil || !requeued.UpdatedAt.Equal(now) {
+		t.Fatalf("Requeue() = %#v", requeued)
+	}
+	if requeued.Title != created.Title || requeued.SpecPath != created.SpecPath || requeued.PlanPath != created.PlanPath {
+		t.Fatalf("Requeue() changed ticket fields: %#v", requeued)
+	}
+	persisted, err := store.Get(context.Background(), claimed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(persisted, requeued) {
+		t.Fatalf("persisted = %#v, returned = %#v", persisted, requeued)
+	}
+}
+
+func TestRequeueRejectsMissingAndNonInProgressTickets(t *testing.T) {
+	store, root := newTestStore(t)
+	spec, plan := writeArtifacts(t, root, "requeue-invalid")
+	created, err := store.Add(context.Background(), CreateInput{Title: "Ready", Summary: "Stay ready", SpecPath: spec, PlanPath: plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Requeue(context.Background(), created.ID+1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Requeue(missing) error = %v", err)
+	}
+	if _, err := store.Requeue(context.Background(), created.ID); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("Requeue(ready) error = %v", err)
+	}
+}
+
 func TestConcurrentNextClaimsTicketOnce(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {

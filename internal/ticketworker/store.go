@@ -281,6 +281,54 @@ WHERE id = ?`, ticket.Status, ticket.UpdatedAt.Format(time.RFC3339Nano), optiona
 	return ticket, nil
 }
 
+func (s *Store) Requeue(ctx context.Context, id int64) (Ticket, error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return Ticket{}, fmt.Errorf("acquire requeue connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return Ticket{}, fmt.Errorf("begin requeue: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
+
+	ticket, err := scanTicket(conn.QueryRowContext(ctx, `
+SELECT id, title, summary, spec_path, plan_path, status,
+       created_at, updated_at, started_at, completed_at, cancelled_at
+FROM tickets
+WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Ticket{}, ErrNotFound
+	}
+	if err != nil {
+		return Ticket{}, fmt.Errorf("get requeue ticket: %w", err)
+	}
+	if ticket.Status != StatusInProgress {
+		return Ticket{}, ErrInvalidTransition
+	}
+
+	now := s.now().UTC()
+	ticket.Status = StatusReady
+	ticket.UpdatedAt = now
+	ticket.StartedAt = nil
+	if _, err := conn.ExecContext(ctx, `
+UPDATE tickets
+SET status = 'ready', updated_at = ?, started_at = NULL
+WHERE id = ? AND status = 'in_progress'`, now.Format(time.RFC3339Nano), id); err != nil {
+		return Ticket{}, fmt.Errorf("update requeued ticket: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return Ticket{}, fmt.Errorf("commit ticket requeue: %w", err)
+	}
+	committed = true
+	return ticket, nil
+}
+
 var allowedTransitions = map[Action]map[Status]Status{
 	ActionStart:  {StatusReady: StatusInProgress},
 	ActionDone:   {StatusInProgress: StatusDone},

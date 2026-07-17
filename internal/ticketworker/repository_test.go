@@ -25,6 +25,21 @@ func TestFindRootFromNestedDirectory(t *testing.T) {
 	}
 }
 
+func TestFindRootFromFileInsideRepository(t *testing.T) {
+	root := newRepositoryRoot(t)
+	path := filepath.Join(root, "internal", "feature", "feature.go")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("package feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := FindRoot(path)
+	if err != nil || got != root {
+		t.Fatalf("FindRoot(file) = %q, %v; want %q", got, err, root)
+	}
+}
+
 func TestFindRootAcceptsWorktreeGitFile(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: /tmp/example\n"), 0o644); err != nil {
