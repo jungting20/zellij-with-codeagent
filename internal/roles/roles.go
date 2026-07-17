@@ -22,6 +22,7 @@ const (
 	RoleTabNetwork        = "tab-network"
 	RoleTabWatcher        = "tab-watcher"
 	RoleCodingAgent       = "coding-agent"
+	RoleTicketManager     = "ticket-manager"
 	RoleDebateCoordinator = "debate-coordinator"
 	RoleDebateProposer    = "debate-proposer"
 	RoleDebateCritic      = "debate-critic"
@@ -111,6 +112,20 @@ var specs = []RoleSpec{
 		Description: "Runs Codex coding agent in the repository containing the target path.",
 		Arguments: []ArgumentSpec{
 			{Name: "path", Required: true, Description: "File or directory path inside the repository where Codex should run."},
+		},
+	},
+	{
+		Name:        RoleTicketManager,
+		Usage:       "ticket-manager [options] <path>",
+		Description: "Runs a bounded pool of coding agents from the project ticket queue.",
+		Arguments: []ArgumentSpec{
+			{Name: "path", Required: true, Description: "File or directory path inside the initialized ticket project."},
+			{Name: "--task", Required: true, Description: "Logical runtime task ID shared by the manager and coding panes."},
+			{Name: "--anchor-pane", Required: true, Description: "Logical manager pane ID used as the same-tab anchor."},
+			{Name: "--socket", Required: false, Description: "agentd Unix socket path."},
+			{Name: "--zellij-session", Required: false, Description: "Target physical Zellij session name."},
+			{Name: "--role-bin", Required: false, Description: "Executable used to launch coding-agent roles."},
+			{Name: "--startup-timeout", Required: false, Description: "Anchor and coding-agent readiness timeout."},
 		},
 	},
 	{

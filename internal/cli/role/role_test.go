@@ -1,9 +1,11 @@
 package rolecli
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -102,6 +104,30 @@ func TestRunDispatchesTabNetworkValidation(t *testing.T) {
 func TestRunDispatchesTabWatcherValidation(t *testing.T) {
 	if code := Run([]string{"tab-watcher", "--port", "0"}); code == 0 {
 		t.Fatalf("Run(tab-watcher --port 0) = %d, want non-zero", code)
+	}
+}
+
+func TestRunDispatchesTicketManagerValidation(t *testing.T) {
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = oldStderr
+		_ = r.Close()
+	})
+	code := Run([]string{"ticket-manager"})
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code == 0 || !strings.Contains(string(output), "ticket-manager [options] <path>") || strings.Contains(string(output), "unknown role") {
+		t.Fatalf("code=%d stderr=%q", code, output)
 	}
 }
 

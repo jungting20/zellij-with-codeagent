@@ -19,6 +19,7 @@ import (
 	"zellij-with-codeagent/cmd/agent-role/network"
 	"zellij-with-codeagent/cmd/agent-role/tabnetwork"
 	"zellij-with-codeagent/cmd/agent-role/tabwatcher"
+	"zellij-with-codeagent/cmd/agent-role/ticketmanager"
 	"zellij-with-codeagent/internal/roles"
 )
 
@@ -60,6 +61,8 @@ func Run(args []string) int {
 		return tabwatcher.Run(args[1:])
 	case roles.RoleCodingAgent:
 		return codingagent.Run(args[1:])
+	case roles.RoleTicketManager:
+		return ticketmanager.Run(args[1:])
 	case roles.RoleDebateCoordinator:
 		return debatecoordinator.Run(args[1:])
 	case roles.RoleDebateProposer:

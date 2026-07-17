@@ -143,3 +143,26 @@ func TestLookupDebateProposerCriticJudge(t *testing.T) {
 		})
 	}
 }
+
+func TestLookupTicketManager(t *testing.T) {
+	spec, ok := Lookup(RoleTicketManager)
+	if !ok {
+		t.Fatal("Lookup(RoleTicketManager) ok = false")
+	}
+	if spec.Name != "ticket-manager" || spec.Usage != "ticket-manager [options] <path>" || spec.Description == "" {
+		t.Fatalf("ticket manager spec = %#v", spec)
+	}
+	want := map[string]bool{
+		"path": true, "--task": true, "--anchor-pane": true,
+		"--socket": false, "--zellij-session": false, "--role-bin": false, "--startup-timeout": false,
+	}
+	if len(spec.Arguments) != len(want) {
+		t.Fatalf("arguments = %#v", spec.Arguments)
+	}
+	for _, arg := range spec.Arguments {
+		required, ok := want[arg.Name]
+		if !ok || arg.Required != required {
+			t.Fatalf("argument = %#v, want required=%t present=%t", arg, required, ok)
+		}
+	}
+}
