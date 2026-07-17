@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"zellij-with-codeagent/internal/ticketworker"
+	"zellij-with-codeagent/internal/transport"
 )
 
 type harness struct {
@@ -84,6 +85,180 @@ func decodeTicket(t *testing.T, data []byte) ticketworker.Ticket {
 		t.Fatalf("decode ticket JSON %q: %v", data, err)
 	}
 	return got
+}
+
+type fakeAgentClient struct {
+	socketPath string
+	timeout    time.Duration
+	requestID  string
+	payload    transport.ExecutionPlanPayload
+	err        error
+}
+
+func (c *fakeAgentClient) SubmitExecutionPlan(_ context.Context, requestID string, payload transport.ExecutionPlanPayload) (transport.ExecutionPlanResponse, error) {
+	c.requestID = requestID
+	c.payload = payload
+	if c.err != nil {
+		return transport.ExecutionPlanResponse{}, c.err
+	}
+	pane := payload.Tabs[0].Panes[0]
+	return transport.ExecutionPlanResponse{
+		RequestID: requestID,
+		Session:   payload.Session,
+		Layout:    payload.Layout,
+		Tabs: []transport.ExecutionPlanTabResponse{
+			{
+				Name: payload.Tabs[0].Name,
+				Panes: []transport.Pane{
+					{ID: pane.ID, Role: pane.Role, Status: "starting", ZellijPaneID: "terminal_1"},
+				},
+			},
+		},
+	}, nil
+}
+
+func configureStartClient(h *harness, client *fakeAgentClient) {
+	h.deps.Executable = []string{"/opt/zellij-agent"}
+	h.deps.NewClient = func(socketPath string, timeout time.Duration) AgentClient {
+		client.socketPath = socketPath
+		client.timeout = timeout
+		return client
+	}
+}
+
+func TestStartSubmitsTicketManagerPlan(t *testing.T) {
+	h := newHarness(t)
+	t.Setenv("ZELLIJ_SESSION_NAME", "physical-a")
+	client := &fakeAgentClient{}
+	configureStartClient(h, client)
+
+	if got := h.run(t, "start", "--socket", "/tmp/tickets.sock", "--timeout", "2s"); got != ExitOK {
+		t.Fatalf("start exit = %d, stderr = %s", got, h.stderr.String())
+	}
+	if client.socketPath != "/tmp/tickets.sock" || client.timeout != 2*time.Second {
+		t.Fatalf("client options = %q/%s", client.socketPath, client.timeout)
+	}
+	if client.requestID != ticketworker.StartRequestID(client.payload.Session) || client.payload.ZellijSession != "physical-a" {
+		t.Fatalf("submission request=%q payload=%#v", client.requestID, client.payload)
+	}
+	pane := client.payload.Tabs[0].Panes[0]
+	if pane.Role != "ticket-manager" || pane.CWD != h.root || !strings.HasPrefix(pane.ID, "ticket-manager-") {
+		t.Fatalf("manager pane = %#v", pane)
+	}
+	if !strings.Contains(h.stdout.String(), "role=ticket-manager status=starting") {
+		t.Fatalf("stdout = %q", h.stdout.String())
+	}
+}
+
+func TestStartExplicitZellijSessionOverridesEnvironment(t *testing.T) {
+	h := newHarness(t)
+	t.Setenv("ZELLIJ_SESSION_NAME", "environment-session")
+	client := &fakeAgentClient{}
+	configureStartClient(h, client)
+
+	if got := h.run(t, "start", "--zellij-session", "explicit-session"); got != ExitOK {
+		t.Fatalf("start exit = %d, stderr = %s", got, h.stderr.String())
+	}
+	if client.payload.ZellijSession != "explicit-session" {
+		t.Fatalf("ZellijSession = %q", client.payload.ZellijSession)
+	}
+}
+
+func TestStartRejectsFormerTicketID(t *testing.T) {
+	h := newHarness(t)
+	if got := h.run(t, "start", "1"); got != ExitUsage {
+		t.Fatalf("start exit = %d, stderr = %s", got, h.stderr.String())
+	}
+	if !strings.Contains(h.stderr.String(), "start does not accept positional arguments") {
+		t.Fatalf("stderr = %q", h.stderr.String())
+	}
+}
+
+func TestStartRequiresPositiveTimeout(t *testing.T) {
+	h := newHarness(t)
+	if got := h.run(t, "start", "--timeout", "0s"); got != ExitUsage {
+		t.Fatalf("start exit = %d, stderr = %s", got, h.stderr.String())
+	}
+	if !strings.Contains(h.stderr.String(), "start --timeout must be positive") {
+		t.Fatalf("stderr = %q", h.stderr.String())
+	}
+}
+
+func TestStartRequiresZellijSession(t *testing.T) {
+	h := newHarness(t)
+	t.Setenv("ZELLIJ_SESSION_NAME", "")
+	client := &fakeAgentClient{}
+	configureStartClient(h, client)
+
+	if got := h.run(t, "start"); got == ExitOK {
+		t.Fatal("start succeeded without a Zellij session")
+	}
+	if client.requestID != "" || !strings.Contains(h.stderr.String(), "zellij session is required") {
+		t.Fatalf("request=%q stderr=%q", client.requestID, h.stderr.String())
+	}
+}
+
+func TestStartRejectsInvalidConfigWithoutSubmission(t *testing.T) {
+	h := newHarness(t)
+	t.Setenv("ZELLIJ_SESSION_NAME", "physical-a")
+	if err := os.WriteFile(ticketworker.ConfigPath(h.root), []byte("version: 1\nmax_workers: 0\npoll_interval: 1s\nprompt_template: x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeAgentClient{}
+	configureStartClient(h, client)
+
+	if got := h.run(t, "start"); got == ExitOK {
+		t.Fatal("start succeeded with invalid config")
+	}
+	if client.requestID != "" || !strings.Contains(h.stderr.String(), "load ticket-worker config") {
+		t.Fatalf("request=%q stderr=%q", client.requestID, h.stderr.String())
+	}
+}
+
+func TestStartRejectsMissingDatabaseWithoutSubmission(t *testing.T) {
+	h := newHarness(t)
+	t.Setenv("ZELLIJ_SESSION_NAME", "physical-a")
+	if err := os.Remove(ticketworker.DatabasePath(h.root)); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeAgentClient{}
+	configureStartClient(h, client)
+
+	if got := h.run(t, "start"); got != ExitValidation {
+		t.Fatalf("start exit = %d, stderr = %s", got, h.stderr.String())
+	}
+	if client.requestID != "" {
+		t.Fatalf("unexpected request = %q", client.requestID)
+	}
+}
+
+func TestStartReportsClientFailure(t *testing.T) {
+	h := newHarness(t)
+	t.Setenv("ZELLIJ_SESSION_NAME", "physical-a")
+	client := &fakeAgentClient{err: errors.New("daemon unavailable")}
+	configureStartClient(h, client)
+
+	if got := h.run(t, "start"); got == ExitOK {
+		t.Fatal("start succeeded after client failure")
+	}
+	if !strings.Contains(h.stderr.String(), "ticket-worker submit failed") || !strings.Contains(h.stderr.String(), "daemon unavailable") {
+		t.Fatalf("stderr = %q", h.stderr.String())
+	}
+}
+
+func TestStartReportsWriterFailure(t *testing.T) {
+	h := newHarness(t)
+	t.Setenv("ZELLIJ_SESSION_NAME", "physical-a")
+	client := &fakeAgentClient{}
+	configureStartClient(h, client)
+	var stderr bytes.Buffer
+
+	if got := Run(context.Background(), []string{"start"}, failingWriter{}, &stderr, h.deps); got == ExitOK {
+		t.Fatal("start succeeded after output failure")
+	}
+	if !strings.Contains(stderr.String(), "write output: forced write failure") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
 }
 
 func TestAddJSONRegistersReadyTicketFromNestedDirectory(t *testing.T) {
@@ -218,8 +393,8 @@ func TestListJSONFiltersReadyTickets(t *testing.T) {
 	first := h.addJSON(t, "First", "First ticket", firstSpec, firstPlan)
 	secondSpec, secondPlan := h.artifacts(t, "second")
 	second := h.addJSON(t, "Second", "Second ticket", secondSpec, secondPlan)
-	if got := h.run(t, "start", "2", "--json"); got != ExitOK {
-		t.Fatalf("start exit = %d, stderr = %s", got, h.stderr.String())
+	if got := h.run(t, "next", "--json"); got != ExitOK {
+		t.Fatalf("next exit = %d, stderr = %s", got, h.stderr.String())
 	}
 
 	if got := h.run(t, "list", "--status", "ready", "--json"); got != ExitOK {
@@ -229,7 +404,7 @@ func TestListJSONFiltersReadyTickets(t *testing.T) {
 	if err := json.Unmarshal(h.stdout.Bytes(), &tickets); err != nil {
 		t.Fatalf("decode list JSON %q: %v", h.stdout.Bytes(), err)
 	}
-	if len(tickets) != 1 || tickets[0].ID != first.ID || tickets[0].ID == second.ID {
+	if len(tickets) != 1 || tickets[0].ID != second.ID || tickets[0].ID == first.ID {
 		t.Fatalf("ready tickets = %#v", tickets)
 	}
 }
@@ -251,11 +426,11 @@ func TestListJSONRejectsInvalidStatusAsUsageError(t *testing.T) {
 func TestLifecycleCommandsApplyTransitions(t *testing.T) {
 	tests := []struct {
 		name    string
+		claim   bool
 		actions []string
 		status  ticketworker.Status
 	}{
-		{name: "start", actions: []string{"start"}, status: ticketworker.StatusInProgress},
-		{name: "start then done", actions: []string{"start", "done"}, status: ticketworker.StatusDone},
+		{name: "next then done", claim: true, actions: []string{"done"}, status: ticketworker.StatusDone},
 		{name: "cancel", actions: []string{"cancel"}, status: ticketworker.StatusCancelled},
 		{name: "cancel then reopen", actions: []string{"cancel", "reopen"}, status: ticketworker.StatusReady},
 	}
@@ -265,6 +440,12 @@ func TestLifecycleCommandsApplyTransitions(t *testing.T) {
 			h := newHarness(t)
 			spec, plan := h.artifacts(t, "flow")
 			created := h.addJSON(t, "Flow", "Lifecycle ticket", spec, plan)
+			if tt.claim {
+				if got := h.run(t, "next", "--json"); got != ExitOK {
+					t.Fatalf("next exit = %d, stderr = %s", got, h.stderr.String())
+				}
+				created = decodeTicket(t, h.stdout.Bytes())
+			}
 			for _, action := range tt.actions {
 				if got := h.run(t, action, "1", "--json"); got != ExitOK {
 					t.Fatalf("%s exit = %d, stderr = %s", action, got, h.stderr.String())
@@ -422,6 +603,9 @@ func TestRunHelpListsQueueCommands(t *testing.T) {
 		if !strings.Contains(stdout.String(), command) {
 			t.Fatalf("help = %q, missing %q", stdout.String(), command)
 		}
+	}
+	if !strings.Contains(stdout.String(), "start   Start the ticket manager pane") {
+		t.Fatalf("help = %q, missing manager start description", stdout.String())
 	}
 }
 

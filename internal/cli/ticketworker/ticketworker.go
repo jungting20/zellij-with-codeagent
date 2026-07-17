@@ -1,6 +1,7 @@
 package ticketworkercli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,12 +12,23 @@ import (
 	"strings"
 	"time"
 
+	"zellij-with-codeagent/internal/cli"
+	"zellij-with-codeagent/internal/planner"
 	"zellij-with-codeagent/internal/ticketworker"
+	"zellij-with-codeagent/internal/transport"
 )
+
+type AgentClient interface {
+	SubmitExecutionPlan(context.Context, string, transport.ExecutionPlanPayload) (transport.ExecutionPlanResponse, error)
+}
+
+type ClientFactory func(string, time.Duration) AgentClient
 
 type Dependencies struct {
 	StartDirectory string
 	Now            func() time.Time
+	Executable     []string
+	NewClient      ClientFactory
 }
 
 const (
@@ -42,6 +54,9 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, dependenc
 	}
 	if len(args) == 0 {
 		return reportUsage(stderr, false, "missing command")
+	}
+	if args[0] == "start" {
+		return runStart(ctx, args[1:], stdout, stderr, dependencies)
 	}
 	root, err := ticketworker.FindRoot(dependencies.StartDirectory)
 	if err != nil {
@@ -74,8 +89,6 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, dependenc
 		return runNext(ctx, store, args[1:], stdout, stderr)
 	case "show":
 		return runShow(ctx, store, args[1:], stdout, stderr)
-	case "start":
-		return runTransition(ctx, store, ticketworker.ActionStart, args[1:], stdout, stderr)
 	case "done":
 		return runTransition(ctx, store, ticketworker.ActionDone, args[1:], stdout, stderr)
 	case "cancel":
@@ -100,10 +113,109 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  list    List tickets, optionally filtered by status")
 	fmt.Fprintln(w, "  next    Atomically claim the oldest ready ticket")
 	fmt.Fprintln(w, "  show    Show one ticket by ID")
-	fmt.Fprintln(w, "  start   Move a ready ticket to in_progress")
+	fmt.Fprintln(w, "  start   Start the ticket manager pane")
 	fmt.Fprintln(w, "  done    Move an in_progress ticket to done")
 	fmt.Fprintln(w, "  cancel  Cancel a ready or in_progress ticket")
 	fmt.Fprintln(w, "  reopen  Move a done or cancelled ticket to ready")
+}
+
+func runStart(ctx context.Context, args []string, stdout, stderr io.Writer, dependencies Dependencies) int {
+	flags := newFlagSet("start")
+	socketPath := flags.String("socket", cli.DefaultSocketPath, "agentd Unix socket path")
+	timeout := flags.Duration("timeout", 15*time.Second, "request timeout")
+	zellijSessionFlag := flags.String("zellij-session", "", "physical Zellij session")
+	if err := flags.Parse(args); err != nil {
+		return reportUsage(stderr, false, err.Error())
+	}
+	if flags.NArg() != 0 {
+		return reportUsage(stderr, false, "start does not accept positional arguments")
+	}
+	if *timeout <= 0 {
+		return reportUsage(stderr, false, "start --timeout must be positive")
+	}
+	zellijSession, err := cli.ResolveZellijSession(*zellijSessionFlag)
+	if err != nil {
+		return reportError(stderr, false, err)
+	}
+	root, err := ticketworker.FindRoot(dependencies.StartDirectory)
+	if err != nil {
+		return reportError(stderr, false, err)
+	}
+	store, err := ticketworker.OpenExisting(ctx, root, dependencies.Now)
+	if err != nil {
+		return reportError(stderr, false, err)
+	}
+	if err := store.Close(); err != nil {
+		return reportError(stderr, false, fmt.Errorf("close ticket database: %w", err))
+	}
+	if _, err := ticketworker.LoadConfig(root); err != nil {
+		return reportError(stderr, false, fmt.Errorf("load ticket-worker config: %w", err))
+	}
+	payload, err := ticketworker.BuildStartPlan(ticketworker.StartPlanRequest{
+		Root:          root,
+		ZellijSession: zellijSession,
+		SocketPath:    *socketPath,
+		Executable:    dependencies.Executable,
+	})
+	if err != nil {
+		return reportError(stderr, false, err)
+	}
+	requestID := ticketworker.StartRequestID(payload.Session)
+	if err := validateStartEnvelope(requestID, payload); err != nil {
+		return reportError(stderr, false, err)
+	}
+	if dependencies.NewClient == nil {
+		return reportError(stderr, false, errors.New("ticket-worker start client is not configured"))
+	}
+	submitCtx, cancel := context.WithTimeout(ctx, *timeout)
+	defer cancel()
+	response, err := dependencies.NewClient(*socketPath, *timeout).SubmitExecutionPlan(submitCtx, requestID, payload)
+	if err != nil {
+		return reportError(stderr, false, fmt.Errorf("ticket-worker submit failed via socket %s: %w", *socketPath, err))
+	}
+	return reportExecutionPlan(stdout, stderr, response)
+}
+
+func validateStartEnvelope(requestID string, payload transport.ExecutionPlanPayload) error {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode ticket-worker start plan: %w", err)
+	}
+	envelope, err := json.Marshal(transport.RequestEnvelope{
+		Type:      transport.RequestTypeExecutionPlan,
+		RequestID: requestID,
+		Payload:   raw,
+	})
+	if err != nil {
+		return fmt.Errorf("encode ticket-worker start envelope: %w", err)
+	}
+	if _, err := planner.ParseExecutionPlanEnvelope(envelope); err != nil {
+		return fmt.Errorf("validate ticket-worker start plan: %w", err)
+	}
+	return nil
+}
+
+func reportExecutionPlan(stdout, stderr io.Writer, response transport.ExecutionPlanResponse) int {
+	var output bytes.Buffer
+	totalPanes := 0
+	for _, tab := range response.Tabs {
+		totalPanes += len(tab.Panes)
+	}
+	fmt.Fprintf(&output, "request=%s session=%s layout=%s tabs=%d panes=%d\n", response.RequestID, response.Session, response.Layout, len(response.Tabs), totalPanes)
+	for _, tab := range response.Tabs {
+		fmt.Fprintf(&output, "tab=%s panes=%d\n", tab.Name, len(tab.Panes))
+		for _, pane := range tab.Panes {
+			fmt.Fprintf(&output, "- %s role=%s status=%s", pane.ID, pane.Role, pane.Status)
+			if pane.ZellijPaneID != "" {
+				fmt.Fprintf(&output, " zellij_pane_id=%s", pane.ZellijPaneID)
+			}
+			fmt.Fprintln(&output)
+		}
+	}
+	if _, err := stdout.Write(output.Bytes()); err != nil {
+		return reportError(stderr, false, fmt.Errorf("write output: %w", err))
+	}
+	return ExitOK
 }
 
 func runAdd(ctx context.Context, store *ticketworker.Store, args []string, stdout, stderr io.Writer) int {
