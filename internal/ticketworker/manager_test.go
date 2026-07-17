@@ -306,6 +306,27 @@ func TestManagerReconnectsAndRecoversMarkerFromSnapshot(t *testing.T) {
 	}
 }
 
+func TestManagerRecoversDroppedMarkerEventFromPeriodicSnapshot(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(12)}}
+	client := newFakeManagerClient()
+	client.streams = []*fakeEventStream{newFakeEventStream()}
+	ticks := make(chan time.Time, 1)
+	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.inputs()) == 1 })
+	client.setSnapshot("ticket-coding-12", "work\nZELLIJ_AGENT_TICKET_DONE 12\n")
+	ticks <- time.Now()
+	waitFor(t, func() bool { return len(store.transitions()) == 1 && len(client.closed()) == 1 })
+	if client.streamCalls() != 1 {
+		t.Fatalf("stream calls = %d, want existing stream retained", client.streamCalls())
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManagerShutdownClosesAndRequeuesActiveTicket(t *testing.T) {
 	store := &fakeManagerStore{ready: []Ticket{managerTicket(13)}}
 	client := newFakeManagerClient()

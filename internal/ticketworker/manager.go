@@ -182,8 +182,8 @@ func (m *Manager) Run(ctx context.Context) error {
 					m.logf("event stream reconnect failed: %v", err)
 					continue
 				}
-				m.recoverSnapshots(ctx)
 			}
+			m.recoverSnapshots(ctx)
 			m.fillEmptySlots(ctx)
 		case event, ok := <-events:
 			if !ok {
