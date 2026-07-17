@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,6 +32,15 @@ type Service struct {
 	newPaneID PaneIDGenerator
 	bus       *eventbus.Bus
 	subs      *SubscriptionManager
+	createMu  sync.Mutex
+	creates   map[PaneID]*createPaneCall
+}
+
+type createPaneCall struct {
+	request  CreatePaneRequest
+	done     chan struct{}
+	response CreatePaneResponse
+	err      error
 }
 
 func NewService(opts Options) *Service {
@@ -69,6 +80,7 @@ func NewService(opts Options) *Service {
 		newPaneID: newPaneID,
 		bus:       bus,
 		subs:      subs,
+		creates:   make(map[PaneID]*createPaneCall),
 	}
 }
 
@@ -85,13 +97,68 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 	if id == "" {
 		return CreatePaneResponse{}, ErrMissingPaneID
 	}
+	req.ID = id
 
-	var err error
-	req, err = s.resolveCreatePaneTarget(req)
+	call, leader, err := s.beginCreatePane(req)
 	if err != nil {
 		return CreatePaneResponse{}, err
 	}
+	if !leader {
+		select {
+		case <-ctx.Done():
+			return CreatePaneResponse{}, ctx.Err()
+		case <-call.done:
+			return call.response, call.err
+		}
+	}
 
+	req, err = s.resolveCreatePaneTarget(req)
+	if err != nil {
+		s.finishCreatePane(call, CreatePaneResponse{}, err)
+		return CreatePaneResponse{}, err
+	}
+	response, createErr := s.createPaneOnce(ctx, req, id)
+	s.finishCreatePane(call, response, createErr)
+	return response, createErr
+}
+
+func (s *Service) beginCreatePane(req CreatePaneRequest) (*createPaneCall, bool, error) {
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	id := PaneID(req.ID)
+	if existing, ok := s.creates[id]; ok {
+		select {
+		case <-existing.done:
+			if existing.err == nil {
+				record, recordErr := s.registry.GetPane(registry.PaneID(id))
+				if errors.Is(recordErr, registry.ErrNotFound) || (recordErr == nil && record.Status != registry.PaneStatusStarting && record.Status != registry.PaneStatusRunning) {
+					delete(s.creates, id)
+					break
+				}
+			}
+		default:
+		}
+	}
+	if existing, ok := s.creates[id]; ok {
+		if !reflect.DeepEqual(existing.request, req) {
+			return nil, false, fmt.Errorf("%w: pane id %q was used by a different create request", registry.ErrAlreadyExists, id)
+		}
+		return existing, false, nil
+	}
+	call := &createPaneCall{request: req, done: make(chan struct{})}
+	s.creates[id] = call
+	return call, true, nil
+}
+
+func (s *Service) finishCreatePane(call *createPaneCall, response CreatePaneResponse, err error) {
+	s.createMu.Lock()
+	call.response = response
+	call.err = err
+	close(call.done)
+	s.createMu.Unlock()
+}
+
+func (s *Service) createPaneOnce(ctx context.Context, req CreatePaneRequest, id PaneID) (CreatePaneResponse, error) {
 	zellijID, tabID, tabName, cleanup, err := s.createBackendPane(ctx, req)
 	if err != nil {
 		return CreatePaneResponse{}, errors.Join(err, cleanup(ctx))

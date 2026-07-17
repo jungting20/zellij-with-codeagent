@@ -40,6 +40,77 @@ func TestCreatePanePropagatesZellijSession(t *testing.T) {
 	}
 }
 
+func TestCreatePaneSharesResultForConcurrentIdenticalLogicalRequest(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	backend := &fakeBackend{createID: "terminal_a"}
+	backend.beforeCreatePane = func(_ context.Context, _ zellij.CreatePaneRequest, call int) error {
+		if call == 1 {
+			close(started)
+			<-release
+		}
+		return nil
+	}
+	service := newTestService(backend)
+	req := CreatePaneRequest{ID: "pane-a", ZellijSession: "session-a", TaskID: "task-a", Role: "coding-agent", Command: []string{"codex"}}
+
+	type result struct {
+		response CreatePaneResponse
+		err      error
+	}
+	results := make(chan result, 2)
+	go func() {
+		response, err := service.CreatePane(context.Background(), req)
+		results <- result{response: response, err: err}
+	}()
+	<-started
+	go func() {
+		response, err := service.CreatePane(context.Background(), req)
+		results <- result{response: response, err: err}
+	}()
+	time.Sleep(20 * time.Millisecond)
+	backend.mu.Lock()
+	createCalls := len(backend.createRequests)
+	backend.mu.Unlock()
+	if createCalls != 1 {
+		t.Fatalf("backend CreatePane calls while first request is pending = %d, want 1", createCalls)
+	}
+	close(release)
+
+	first := <-results
+	second := <-results
+	if first.err != nil || second.err != nil {
+		t.Fatalf("CreatePane errors = %v, %v", first.err, second.err)
+	}
+	if !reflect.DeepEqual(first.response, second.response) {
+		t.Fatalf("CreatePane responses differ: %#v, %#v", first.response, second.response)
+	}
+	backend.mu.Lock()
+	createCalls = len(backend.createRequests)
+	backend.mu.Unlock()
+	if createCalls != 1 {
+		t.Fatalf("backend CreatePane calls = %d, want 1", createCalls)
+	}
+}
+
+func TestCreatePaneRejectsDifferentRequestForReservedLogicalID(t *testing.T) {
+	backend := &fakeBackend{createID: "terminal_a"}
+	service := newTestService(backend)
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-a", ZellijSession: "session-a", TaskID: "task-a"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-a", ZellijSession: "session-a", TaskID: "different-task"})
+	if !errors.Is(err, registry.ErrAlreadyExists) {
+		t.Fatalf("CreatePane() error = %v, want %v", err, registry.ErrAlreadyExists)
+	}
+	backend.mu.Lock()
+	createCalls := len(backend.createRequests)
+	backend.mu.Unlock()
+	if createCalls != 1 {
+		t.Fatalf("backend CreatePane calls = %d, want 1", createCalls)
+	}
+}
+
 func TestCreatePaneRejectsCrossSessionAnchor(t *testing.T) {
 	anchorTabID := registry.ZellijTabID(7)
 	service := newTestService(&fakeBackend{createID: "terminal_worker"})
@@ -553,19 +624,23 @@ func TestCreatePaneBackendFailureLeavesRegistryEmpty(t *testing.T) {
 	}
 }
 
-func TestCreatePaneRegistryFailureCleansUpCreatedZellijPane(t *testing.T) {
+func TestCreatePaneIdenticalRetryReturnsExistingLogicalPane(t *testing.T) {
 	backend := &fakeBackend{createIDs: []zellij.PaneID{"terminal_5", "terminal_7"}}
 	service := newTestService(backend)
-	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"}); err != nil {
+	first, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"})
+	if err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
 	}
 
-	_, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"})
-	if !errors.Is(err, registry.ErrAlreadyExists) {
-		t.Fatalf("CreatePane() error = %v, want %v", err, registry.ErrAlreadyExists)
+	second, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"})
+	if err != nil {
+		t.Fatalf("CreatePane() retry error = %v", err)
 	}
-	if len(backend.closeRequests) != 1 || backend.closeRequests[0].Session != "test-session" || backend.closeRequests[0].PaneID != "terminal_7" {
-		t.Fatalf("backend ClosePane requests = %#v, want cleanup of terminal_7", backend.closeRequests)
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("CreatePane() retry = %#v, want %#v", second, first)
+	}
+	if len(backend.createRequests) != 1 || len(backend.closeRequests) != 0 {
+		t.Fatalf("backend creates=%d closes=%d, want 1/0", len(backend.createRequests), len(backend.closeRequests))
 	}
 }
 

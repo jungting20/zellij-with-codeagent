@@ -60,6 +60,12 @@ does not invoke Zellij directly. Pane creation, input, snapshots, event streams,
 inspection, and close all use the local transport client and therefore remain
 behind `RuntimeService`.
 
+`RuntimeService.CreatePane` shares the result of concurrent or repeated
+identical requests for the same active logical pane ID. A different request for
+an already reserved ID is rejected before another physical pane is created.
+This idempotency boundary lets the manager safely retry after losing a transport
+response without spawning an unregistered duplicate pane.
+
 ## Manager Startup
 
 Startup proceeds in this order:
