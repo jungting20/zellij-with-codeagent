@@ -164,12 +164,33 @@ project. Initialize it from the project root or any nested directory:
 ./bin/zellij-agent ticket-worker init
 ```
 
-Initialization creates
-`.zellij-agent/ticket-worker/tickets.db` at the Git root and adds
+Initialization creates `.zellij-agent/ticket-worker/tickets.db` and
+`.zellij-agent/worker/config.yaml` at the Git root, then adds
 `.zellij-agent/ticket-worker/` to the root `.gitignore`. It is idempotent:
-running it again preserves existing tickets and does not duplicate the ignore
-entry. Other ticket commands never create a database implicitly and report an
-initialization error until `init` succeeds.
+running it again preserves existing tickets, does not duplicate the ignore
+entry, and never overwrites an existing worker config.
+
+The generated worker config contains the future coding-agent capacity, polling
+cadence, and per-ticket prompt template:
+
+```yaml
+version: 1
+max_workers: 3
+poll_interval: 30s
+prompt_template: |
+  티켓 #{{ .ID }}을 구현해줘.
+
+  제목: {{ .Title }}
+  요약: {{ .Summary }}
+  설계: {{ .SpecPath }}
+  구현 계획: {{ .PlanPath }}
+```
+
+The prompt uses Go `text/template` syntax and may reference `ID`, `Title`,
+`Summary`, `SpecPath`, and `PlanPath`. Edit the file to customize the prompt.
+To regenerate the defaults, delete only `.zellij-agent/worker/config.yaml` and
+run `ticket-worker init` again. Other ticket commands never create a database
+implicitly and report an initialization error until `init` succeeds.
 
 Register a ticket from an approved Superpowers design and implementation plan:
 
