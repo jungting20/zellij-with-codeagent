@@ -207,7 +207,7 @@ func (m *Manager) waitForAnchor(ctx context.Context) error {
 	defer ticker.Stop()
 	for {
 		response, err := m.client.InspectRuntime(readyCtx)
-		if err == nil && m.hasPane(response, m.anchorPaneID) {
+		if err == nil && m.hasReadyAnchor(response, m.anchorPaneID) {
 			return nil
 		}
 		select {
@@ -218,7 +218,7 @@ func (m *Manager) waitForAnchor(ctx context.Context) error {
 	}
 }
 
-func (m *Manager) hasPane(response transport.InspectRuntimeResponse, paneID string) bool {
+func (m *Manager) hasReadyAnchor(response transport.InspectRuntimeResponse, paneID string) bool {
 	for _, pane := range response.Panes {
 		if pane.ID == paneID && pane.TaskID == m.taskID && pane.SessionID == m.zellijSession && (pane.Status == "starting" || pane.Status == "running") {
 			return true
@@ -434,11 +434,26 @@ func (m *Manager) closeOrAbsent(ctx context.Context, paneID string) (bool, error
 		if inspectErr != nil {
 			return false, errors.Join(err, inspectErr)
 		}
-		if !m.hasPane(response, paneID) {
+		if !m.paneConsumesCapacity(response, paneID) {
 			return true, nil
 		}
 		return false, err
 	}
+}
+
+func (m *Manager) paneConsumesCapacity(response transport.InspectRuntimeResponse, paneID string) bool {
+	for _, pane := range response.Panes {
+		if pane.ID != paneID || pane.TaskID != m.taskID || pane.SessionID != m.zellijSession {
+			continue
+		}
+		switch pane.Status {
+		case "closed", "exited", "lost":
+			return false
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) recoverSnapshots(ctx context.Context) {

@@ -228,6 +228,29 @@ func TestManagerCloseFailureRetainsCapacityUntilPaneAbsent(t *testing.T) {
 	}
 }
 
+func TestManagerCloseFailureWithRuntimeErrorStatusRetainsCapacity(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(23), managerTicket(24)}}
+	client := newFakeManagerClient()
+	client.closeErrors = []error{errors.New("backend close failed")}
+	client.setPaneStatus("ticket-coding-23", "error")
+	stream := newFakeEventStream()
+	client.streams = []*fakeEventStream{stream}
+	ticks := make(chan time.Time, 1)
+	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.inputs()) == 1 })
+	stream.events <- transport.Event{Type: "raw_output", PaneID: "ticket-coding-23", Message: "ZELLIJ_AGENT_TICKET_DONE 23"}
+	waitFor(t, func() bool { return len(client.closed()) == 1 })
+	if len(client.created()) != 1 {
+		t.Fatalf("error-status pane released capacity: creates=%d", len(client.created()))
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManagerStreamLossPausesClaimsUntilReconnect(t *testing.T) {
 	store := &fakeManagerStore{ready: []Ticket{managerTicket(31), managerTicket(32)}}
 	client := newFakeManagerClient()
@@ -442,10 +465,11 @@ type fakeManagerClient struct {
 	sequence        []string
 	beforeClose     func()
 	absentPanes     map[string]bool
+	paneStatuses    map[string]string
 }
 
 func newFakeManagerClient() *fakeManagerClient {
-	return &fakeManagerClient{anchorReady: true, anchorTaskID: "tickets", anchorSessionID: "physical-a", snapshots: map[string]string{}, absentPanes: map[string]bool{}}
+	return &fakeManagerClient{anchorReady: true, anchorTaskID: "tickets", anchorSessionID: "physical-a", snapshots: map[string]string{}, absentPanes: map[string]bool{}, paneStatuses: map[string]string{}}
 }
 
 func (f *fakeManagerClient) CreatePane(_ context.Context, req transport.CreatePaneRequest) (transport.CreatePaneResponse, error) {
@@ -514,7 +538,11 @@ func (f *fakeManagerClient) InspectRuntime(context.Context) (transport.InspectRu
 		if f.absentPanes[req.ID] {
 			continue
 		}
-		panes = append(panes, transport.Pane{ID: req.ID, TaskID: req.TaskID, SessionID: req.ZellijSession, Status: "running"})
+		status := f.paneStatuses[req.ID]
+		if status == "" {
+			status = "running"
+		}
+		panes = append(panes, transport.Pane{ID: req.ID, TaskID: req.TaskID, SessionID: req.ZellijSession, Status: status})
 	}
 	return transport.InspectRuntimeResponse{Panes: panes}, nil
 }
@@ -545,6 +573,11 @@ func (f *fakeManagerClient) setPaneAbsent(id string, absent bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.absentPanes[id] = absent
+}
+func (f *fakeManagerClient) setPaneStatus(id, status string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paneStatuses[id] = status
 }
 func (f *fakeManagerClient) addStream(stream *fakeEventStream) {
 	f.mu.Lock()
