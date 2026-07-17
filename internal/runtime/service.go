@@ -155,13 +155,16 @@ func (s *Service) finishCreatePane(call *createPaneCall, response CreatePaneResp
 	call.response = response
 	call.err = err
 	close(call.done)
+	if err != nil && !errors.Is(err, ErrCleanupPartial) {
+		delete(s.creates, PaneID(call.request.ID))
+	}
 	s.createMu.Unlock()
 }
 
 func (s *Service) createPaneOnce(ctx context.Context, req CreatePaneRequest, id PaneID) (CreatePaneResponse, error) {
 	zellijID, tabID, tabName, cleanup, err := s.createBackendPane(ctx, req)
 	if err != nil {
-		return CreatePaneResponse{}, errors.Join(err, cleanup(ctx))
+		return CreatePaneResponse{}, createPaneCleanupError(err, cleanup(ctx))
 	}
 
 	var regTabID registry.TabID
@@ -185,7 +188,7 @@ func (s *Service) createPaneOnce(ctx context.Context, req CreatePaneRequest, id 
 		CWD:          req.CWD,
 	})
 	if err != nil {
-		return CreatePaneResponse{}, errors.Join(err, cleanup(ctx))
+		return CreatePaneResponse{}, createPaneCleanupError(err, cleanup(ctx))
 	}
 
 	if s.subs != nil {
@@ -193,6 +196,13 @@ func (s *Service) createPaneOnce(ctx context.Context, req CreatePaneRequest, id 
 	}
 
 	return CreatePaneResponse{Pane: paneFromRecord(record), record: record}, nil
+}
+
+func createPaneCleanupError(cause, cleanupErr error) error {
+	if cleanupErr == nil {
+		return cause
+	}
+	return errors.Join(cause, fmt.Errorf("%w: %v", ErrCleanupPartial, cleanupErr))
 }
 
 func (s *Service) resolveCreatePaneTarget(req CreatePaneRequest) (CreatePaneRequest, error) {

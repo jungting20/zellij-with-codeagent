@@ -111,6 +111,57 @@ func TestCreatePaneRejectsDifferentRequestForReservedLogicalID(t *testing.T) {
 	}
 }
 
+func TestCreatePaneIdenticalRetryRunsAgainAfterSafeTransientFailure(t *testing.T) {
+	backend := &fakeBackend{createID: "terminal_a"}
+	backend.beforeCreatePane = func(_ context.Context, _ zellij.CreatePaneRequest, call int) error {
+		if call == 1 {
+			return errors.New("temporary backend failure")
+		}
+		return nil
+	}
+	service := newTestService(backend)
+	req := CreatePaneRequest{ID: "pane-a", ZellijSession: "session-a", TaskID: "task-a"}
+	if _, err := service.CreatePane(context.Background(), req); err == nil {
+		t.Fatal("first CreatePane() error = nil")
+	}
+	response, err := service.CreatePane(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreatePane() retry error = %v", err)
+	}
+	if response.Pane.ID != "pane-a" {
+		t.Fatalf("CreatePane() retry pane = %#v", response.Pane)
+	}
+	backend.mu.Lock()
+	createCalls := len(backend.createRequests)
+	backend.mu.Unlock()
+	if createCalls != 2 {
+		t.Fatalf("backend CreatePane calls = %d, want 2", createCalls)
+	}
+}
+
+func TestCreatePaneIdenticalRetryDoesNotRepeatUnknownCleanup(t *testing.T) {
+	backend := &fakeBackend{createID: "terminal_new", closeErr: errors.New("cleanup failed")}
+	service := newTestService(backend)
+	if _, err := service.registry.RegisterPane(registry.RegisterPaneRequest{ID: "pane-a", SessionID: "session-a", ZellijPaneID: "terminal_existing"}); err != nil {
+		t.Fatal(err)
+	}
+	req := CreatePaneRequest{ID: "pane-a", ZellijSession: "session-a", TaskID: "task-a"}
+	_, firstErr := service.CreatePane(context.Background(), req)
+	if !errors.Is(firstErr, ErrCleanupPartial) {
+		t.Fatalf("first CreatePane() error = %v, want %v", firstErr, ErrCleanupPartial)
+	}
+	_, secondErr := service.CreatePane(context.Background(), req)
+	if !errors.Is(secondErr, ErrCleanupPartial) {
+		t.Fatalf("CreatePane() retry error = %v, want cached %v", secondErr, ErrCleanupPartial)
+	}
+	backend.mu.Lock()
+	createCalls := len(backend.createRequests)
+	backend.mu.Unlock()
+	if createCalls != 1 {
+		t.Fatalf("backend CreatePane calls = %d, want 1", createCalls)
+	}
+}
+
 func TestCreatePaneRejectsCrossSessionAnchor(t *testing.T) {
 	anchorTabID := registry.ZellijTabID(7)
 	service := newTestService(&fakeBackend{createID: "terminal_worker"})

@@ -64,7 +64,10 @@ behind `RuntimeService`.
 identical requests for the same active logical pane ID. A different request for
 an already reserved ID is rejected before another physical pane is created.
 This idempotency boundary lets the manager safely retry after losing a transport
-response without spawning an unregistered duplicate pane.
+response without spawning an unregistered duplicate pane. Failures with
+confirmed cleanup are evicted so an identical retry may run again; failures
+whose physical cleanup is unknown remain cached as `ErrCleanupPartial` and are
+not repeated.
 
 ## Manager Startup
 
