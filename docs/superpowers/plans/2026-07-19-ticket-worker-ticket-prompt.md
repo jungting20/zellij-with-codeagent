@@ -32,7 +32,7 @@
 - Produces: fresh schema version 2 with `tickets.prompt TEXT NOT NULL`.
 - Consumes: existing `Store.Add`, `Get`, `List`, `Next`, `Transition`, and `Requeue` APIs.
 
-- [ ] **Step 1: Add failing prompt and schema-version tests**
+- [x] **Step 1: Add failing prompt and schema-version tests**
 
 Add prompt values to the common ticket fixtures and assertions, then add focused tests equivalent to:
 
@@ -68,13 +68,13 @@ func TestAddRejectsInvalidPrompt(t *testing.T) {
 
 Create a raw version 1 SQLite fixture, reopen it, assert the error tells the user to remove `tickets.db` and rerun `ticket-worker init`, and verify `PRAGMA user_version` is still 1.
 
-- [ ] **Step 2: Run focused tests and confirm failure**
+- [x] **Step 2: Run focused tests and confirm failure**
 
 Run: `go test ./internal/ticketworker -run 'Test(AddStoresTrimmedMultilinePrompt|AddRejectsInvalidPrompt|OpenRejectsVersion1)' -count=1`
 
 Expected: FAIL because prompt fields, validation, and version 1 rejection do not exist.
 
-- [ ] **Step 3: Implement the v2 model, validation, schema, and scans**
+- [x] **Step 3: Implement the v2 model, validation, schema, and scans**
 
 Add the domain surface:
 
@@ -103,13 +103,13 @@ if prompt == "" || strings.Contains(prompt, completionMarkerPrefix) {
 
 Include `prompt` in every insert, select, scan, and returned `Ticket` value. Update all test fixtures and direct SQL statements to supply a valid prompt.
 
-- [ ] **Step 4: Run persistence tests**
+- [x] **Step 4: Run persistence tests**
 
 Run: `go test ./internal/ticketworker -run 'Test(Open|Add|Get|List|Next|Transition|Requeue|InitializeProject)' -count=1`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit persistence changes**
+- [x] **Step 5: Commit persistence changes**
 
 ```bash
 git add internal/ticketworker/model.go internal/ticketworker/store.go internal/ticketworker/store_test.go internal/ticketworker/repository_test.go
@@ -132,7 +132,7 @@ git commit -m "feat: store prompts on ticket worker tickets"
 - Produces: `RenderTicketPrompt(ticket Ticket) (prompt string, marker string, err error)`.
 - Produces: `Config{Version, MaxWorkers, PollInterval}` without prompt fields.
 
-- [ ] **Step 1: Rewrite tests for stored-prompt rendering and prompt-free config**
+- [x] **Step 1: Rewrite tests for stored-prompt rendering and prompt-free config**
 
 Replace template rendering tests with:
 
@@ -149,13 +149,13 @@ func TestRenderTicketPromptAppendsCompletionInstruction(t *testing.T) {
 
 Assert generated config equals `version: 1\nmax_workers: 3\npoll_interval: 30s\n`, missing optional worker fields receive defaults, and a legacy `prompt_template` key is ignored.
 
-- [ ] **Step 2: Run focused tests and confirm failure**
+- [x] **Step 2: Run focused tests and confirm failure**
 
 Run: `go test ./internal/ticketworker ./cmd/agent-role/ticketmanager -run 'Test(RenderTicketPrompt|EnsureConfig|LoadConfig|Manager)' -count=1`
 
 Expected: FAIL because config and renderer still depend on `PromptTemplate`.
 
-- [ ] **Step 3: Remove config prompt behavior and simplify rendering**
+- [x] **Step 3: Remove config prompt behavior and simplify rendering**
 
 Remove `text/template`, `strings`, and both prompt fields from `config.go`; stop using `KnownFields(true)` so a legacy key is ignored. Keep validation for version, capacity, and poll interval. Replace the renderer signature and body with the stored prompt contract:
 
@@ -173,13 +173,13 @@ func RenderTicketPrompt(ticket Ticket) (string, string, error) {
 
 Update manager calls to `RenderTicketPrompt(ticket)` and give every manager fixture a valid `Prompt`. Remove `PromptTemplate` from manager and role test configs.
 
-- [ ] **Step 4: Run config, prompt, manager, and role tests**
+- [x] **Step 4: Run config, prompt, manager, and role tests**
 
 Run: `go test ./internal/ticketworker ./cmd/agent-role/ticketmanager -count=1`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit runtime changes**
+- [x] **Step 5: Commit runtime changes**
 
 ```bash
 git add internal/ticketworker/config.go internal/ticketworker/config_test.go internal/ticketworker/prompt.go internal/ticketworker/prompt_test.go internal/ticketworker/manager.go internal/ticketworker/manager_test.go cmd/agent-role/ticketmanager/ticketmanager_test.go
@@ -197,7 +197,7 @@ git commit -m "feat: run ticket workers with stored prompts"
 - Consumes: `CreateInput.Prompt` and `ErrInvalidPrompt` from Task 1.
 - Produces: required `ticket-worker add --prompt PROMPT` and prompt-bearing show/JSON output.
 
-- [ ] **Step 1: Update CLI fixtures and add failing contract tests**
+- [x] **Step 1: Update CLI fixtures and add failing contract tests**
 
 Change the test harness helper to accept and pass a prompt:
 
@@ -213,13 +213,13 @@ func (h *harness) addJSON(t *testing.T, title, summary, spec, plan, prompt strin
 
 Add tests that omit `--prompt`, pass whitespace and reserved-marker prompts, round-trip multiline prompt JSON, assert `show` prints `Prompt:`, and assert compact `list` does not contain the prompt body.
 
-- [ ] **Step 2: Run CLI tests and confirm failure**
+- [x] **Step 2: Run CLI tests and confirm failure**
 
 Run: `go test ./internal/cli/ticketworker ./cmd/zellij-agent -run 'Test(Add|Human|EndToEnd|TicketWorker)' -count=1`
 
 Expected: FAIL because the CLI has no `--prompt` flag or output.
 
-- [ ] **Step 3: Implement CLI parsing, validation mapping, and show output**
+- [x] **Step 3: Implement CLI parsing, validation mapping, and show output**
 
 In `runAdd`, declare `prompt := flags.String("prompt", "", "coding-agent prompt")`, require it in the visited set, and pass `Prompt: *prompt` to `CreateInput`. Update the usage message to list all five required flags. Classify `ErrInvalidPrompt` with the other validation errors.
 
@@ -234,13 +234,13 @@ fmt.Fprintf(stdout,
 
 Leave `reportTickets` unchanged. Update all CLI test calls and unified CLI fixtures with a valid prompt.
 
-- [ ] **Step 4: Run all CLI tests**
+- [x] **Step 4: Run all CLI tests**
 
 Run: `go test ./internal/cli/ticketworker ./cmd/zellij-agent -count=1`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit CLI changes**
+- [x] **Step 5: Commit CLI changes**
 
 ```bash
 git add internal/cli/ticketworker/ticketworker.go internal/cli/ticketworker/ticketworker_test.go cmd/zellij-agent/main_test.go
@@ -257,7 +257,7 @@ git commit -m "feat: require prompts when adding tickets"
 - Consumes: final CLI and configuration behavior from Tasks 1-3.
 - Produces: user-facing instructions and a rebuilt installed unified binary.
 
-- [ ] **Step 1: Update README examples and behavior**
+- [x] **Step 1: Update README examples and behavior**
 
 Remove the `prompt_template` YAML block and template-field explanation. Document the remaining config fields and add a multiline prompt to the registration example:
 
@@ -272,7 +272,7 @@ Remove the `prompt_template` YAML block and template-field explanation. Document
 
 State that prompts are stored per ticket and the manager appends its completion marker instruction automatically.
 
-- [ ] **Step 2: Format and run the full test suite**
+- [x] **Step 2: Format and run the full test suite**
 
 Run: `gofmt -w internal/ticketworker internal/cli/ticketworker cmd/agent-role/ticketmanager cmd/zellij-agent`
 
@@ -280,7 +280,7 @@ Run: `git diff --check && go test ./...`
 
 Expected: both commands exit 0 and all packages pass.
 
-- [ ] **Step 3: Build and atomically register the unified binary**
+- [x] **Step 3: Build and atomically register the unified binary**
 
 Run:
 
@@ -293,13 +293,13 @@ mv -f ~/.config/custom-cli/.zellij-agent.new ~/.config/custom-cli/zellij-agent
 
 Expected: every command exits 0; the installed file is executable.
 
-- [ ] **Step 4: Smoke-test a fresh queue**
+- [x] **Step 4: Smoke-test a fresh queue**
 
 In a temporary Git repository, create approved spec and plan Markdown files, run `ticket-worker init`, add a ticket with a multiline `--prompt`, and inspect it using `show` and `--json`. Query SQLite and assert `PRAGMA user_version` is 2 and the prompt text round-trips exactly.
 
 Expected: initialization, add, show, and JSON commands exit 0; the database reports version 2.
 
-- [ ] **Step 5: Mark this plan complete and commit documentation**
+- [x] **Step 5: Mark this plan complete and commit documentation**
 
 Change completed checkboxes in this file from `[ ]` to `[x]`, then run:
 

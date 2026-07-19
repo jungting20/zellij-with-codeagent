@@ -170,24 +170,15 @@ Initialization creates `.zellij-agent/ticket-worker/tickets.db` and
 running it again preserves existing tickets, does not duplicate the ignore
 entry, and never overwrites an existing worker config.
 
-The generated worker config contains the coding-agent capacity, polling
-cadence, and per-ticket prompt template:
+The generated worker config contains the coding-agent capacity and polling
+cadence:
 
 ```yaml
 version: 1
 max_workers: 3
 poll_interval: 30s
-prompt_template: |
-  티켓 #{{ .ID }}을 구현해줘.
-
-  제목: {{ .Title }}
-  요약: {{ .Summary }}
-  설계: {{ .SpecPath }}
-  구현 계획: {{ .PlanPath }}
 ```
 
-The prompt uses Go `text/template` syntax and may reference `ID`, `Title`,
-`Summary`, `SpecPath`, and `PlanPath`. Edit the file to customize the prompt.
 To regenerate the defaults, delete only `.zellij-agent/worker/config.yaml` and
 run `ticket-worker init` again. Other ticket commands never create a database
 implicitly and report an initialization error until `init` succeeds.
@@ -199,12 +190,15 @@ Register a ticket from an approved Superpowers design and implementation plan:
   --title "Add search" \
   --summary "Implement indexed search" \
   --spec docs/superpowers/specs/2026-07-17-search-design.md \
-  --plan docs/superpowers/plans/2026-07-17-search.md
+  --plan docs/superpowers/plans/2026-07-17-search.md \
+  --prompt $'Implement the approved search plan.\nRun the complete test suite.'
 ```
 
 The spec and plan must be existing Markdown files under
 `docs/superpowers/specs/` and `docs/superpowers/plans/`. A plan can be
-registered only once. Queue and lifecycle commands are:
+registered only once. The required prompt is stored with the ticket and used
+as the coding-agent instruction. The manager appends its completion-marker
+instruction automatically. Queue and lifecycle commands are:
 
 ```bash
 ./bin/zellij-agent ticket-worker list [--status ready]
