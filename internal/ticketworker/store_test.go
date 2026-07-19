@@ -2,10 +2,12 @@ package ticketworker
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -50,6 +52,7 @@ func TestOpenCreatesSchemaAndAddRegistersReadyTicket(t *testing.T) {
 		Summary:  "Add indexed story-bible search.",
 		SpecPath: spec,
 		PlanPath: plan,
+		Prompt:   "Implement search.",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -62,6 +65,89 @@ func TestOpenCreatesSchemaAndAddRegistersReadyTicket(t *testing.T) {
 	}
 	if !got.CreatedAt.Equal(fixedNow) || !got.UpdatedAt.Equal(fixedNow) {
 		t.Fatalf("timestamps = %s, %s", got.CreatedAt, got.UpdatedAt)
+	}
+}
+
+func TestAddStoresTrimmedMultilinePrompt(t *testing.T) {
+	store, root := newTestStore(t)
+	spec, plan := writeArtifacts(t, root, "prompt")
+	created, err := store.Add(context.Background(), CreateInput{
+		Title: "Prompt", Summary: "Store it", SpecPath: spec, PlanPath: plan,
+		Prompt: "  first line\nsecond line  ",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Prompt != "first line\nsecond line" {
+		t.Fatalf("Prompt = %q", created.Prompt)
+	}
+	got, err := store.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Prompt != created.Prompt {
+		t.Fatalf("Get().Prompt = %q", got.Prompt)
+	}
+}
+
+func TestAddRejectsInvalidPrompt(t *testing.T) {
+	store, root := newTestStore(t)
+	tests := []struct {
+		name   string
+		prompt string
+	}{
+		{name: "empty", prompt: ""},
+		{name: "whitespace", prompt: "   "},
+		{name: "marker", prompt: "work\nZELLIJ_AGENT_TICKET_DONE 1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec, plan := writeArtifacts(t, root, "invalid-prompt-"+tt.name)
+			_, err := store.Add(context.Background(), CreateInput{
+				Title: "Prompt", Summary: "Validate it", SpecPath: spec,
+				PlanPath: plan, Prompt: tt.prompt,
+			})
+			if !errors.Is(err, ErrInvalidPrompt) {
+				t.Fatalf("Add(prompt=%q) error = %v", tt.prompt, err)
+			}
+		})
+	}
+}
+
+func TestOpenRejectsVersion1WithoutMigration(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	databasePath := filepath.Join(root, "tickets.db")
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("PRAGMA user_version = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Open(context.Background(), root, databasePath, nil); err == nil {
+		t.Fatal("Open() error = nil, want version 1 rejection")
+	} else if !strings.Contains(err.Error(), "remove") || !strings.Contains(err.Error(), "ticket-worker init") {
+		t.Fatalf("Open() error = %q, want reinitialization guidance", err)
+	}
+
+	db, err = sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 1 {
+		t.Fatalf("schema version = %d, want unchanged version 1", version)
 	}
 }
 
@@ -84,6 +170,7 @@ func TestOpenInitializesSchemaIdempotently(t *testing.T) {
 		Summary:  "Open an initialized ticket database.",
 		SpecPath: spec,
 		PlanPath: plan,
+		Prompt:   "Verify idempotency.",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +186,7 @@ func TestOpenRejectsUnsupportedFutureSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec("PRAGMA user_version = 2"); err != nil {
+	if _, err := store.db.Exec("PRAGMA user_version = 3"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -108,7 +195,7 @@ func TestOpenRejectsUnsupportedFutureSchemaVersion(t *testing.T) {
 
 	if _, err := Open(context.Background(), root, databasePath, func() time.Time { return fixedNow }); err == nil {
 		t.Fatal("Open() error = nil, want unsupported future schema rejection")
-	} else if got, want := err.Error(), "unsupported ticket schema version 2"; got != want {
+	} else if got, want := err.Error(), "unsupported ticket schema version 3"; got != want {
 		t.Fatalf("Open() error = %q, want %q", got, want)
 	}
 }
@@ -130,6 +217,7 @@ func TestAddAcceptsRepositoryRelativeArtifactPaths(t *testing.T) {
 		Summary:  "Register repository-relative artifact paths.",
 		SpecPath: relativeSpec,
 		PlanPath: relativePlan,
+		Prompt:   "Use relative artifacts.",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +230,7 @@ func TestAddAcceptsRepositoryRelativeArtifactPaths(t *testing.T) {
 func TestAddRejectsDuplicatePlanWithoutInserting(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "search")
-	input := CreateInput{Title: "Search", Summary: "Search stories.", SpecPath: spec, PlanPath: plan}
+	input := CreateInput{Title: "Search", Summary: "Search stories.", SpecPath: spec, PlanPath: plan, Prompt: "Implement search."}
 	if _, err := store.Add(context.Background(), input); err != nil {
 		t.Fatal(err)
 	}
@@ -165,11 +253,11 @@ func TestAddRejectsInvalidArtifacts(t *testing.T) {
 	}
 
 	cases := []CreateInput{
-		{Title: "", Summary: "summary", SpecPath: spec, PlanPath: plan},
-		{Title: "title", Summary: "", SpecPath: spec, PlanPath: plan},
-		{Title: "title", Summary: "summary", SpecPath: filepath.Join(root, "missing.md"), PlanPath: plan},
-		{Title: "title", Summary: "summary", SpecPath: spec, PlanPath: outside},
-		{Title: "title", Summary: "summary", SpecPath: spec, PlanPath: symlink},
+		{Title: "", Summary: "summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement."},
+		{Title: "title", Summary: "", SpecPath: spec, PlanPath: plan, Prompt: "Implement."},
+		{Title: "title", Summary: "summary", SpecPath: filepath.Join(root, "missing.md"), PlanPath: plan, Prompt: "Implement."},
+		{Title: "title", Summary: "summary", SpecPath: spec, PlanPath: outside, Prompt: "Implement."},
+		{Title: "title", Summary: "summary", SpecPath: spec, PlanPath: symlink, Prompt: "Implement."},
 	}
 	for _, input := range cases {
 		if _, err := store.Add(context.Background(), input); !errors.Is(err, ErrInvalidArtifact) {
@@ -186,6 +274,7 @@ func TestGetReturnsTicketAndRejectsUnknownID(t *testing.T) {
 		Summary:  "Retrieve one ticket.",
 		SpecPath: spec,
 		PlanPath: plan,
+		Prompt:   "Retrieve this ticket.",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -206,12 +295,12 @@ func TestGetReturnsTicketAndRejectsUnknownID(t *testing.T) {
 func TestListFiltersStatusesAndOrdersFIFOTiesByID(t *testing.T) {
 	store, root := newTestStore(t)
 	firstSpec, firstPlan := writeArtifacts(t, root, "first")
-	first, err := store.Add(context.Background(), CreateInput{Title: "First", Summary: "First summary", SpecPath: firstSpec, PlanPath: firstPlan})
+	first, err := store.Add(context.Background(), CreateInput{Title: "First", Summary: "First summary", SpecPath: firstSpec, PlanPath: firstPlan, Prompt: "Implement first."})
 	if err != nil {
 		t.Fatal(err)
 	}
 	secondSpec, secondPlan := writeArtifacts(t, root, "second")
-	second, err := store.Add(context.Background(), CreateInput{Title: "Second", Summary: "Second summary", SpecPath: secondSpec, PlanPath: secondPlan})
+	second, err := store.Add(context.Background(), CreateInput{Title: "Second", Summary: "Second summary", SpecPath: secondSpec, PlanPath: secondPlan, Prompt: "Implement second."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,12 +362,12 @@ func TestNextClaimsOldestReady(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	spec1, plan1 := writeArtifacts(t, root, "first")
-	first, err := store.Add(context.Background(), CreateInput{Title: "First", Summary: "First summary", SpecPath: spec1, PlanPath: plan1})
+	first, err := store.Add(context.Background(), CreateInput{Title: "First", Summary: "First summary", SpecPath: spec1, PlanPath: plan1, Prompt: "Implement first."})
 	if err != nil {
 		t.Fatal(err)
 	}
 	spec2, plan2 := writeArtifacts(t, root, "second")
-	if _, err := store.Add(context.Background(), CreateInput{Title: "Second", Summary: "Second summary", SpecPath: spec2, PlanPath: plan2}); err != nil {
+	if _, err := store.Add(context.Background(), CreateInput{Title: "Second", Summary: "Second summary", SpecPath: spec2, PlanPath: plan2, Prompt: "Implement second."}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -309,7 +398,7 @@ func TestNextClaimsOldestReady(t *testing.T) {
 func TestNextReturnsEmptyQueueAfterReadyTicketsLeaveQueue(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "first")
-	created, err := store.Add(context.Background(), CreateInput{Title: "First", Summary: "First summary", SpecPath: spec, PlanPath: plan})
+	created, err := store.Add(context.Background(), CreateInput{Title: "First", Summary: "First summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement first."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +422,7 @@ func TestRequeueMovesInProgressTicketToReadyAndClearsStartedAt(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	spec, plan := writeArtifacts(t, root, "requeue")
-	created, err := store.Add(context.Background(), CreateInput{Title: "Retry", Summary: "Retry safely", SpecPath: spec, PlanPath: plan})
+	created, err := store.Add(context.Background(), CreateInput{Title: "Retry", Summary: "Retry safely", SpecPath: spec, PlanPath: plan, Prompt: "Retry safely."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +454,7 @@ func TestRequeueMovesInProgressTicketToReadyAndClearsStartedAt(t *testing.T) {
 func TestRequeueRejectsMissingAndNonInProgressTickets(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "requeue-invalid")
-	created, err := store.Add(context.Background(), CreateInput{Title: "Ready", Summary: "Stay ready", SpecPath: spec, PlanPath: plan})
+	created, err := store.Add(context.Background(), CreateInput{Title: "Ready", Summary: "Stay ready", SpecPath: spec, PlanPath: plan, Prompt: "Stay ready."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +483,7 @@ func TestConcurrentNextClaimsTicketOnce(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = second.Close() })
 	spec, plan := writeArtifacts(t, root, "only")
-	created, err := first.Add(context.Background(), CreateInput{Title: "Only", Summary: "Only summary", SpecPath: spec, PlanPath: plan})
+	created, err := first.Add(context.Background(), CreateInput{Title: "Only", Summary: "Only summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement only."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +536,7 @@ func TestLifecycleTransitionsUseAdvancingClockAndResetTimestamps(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	spec, plan := writeArtifacts(t, root, "flow")
-	created, err := store.Add(context.Background(), CreateInput{Title: "Flow", Summary: "Flow summary", SpecPath: spec, PlanPath: plan})
+	created, err := store.Add(context.Background(), CreateInput{Title: "Flow", Summary: "Flow summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement flow."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,7 +605,7 @@ func TestLifecycleAllowsCancellationAndReopening(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store, root := newTestStore(t)
 			spec, plan := writeArtifacts(t, root, "flow")
-			created, err := store.Add(context.Background(), CreateInput{Title: "Flow", Summary: "Flow summary", SpecPath: spec, PlanPath: plan})
+			created, err := store.Add(context.Background(), CreateInput{Title: "Flow", Summary: "Flow summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement flow."})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -565,14 +654,14 @@ func TestConcurrentTransitionsFromIndependentStoresSerialize(t *testing.T) {
 
 	firstSpec, firstPlan := writeArtifacts(t, root, "concurrent-first")
 	first, err := firstStore.Add(context.Background(), CreateInput{
-		Title: "First", Summary: "First concurrent transition", SpecPath: firstSpec, PlanPath: firstPlan,
+		Title: "First", Summary: "First concurrent transition", SpecPath: firstSpec, PlanPath: firstPlan, Prompt: "Implement first.",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	secondSpec, secondPlan := writeArtifacts(t, root, "concurrent-second")
 	second, err := firstStore.Add(context.Background(), CreateInput{
-		Title: "Second", Summary: "Second concurrent transition", SpecPath: secondSpec, PlanPath: secondPlan,
+		Title: "Second", Summary: "Second concurrent transition", SpecPath: secondSpec, PlanPath: secondPlan, Prompt: "Implement second.",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -658,7 +747,7 @@ func TestEveryInvalidTransitionAndActionRollsBack(t *testing.T) {
 			t.Run(string(state.status)+"/"+string(action), func(t *testing.T) {
 				store, root := newTestStore(t)
 				spec, plan := writeArtifacts(t, root, "invalid")
-				created, err := store.Add(context.Background(), CreateInput{Title: "Invalid", Summary: "Invalid transition", SpecPath: spec, PlanPath: plan})
+				created, err := store.Add(context.Background(), CreateInput{Title: "Invalid", Summary: "Invalid transition", SpecPath: spec, PlanPath: plan, Prompt: "Invalid transition."})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -690,7 +779,7 @@ func TestEveryInvalidTransitionAndActionRollsBack(t *testing.T) {
 func TestTransitionRejectsUnknownIDsAndActions(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "flow")
-	created, err := store.Add(context.Background(), CreateInput{Title: "Flow", Summary: "Flow summary", SpecPath: spec, PlanPath: plan})
+	created, err := store.Add(context.Background(), CreateInput{Title: "Flow", Summary: "Flow summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement flow."})
 	if err != nil {
 		t.Fatal(err)
 	}
