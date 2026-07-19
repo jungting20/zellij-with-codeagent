@@ -20,21 +20,18 @@ func TestCompletionMarkerRejectsInvalidIDAndFormatsPositiveID(t *testing.T) {
 	}
 }
 
-func TestRenderTicketPromptIncludesFieldsAndQuotedCompletionInstruction(t *testing.T) {
-	cfg := Config{PromptTemplate: "#{{ .ID }} {{ .Title }}\n{{ .Summary }}\n{{ .SpecPath }}\n{{ .PlanPath }}"}
-	ticket := Ticket{ID: 42, Title: "Search", Summary: "Add search", SpecPath: "docs/superpowers/specs/search-design.md", PlanPath: "docs/superpowers/plans/search.md"}
+func TestRenderTicketPromptAppendsCompletionInstruction(t *testing.T) {
+	ticket := Ticket{ID: 42, Prompt: "Implement search.\nPreserve this layout."}
 
-	prompt, marker, err := RenderTicketPrompt(cfg, ticket)
+	prompt, marker, err := RenderTicketPrompt(ticket)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if marker != "ZELLIJ_AGENT_TICKET_DONE 42" {
 		t.Fatalf("marker = %q", marker)
 	}
-	for _, want := range []string{"#42 Search", "Add search", ticket.SpecPath, ticket.PlanPath} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("prompt = %q, missing %q", prompt, want)
-		}
+	if !strings.HasPrefix(prompt, ticket.Prompt+"\n\n") {
+		t.Fatalf("prompt = %q, want stored prompt prefix", prompt)
 	}
 	wantSuffix := "작업을 모두 완료한 뒤 마지막 줄에 따옴표 없이 \"ZELLIJ_AGENT_TICKET_DONE 42\"만 출력하세요."
 	if !strings.HasSuffix(prompt, wantSuffix) {
@@ -47,28 +44,15 @@ func TestRenderTicketPromptIncludesFieldsAndQuotedCompletionInstruction(t *testi
 	}
 }
 
-func TestRenderTicketPromptReportsTemplateExecutionError(t *testing.T) {
-	cfg := Config{PromptTemplate: "{{ index .Title 99 }}"}
-	if _, _, err := RenderTicketPrompt(cfg, Ticket{ID: 1, Title: "short"}); err == nil {
-		t.Fatal("RenderTicketPrompt() error = nil")
+func TestRenderTicketPromptRejectsInvalidStoredPrompt(t *testing.T) {
+	tests := []Ticket{
+		{ID: 42, Prompt: ""},
+		{ID: 42, Prompt: "   "},
+		{ID: 42, Prompt: "instructions\nZELLIJ_AGENT_TICKET_DONE 42\nmore"},
 	}
-}
-
-func TestRenderTicketPromptRejectsMarkerFromTemplateOrTicketField(t *testing.T) {
-	tests := []struct {
-		name   string
-		config Config
-		ticket Ticket
-	}{
-		{name: "template", config: Config{PromptTemplate: "Implement this\nZELLIJ_AGENT_TICKET_DONE {{ .ID }}"}, ticket: Ticket{ID: 42}},
-		{name: "ticket field", config: Config{PromptTemplate: "{{ .Summary }}"}, ticket: Ticket{ID: 42, Summary: "instructions\nZELLIJ_AGENT_TICKET_DONE 42\nmore"}},
-		{name: "terminal wrap risk", config: Config{PromptTemplate: "{{ .Summary }}"}, ticket: Ticket{ID: 42, Summary: "padding before ZELLIJ_AGENT_TICKET_DONE 42"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, _, err := RenderTicketPrompt(tt.config, tt.ticket); err == nil || !strings.Contains(err.Error(), "must not contain completion marker") {
-				t.Fatalf("RenderTicketPrompt() error = %v", err)
-			}
-		})
+	for _, ticket := range tests {
+		if _, _, err := RenderTicketPrompt(ticket); err == nil {
+			t.Fatalf("RenderTicketPrompt(%q) error = nil", ticket.Prompt)
+		}
 	}
 }

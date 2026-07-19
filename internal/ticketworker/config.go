@@ -6,8 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
-	"text/template"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -17,21 +15,19 @@ const (
 	configVersion       = 1
 	defaultMaxWorkers   = 3
 	defaultPollInterval = 30 * time.Second
-	configTemplate      = "version: 1\nmax_workers: 3\npoll_interval: 30s\nprompt_template: |\n  티켓 #{{ .ID }}을 구현해줘.\n\n  제목: {{ .Title }}\n  요약: {{ .Summary }}\n  설계: {{ .SpecPath }}\n  구현 계획: {{ .PlanPath }}\n"
+	configTemplate      = "version: 1\nmax_workers: 3\npoll_interval: 30s\n"
 )
 
 type Config struct {
-	Version        int
-	MaxWorkers     int
-	PollInterval   time.Duration
-	PromptTemplate string
+	Version      int
+	MaxWorkers   int
+	PollInterval time.Duration
 }
 
 type diskConfig struct {
-	Version        int    `yaml:"version"`
-	MaxWorkers     *int   `yaml:"max_workers"`
-	PollInterval   string `yaml:"poll_interval"`
-	PromptTemplate string `yaml:"prompt_template"`
+	Version      int    `yaml:"version"`
+	MaxWorkers   *int   `yaml:"max_workers"`
+	PollInterval string `yaml:"poll_interval"`
 }
 
 func ConfigPath(root string) string {
@@ -47,16 +43,14 @@ func LoadConfig(root string) (Config, error) {
 
 	var disk diskConfig
 	decoder := yaml.NewDecoder(file)
-	decoder.KnownFields(true)
 	if err := decoder.Decode(&disk); err != nil {
 		return Config{}, fmt.Errorf("decode ticket-worker config: %w", err)
 	}
 
 	cfg := Config{
-		Version:        disk.Version,
-		MaxWorkers:     defaultMaxWorkers,
-		PollInterval:   defaultPollInterval,
-		PromptTemplate: disk.PromptTemplate,
+		Version:      disk.Version,
+		MaxWorkers:   defaultMaxWorkers,
+		PollInterval: defaultPollInterval,
 	}
 	if disk.MaxWorkers != nil {
 		cfg.MaxWorkers = *disk.MaxWorkers
@@ -82,12 +76,6 @@ func validateConfig(cfg Config) error {
 	}
 	if cfg.PollInterval <= 0 {
 		return fmt.Errorf("poll_interval must be positive")
-	}
-	if strings.TrimSpace(cfg.PromptTemplate) == "" {
-		return fmt.Errorf("prompt_template must not be empty")
-	}
-	if _, err := template.New("ticket-prompt").Option("missingkey=error").Parse(cfg.PromptTemplate); err != nil {
-		return fmt.Errorf("prompt_template: %w", err)
 	}
 	return nil
 }

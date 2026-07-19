@@ -316,7 +316,7 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 	slot.state = managerSlotStarting
 	slot.ticket = ticket
 	slot.paneID = "ticket-coding-" + m.managerID + "-" + strconv.FormatInt(ticket.ID, 10)
-	slot.prompt, slot.marker, err = RenderTicketPrompt(m.config, ticket)
+	slot.prompt, slot.marker, err = RenderTicketPrompt(ticket)
 	if err != nil {
 		m.logf("render ticket=%d failed: %v", ticket.ID, err)
 		m.requeueWithoutPane(ctx, slot)

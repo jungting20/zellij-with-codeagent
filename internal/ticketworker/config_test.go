@@ -3,12 +3,11 @@ package ticketworker
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
 
-const expectedConfigTemplate = "version: 1\nmax_workers: 3\npoll_interval: 30s\nprompt_template: |\n  티켓 #{{ .ID }}을 구현해줘.\n\n  제목: {{ .Title }}\n  요약: {{ .Summary }}\n  설계: {{ .SpecPath }}\n  구현 계획: {{ .PlanPath }}\n"
+const expectedConfigTemplate = "version: 1\nmax_workers: 3\npoll_interval: 30s\n"
 
 func TestConfigPathUsesWorkerDirectory(t *testing.T) {
 	root := filepath.Join(string(filepath.Separator), "repo")
@@ -52,11 +51,6 @@ func TestEnsureConfigWritesLoadableDefaults(t *testing.T) {
 	if cfg.Version != 1 || cfg.MaxWorkers != 3 || cfg.PollInterval != 30*time.Second {
 		t.Fatalf("loaded config = %+v", cfg)
 	}
-	for _, field := range []string{".ID", ".Title", ".Summary", ".SpecPath", ".PlanPath"} {
-		if !strings.Contains(cfg.PromptTemplate, field) {
-			t.Fatalf("prompt template = %q, missing %q", cfg.PromptTemplate, field)
-		}
-	}
 }
 
 func TestEnsureConfigPreservesExistingAndRecreatesDeletedConfig(t *testing.T) {
@@ -65,7 +59,7 @@ func TestEnsureConfigPreservesExistingAndRecreatesDeletedConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	custom := "version: 1\nmax_workers: 5\npoll_interval: 1m\nprompt_template: custom prompt\n"
+	custom := "version: 1\nmax_workers: 5\npoll_interval: 1m\n"
 	if err := os.WriteFile(path, []byte(custom), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +103,7 @@ func TestEnsureConfigPreservesExistingAndRecreatesDeletedConfig(t *testing.T) {
 
 func TestLoadConfigAppliesOptionalDefaults(t *testing.T) {
 	root := t.TempDir()
-	writeConfigFile(t, root, "version: 1\nprompt_template: 'Implement {{ .Title }} from {{ .SpecPath }} using {{ .PlanPath }} for ticket {{ .ID }}: {{ .Summary }}'\n")
+	writeConfigFile(t, root, "version: 1\n")
 
 	cfg, err := LoadConfig(root)
 	if err != nil {
@@ -120,19 +114,28 @@ func TestLoadConfigAppliesOptionalDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadConfigIgnoresLegacyPromptTemplate(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFile(t, root, "version: 1\nmax_workers: 2\nprompt_template: legacy template\n")
+
+	cfg, err := LoadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxWorkers != 2 || cfg.PollInterval != 30*time.Second {
+		t.Fatalf("config = %+v", cfg)
+	}
+}
+
 func TestLoadConfigRejectsInvalidValues(t *testing.T) {
 	tests := map[string]string{
-		"missing version":        "prompt_template: valid\n",
-		"unsupported version":    "version: 2\nprompt_template: valid\n",
-		"unknown field":          "version: 1\nprompt_template: valid\nextra: true\n",
-		"zero max workers":       "version: 1\nmax_workers: 0\nprompt_template: valid\n",
-		"negative max workers":   "version: 1\nmax_workers: -1\nprompt_template: valid\n",
-		"bad poll interval":      "version: 1\npoll_interval: soon\nprompt_template: valid\n",
-		"zero poll interval":     "version: 1\npoll_interval: 0s\nprompt_template: valid\n",
-		"negative poll interval": "version: 1\npoll_interval: -1s\nprompt_template: valid\n",
-		"empty prompt":           "version: 1\nprompt_template: ''\n",
-		"whitespace prompt":      "version: 1\nprompt_template: '   '\n",
-		"malformed template":     "version: 1\nprompt_template: '{{'\n",
+		"missing version":        "max_workers: 3\n",
+		"unsupported version":    "version: 2\n",
+		"zero max workers":       "version: 1\nmax_workers: 0\n",
+		"negative max workers":   "version: 1\nmax_workers: -1\n",
+		"bad poll interval":      "version: 1\npoll_interval: soon\n",
+		"zero poll interval":     "version: 1\npoll_interval: 0s\n",
+		"negative poll interval": "version: 1\npoll_interval: -1s\n",
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
