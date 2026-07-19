@@ -224,6 +224,7 @@ func runAdd(ctx context.Context, store *ticketworker.Store, args []string, stdou
 	summary := flags.String("summary", "", "ticket summary")
 	spec := flags.String("spec", "", "approved design path")
 	plan := flags.String("plan", "", "approved implementation plan path")
+	prompt := flags.String("prompt", "", "coding-agent prompt")
 	jsonOutput := flags.Bool("json", false, "write JSON")
 	if err := flags.Parse(args); err != nil {
 		return reportUsage(stderr, hasJSON(args), err.Error())
@@ -231,14 +232,15 @@ func runAdd(ctx context.Context, store *ticketworker.Store, args []string, stdou
 	if len(flags.Args()) != 0 {
 		return reportUsage(stderr, *jsonOutput, "add does not accept positional arguments")
 	}
-	if !visited(flags, "title") || !visited(flags, "summary") || !visited(flags, "spec") || !visited(flags, "plan") {
-		return reportUsage(stderr, *jsonOutput, "add requires --title, --summary, --spec, and --plan")
+	if !visited(flags, "title") || !visited(flags, "summary") || !visited(flags, "spec") || !visited(flags, "plan") || !visited(flags, "prompt") {
+		return reportUsage(stderr, *jsonOutput, "add requires --title, --summary, --spec, --plan, and --prompt")
 	}
 	created, err := store.Add(ctx, ticketworker.CreateInput{
 		Title:    *title,
 		Summary:  *summary,
 		SpecPath: *spec,
 		PlanPath: *plan,
+		Prompt:   *prompt,
 	})
 	if err != nil {
 		return reportError(stderr, *jsonOutput, err)
@@ -361,7 +363,7 @@ func reportTicket(stdout, stderr io.Writer, jsonOutput bool, value ticketworker.
 		}
 		return ExitOK
 	}
-	if _, err := fmt.Fprintf(stdout, "ID: %d\nStatus: %s\nTitle: %s\nSummary: %s\nSpec: %s\nPlan: %s\n", value.ID, value.Status, value.Title, value.Summary, value.SpecPath, value.PlanPath); err != nil {
+	if _, err := fmt.Fprintf(stdout, "ID: %d\nStatus: %s\nTitle: %s\nSummary: %s\nSpec: %s\nPlan: %s\nPrompt:\n%s\n", value.ID, value.Status, value.Title, value.Summary, value.SpecPath, value.PlanPath, value.Prompt); err != nil {
 		return reportError(stderr, false, fmt.Errorf("write output: %w", err))
 	}
 	return ExitOK
@@ -420,6 +422,7 @@ func classifyError(err error) (int, string) {
 	case errors.Is(err, ticketworker.ErrEmptyQueue):
 		return ExitEmptyQueue, "empty_queue"
 	case errors.Is(err, ticketworker.ErrInvalidArtifact),
+		errors.Is(err, ticketworker.ErrInvalidPrompt),
 		errors.Is(err, ticketworker.ErrRepositoryNotFound),
 		errors.Is(err, ticketworker.ErrNotInitialized):
 		return ExitValidation, "validation"
