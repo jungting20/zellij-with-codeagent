@@ -20,6 +20,22 @@ func TestBuildStartPlanCreatesTicketManagerAnchor(t *testing.T) {
 	if got.Layout != "single-tab" || len(got.Tabs) != 1 || len(got.Tabs[0].Panes) != 1 {
 		t.Fatalf("plan shape = %#v", got)
 	}
+	layout := got.Tabs[0].LayoutString
+	for _, want := range []string{
+		`pane name="ticket-manager"`,
+		`swap_tiled_layout name="ticket-worker"`,
+		`tab min_panes=2 split_direction="horizontal"`,
+		`pane size="50%"`,
+		`split_direction="vertical"`,
+		`children`,
+	} {
+		if !strings.Contains(layout, want) {
+			t.Fatalf("ticket-worker layout missing %q:\n%s", want, layout)
+		}
+	}
+	if strings.Count(layout, `size="50%"`) != 2 {
+		t.Fatalf("ticket-worker layout 50%% pane count = %d, want 2", strings.Count(layout, `size="50%"`))
+	}
 	pane := got.Tabs[0].Panes[0]
 	if got.Tabs[0].Name != "ticket-worker" || pane.Role != "ticket-manager" || pane.CWD != root {
 		t.Fatalf("manager pane = %#v", pane)

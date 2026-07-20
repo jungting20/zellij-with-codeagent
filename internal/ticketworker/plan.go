@@ -16,6 +16,19 @@ type StartPlanRequest struct {
 	Executable    []string
 }
 
+const ticketWorkerLayout = `layout {
+    pane name="ticket-manager"
+
+    swap_tiled_layout name="ticket-worker" {
+        tab min_panes=2 split_direction="horizontal" {
+            pane size="50%"
+            pane size="50%" split_direction="vertical" {
+                children
+            }
+        }
+    }
+}`
+
 func BuildStartPlan(req StartPlanRequest) (transport.ExecutionPlanPayload, error) {
 	root := filepath.Clean(strings.TrimSpace(req.Root))
 	if root == "." || !filepath.IsAbs(root) {
@@ -52,7 +65,8 @@ func BuildStartPlan(req StartPlanRequest) (transport.ExecutionPlanPayload, error
 		Layout:        "single-tab",
 		Tabs: []transport.ExecutionPlanTab{
 			{
-				Name: "ticket-worker",
+				Name:         "ticket-worker",
+				LayoutString: ticketWorkerLayout,
 				Panes: []transport.ExecutionPlanPane{
 					{
 						ID:      anchor,
