@@ -167,8 +167,9 @@ type ExecutionPlanPayload struct {
 }
 
 type ExecutionPlanTab struct {
-	Name  string              `json:"name"`
-	Panes []ExecutionPlanPane `json:"panes"`
+	Name         string              `json:"name"`
+	LayoutString string              `json:"layout_string,omitempty"`
+	Panes        []ExecutionPlanPane `json:"panes"`
 }
 
 type ExecutionPlanPane struct {
@@ -461,8 +462,9 @@ func (tab ExecutionPlanTab) ToRuntime() rt.ExecutionPlanTabSpec {
 		panes = append(panes, pane.ToRuntime())
 	}
 	return rt.ExecutionPlanTabSpec{
-		Name:  tab.Name,
-		Panes: panes,
+		Name:         tab.Name,
+		LayoutString: tab.LayoutString,
+		Panes:        panes,
 	}
 }
 

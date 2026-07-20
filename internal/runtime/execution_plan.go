@@ -29,8 +29,9 @@ type ExecutionPlanPaneSpec struct {
 }
 
 type ExecutionPlanTabSpec struct {
-	Name  string
-	Panes []ExecutionPlanPaneSpec
+	Name         string
+	LayoutString string
+	Panes        []ExecutionPlanPaneSpec
 }
 
 type ApplyExecutionPlanRequest struct {

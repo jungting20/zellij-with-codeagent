@@ -90,7 +90,8 @@ func TestExecutionPlanPayloadToRuntimePreservesNestedPayload(t *testing.T) {
 		ZellijSession: "physical-a",
 		Layout:        "triple-horizontal",
 		Tabs: []ExecutionPlanTab{{
-			Name: "frontend",
+			Name:         "frontend",
+			LayoutString: `layout { pane; }`,
 			Panes: []ExecutionPlanPane{{
 				ID:                    "planner",
 				Role:                  "planner",
@@ -111,6 +112,9 @@ func TestExecutionPlanPayloadToRuntimePreservesNestedPayload(t *testing.T) {
 	if len(converted.Tabs) != 1 || converted.Tabs[0].Name != "frontend" || len(converted.Tabs[0].Panes) != 1 {
 		t.Fatalf("ExecutionPlanPayload.ToRuntime() tabs = %#v, want nested tab and pane", converted.Tabs)
 	}
+	if converted.Tabs[0].LayoutString != `layout { pane; }` {
+		t.Fatalf("ExecutionPlanPayload.ToRuntime() LayoutString = %q", converted.Tabs[0].LayoutString)
+	}
 	pane := converted.Tabs[0].Panes[0]
 	if pane.ID != "planner" ||
 		pane.Role != "planner" ||
@@ -123,6 +127,24 @@ func TestExecutionPlanPayloadToRuntimePreservesNestedPayload(t *testing.T) {
 	source.Tabs[0].Panes[0].Command[0] = "mutated"
 	if !reflect.DeepEqual(pane.Command, []string{"npm", "test"}) {
 		t.Fatalf("ExecutionPlanPayload.ToRuntime() command = %#v, want cloned command", pane.Command)
+	}
+}
+
+func TestExecutionPlanTabJSONUsesOptionalLayoutString(t *testing.T) {
+	withLayout, err := json.Marshal(ExecutionPlanTab{Name: "ticket-worker", LayoutString: `layout { pane; }`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(withLayout), `"layout_string":"layout { pane; }"`) {
+		t.Fatalf("marshaled tab = %s, want layout_string", withLayout)
+	}
+
+	withoutLayout, err := json.Marshal(ExecutionPlanTab{Name: "plain"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(withoutLayout), "layout_string") {
+		t.Fatalf("marshaled tab = %s, want layout_string omitted", withoutLayout)
 	}
 }
 
