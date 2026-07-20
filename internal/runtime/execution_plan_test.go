@@ -71,7 +71,8 @@ func TestApplyExecutionPlanCreatesPanesInOneTab(t *testing.T) {
 		Layout:        "triple-horizontal",
 		Tabs: []ExecutionPlanTabSpec{
 			{
-				Name: "feature-auth",
+				Name:         "feature-auth",
+				LayoutString: `layout { pane; }`,
 				Panes: []ExecutionPlanPaneSpec{
 					{ID: "planner", Role: "planner"},
 					{ID: "frontend", Role: "react-dev"},
@@ -103,8 +104,9 @@ func TestApplyExecutionPlanCreatesPanesInOneTab(t *testing.T) {
 	if len(backend.createTabRequests) != 1 {
 		t.Fatalf("CreateTab calls = %d, want 1", len(backend.createTabRequests))
 	}
-	if backend.createTabRequests[0].Name != "feature-auth" {
-		t.Fatalf("CreateTab name = %q, want feature-auth", backend.createTabRequests[0].Name)
+	if backend.createTabRequests[0].Name != "feature-auth" ||
+		backend.createTabRequests[0].LayoutString != `layout { pane; }` {
+		t.Fatalf("CreateTab request = %#v, want name and inline layout", backend.createTabRequests[0])
 	}
 	if len(backend.createRequests) != 1 {
 		t.Fatalf("CreatePane calls = %d, want 1 after new tab", len(backend.createRequests))

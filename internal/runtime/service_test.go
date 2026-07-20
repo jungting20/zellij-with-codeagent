@@ -1000,10 +1000,11 @@ func (b *fakeBackend) CreateTab(_ context.Context, req zellij.CreateTabRequest) 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.createTabRequests = append(b.createTabRequests, zellij.CreateTabRequest{
-		Session: req.Session,
-		Name:    req.Name,
-		CWD:     req.CWD,
-		Command: cloneStrings(req.Command),
+		Session:      req.Session,
+		Name:         req.Name,
+		CWD:          req.CWD,
+		LayoutString: req.LayoutString,
+		Command:      cloneStrings(req.Command),
 	})
 	if b.createTabErr != nil {
 		return 0, b.createTabErr

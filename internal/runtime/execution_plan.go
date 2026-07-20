@@ -93,6 +93,7 @@ func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlan
 			ZellijSession: req.ZellijSession,
 			NewTab:        true,
 			TabName:       tabName,
+			LayoutString:  tabSpec.LayoutString,
 			CWD:           firstSpec.CWD,
 			Command:       executionPlanCommand(firstSpec),
 		})

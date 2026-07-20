@@ -109,6 +109,7 @@ type CreatePaneRequest struct {
 	ZellijSession string
 	NewTab        bool
 	TabName       string
+	LayoutString  string
 	// ZellijTabID targets an existing tab. When NewTab is true, the created tab
 	// ID is returned on the Pane instead.
 	ZellijTabID     *ZellijTabID

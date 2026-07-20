@@ -247,10 +247,11 @@ func (s *Service) SubscribeEvents(ctx context.Context) (<-chan eventbus.Event, f
 func (s *Service) createBackendPane(ctx context.Context, req CreatePaneRequest) (zellij.PaneID, *zellij.TabID, string, func(context.Context) error, error) {
 	if req.NewTab {
 		tabID, err := s.backend.CreateTab(ctx, zellij.CreateTabRequest{
-			Session: req.ZellijSession,
-			Name:    req.TabName,
-			CWD:     req.CWD,
-			Command: cloneStrings(req.Command),
+			Session:      req.ZellijSession,
+			Name:         req.TabName,
+			CWD:          req.CWD,
+			LayoutString: req.LayoutString,
+			Command:      cloneStrings(req.Command),
 		})
 		if err != nil {
 			return "", nil, "", nilCleanup, err
