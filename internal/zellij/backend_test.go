@@ -267,9 +267,10 @@ func TestCreateTabParsesReturnedTabID(t *testing.T) {
 	})
 
 	id, err := backend.CreateTab(context.Background(), CreateTabRequest{
-		Name:    "tests",
-		CWD:     "/workspace",
-		Command: []string{"go", "test", "./..."},
+		Name:         "tests",
+		CWD:          "/workspace",
+		LayoutString: "layout { pane; }",
+		Command:      []string{"go", "test", "./..."},
 	})
 	if err != nil {
 		t.Fatalf("CreateTab() error = %v", err)
@@ -283,6 +284,7 @@ func TestCreateTabParsesReturnedTabID(t *testing.T) {
 		Args: []string{
 			"--session", "agent-session",
 			"action", "new-tab",
+			"--layout-string", "layout { pane; }",
 			"--name", "tests",
 			"--cwd", "/workspace",
 			"--", "go", "test", "./...",
@@ -290,6 +292,19 @@ func TestCreateTabParsesReturnedTabID(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.commands[0], want) {
 		t.Fatalf("command = %#v, want %#v", runner.commands[0], want)
+	}
+}
+
+func TestCreateTabOmitsEmptyLayoutString(t *testing.T) {
+	runner := &fakeRunner{results: []fakeResult{{result: CommandResult{Stdout: "4\n"}}}}
+	backend := NewBackend(Options{Runner: runner})
+
+	if _, err := backend.CreateTab(context.Background(), CreateTabRequest{Name: "plain"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"action", "new-tab", "--name", "plain"}
+	if !reflect.DeepEqual(runner.commands[0].Args, want) {
+		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, want)
 	}
 }
 

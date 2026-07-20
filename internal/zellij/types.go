@@ -49,10 +49,11 @@ type CreatePaneRequest struct {
 }
 
 type CreateTabRequest struct {
-	Session string
-	Name    string
-	CWD     string
-	Command []string
+	Session      string
+	Name         string
+	CWD          string
+	LayoutString string
+	Command      []string
 }
 
 type CloseTabRequest struct {

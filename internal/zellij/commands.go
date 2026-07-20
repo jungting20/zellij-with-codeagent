@@ -46,6 +46,9 @@ func createPaneCommand(binary, session string, req CreatePaneRequest) CommandSpe
 
 func createTabCommand(binary, session string, req CreateTabRequest) CommandSpec {
 	args := make([]string, 0, 6+len(req.Command))
+	if req.LayoutString != "" {
+		args = append(args, "--layout-string", req.LayoutString)
+	}
 	if req.Name != "" {
 		args = append(args, "--name", req.Name)
 	}
