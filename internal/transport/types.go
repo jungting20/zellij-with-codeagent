@@ -151,6 +151,10 @@ type HealthResponse struct {
 	Version string `json:"version,omitempty"`
 }
 
+type ShutdownResponse struct {
+	Status string `json:"status"`
+}
+
 const RequestTypeExecutionPlan = "execution_plan"
 
 type RequestEnvelope struct {

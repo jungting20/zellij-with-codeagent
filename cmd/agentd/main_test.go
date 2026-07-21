@@ -108,3 +108,33 @@ func TestRunServeCanStopWithCanceledContext(t *testing.T) {
 		t.Fatalf("stdout = %q, want serving message", stdout.String())
 	}
 }
+
+func TestRunStopWhenDaemonIsNotRunning(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	socketPath := fmt.Sprintf("/tmp/agentd-missing-%d.sock", time.Now().UnixNano())
+
+	code := run([]string{"stop", "--socket", socketPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "agentd is not running") {
+		t.Fatalf("stdout = %q, want not-running message", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunStopRejectsNonPositiveTimeout(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"stop", "--timeout", "0s"}, &stdout, &stderr)
+
+	if code != 2 {
+		t.Fatalf("run() exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "timeout must be greater than zero") {
+		t.Fatalf("stderr = %q, want timeout validation", stderr.String())
+	}
+}

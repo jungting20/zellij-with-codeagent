@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This is a Go module for a Zellij-backed agent runtime. Command entrypoints live in `cmd/`, including `cmd/zellij-agent` for the current unified binary and compatibility commands such as `cmd/agentd`, `cmd/agentctl`, and `cmd/agent-role`. Shared implementation code lives in `internal/`: runtime orchestration in `internal/runtime`, Zellij CLI integration in `internal/zellij`, local transport in `internal/transport`, planner support in `internal/planner`, and role metadata in `internal/roles`. Documentation and design notes are under `docs/`; runnable plan examples are under `examples/plans/`; smoke-test scripts are in `scripts/` and the repository root.
+This is a Go module for a Zellij-backed agent runtime. Command entrypoints live in `cmd/`, including `cmd/zellij-agent` for the current unified binary and compatibility commands such as `cmd/agentd`, `cmd/agentctl`, and `cmd/agent-role`. Shared implementation code lives in `internal/`: runtime orchestration in `internal/runtime`, Zellij CLI integration in `internal/zellij`, local transport in `internal/transport`, planner support in `internal/planner`, and role metadata in `internal/roles`. Commands under `internal/cli` are compositions of roles and form the presentation layer in domain-driven design terms; keep domain behavior in the roles and use CLI commands to expose and coordinate them. Documentation and design notes are under `docs/`; runnable plan examples are under `examples/plans/`; smoke-test scripts are in `scripts/` and the repository root.
 
 ## Build, Test, and Development Commands
 

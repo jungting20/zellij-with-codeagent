@@ -279,6 +279,44 @@ func TestAddJSONRegistersReadyTicketFromNestedDirectory(t *testing.T) {
 	}
 }
 
+func TestFastAddRegistersMultipleTicketsWithoutArtifacts(t *testing.T) {
+	h := newHarness(t)
+	for i, title := range []string{"First fast ticket", "Second fast ticket"} {
+		if got := h.run(t, "fast-add", "--title", title, "--summary", "Skip design artifacts", "--prompt", "Implement "+title+".", "--json"); got != ExitOK {
+			t.Fatalf("fast-add %d exit = %d, stderr = %s", i, got, h.stderr.String())
+		}
+		created := decodeTicket(t, h.stdout.Bytes())
+		if created.ID != int64(i+1) || created.Status != ticketworker.StatusReady {
+			t.Fatalf("fast-add %d ticket = %#v", i, created)
+		}
+		if created.SpecPath != "" || created.PlanPath != "" {
+			t.Fatalf("fast-add paths = %q, %q; want empty", created.SpecPath, created.PlanPath)
+		}
+	}
+}
+
+func TestFastAddRequiresTitleSummaryAndPrompt(t *testing.T) {
+	h := newHarness(t)
+	if got := h.run(t, "fast-add", "--title", "Fast", "--summary", "Missing prompt"); got != ExitUsage {
+		t.Fatalf("fast-add exit = %d, stderr = %s", got, h.stderr.String())
+	}
+	if !strings.Contains(h.stderr.String(), "fast-add requires --title, --summary, and --prompt") {
+		t.Fatalf("stderr = %q", h.stderr.String())
+	}
+}
+
+func TestFastAddRejectsSpecAndPlanOptions(t *testing.T) {
+	h := newHarness(t)
+	for _, option := range []string{"--spec", "--plan"} {
+		if got := h.run(t, "fast-add", "--title", "Fast", "--summary", "No artifacts", "--prompt", "Implement.", option, "x.md"); got != ExitUsage {
+			t.Fatalf("fast-add %s exit = %d, stderr = %s", option, got, h.stderr.String())
+		}
+		if !strings.Contains(h.stderr.String(), "flag provided but not defined: -"+strings.TrimPrefix(option, "--")) {
+			t.Fatalf("%s stderr = %q", option, h.stderr.String())
+		}
+	}
+}
+
 func TestAddRequiresAndValidatesPrompt(t *testing.T) {
 	h := newHarness(t)
 	spec, plan := h.artifacts(t, "prompt-validation")

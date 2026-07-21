@@ -83,6 +83,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, dependenc
 	switch args[0] {
 	case "add":
 		return runAdd(ctx, store, args[1:], stdout, stderr)
+	case "fast-add":
+		return runFastAdd(ctx, store, args[1:], stdout, stderr)
 	case "list":
 		return runList(ctx, store, args[1:], stdout, stderr)
 	case "next":
@@ -110,6 +112,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  init    Initialize the project-local SQLite ticket queue")
 	fmt.Fprintln(w, "  add     Register an approved spec and implementation plan")
+	fmt.Fprintln(w, "  fast-add")
+	fmt.Fprintln(w, "          Register a ticket without spec and plan artifacts")
 	fmt.Fprintln(w, "  list    List tickets, optionally filtered by status")
 	fmt.Fprintln(w, "  next    Atomically claim the oldest ready ticket")
 	fmt.Fprintln(w, "  show    Show one ticket by ID")
@@ -241,6 +245,32 @@ func runAdd(ctx context.Context, store *ticketworker.Store, args []string, stdou
 		SpecPath: *spec,
 		PlanPath: *plan,
 		Prompt:   *prompt,
+	})
+	if err != nil {
+		return reportError(stderr, *jsonOutput, err)
+	}
+	return reportTicket(stdout, stderr, *jsonOutput, created)
+}
+
+func runFastAdd(ctx context.Context, store *ticketworker.Store, args []string, stdout, stderr io.Writer) int {
+	flags := newFlagSet("fast-add")
+	title := flags.String("title", "", "ticket title")
+	summary := flags.String("summary", "", "ticket summary")
+	prompt := flags.String("prompt", "", "coding-agent prompt")
+	jsonOutput := flags.Bool("json", false, "write JSON")
+	if err := flags.Parse(args); err != nil {
+		return reportUsage(stderr, hasJSON(args), err.Error())
+	}
+	if len(flags.Args()) != 0 {
+		return reportUsage(stderr, *jsonOutput, "fast-add does not accept positional arguments")
+	}
+	if !visited(flags, "title") || !visited(flags, "summary") || !visited(flags, "prompt") {
+		return reportUsage(stderr, *jsonOutput, "fast-add requires --title, --summary, and --prompt")
+	}
+	created, err := store.FastAdd(ctx, ticketworker.CreateInput{
+		Title:   *title,
+		Summary: *summary,
+		Prompt:  *prompt,
 	})
 	if err != nil {
 		return reportError(stderr, *jsonOutput, err)

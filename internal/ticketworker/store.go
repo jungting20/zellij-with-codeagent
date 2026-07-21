@@ -13,7 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const currentSchemaVersion = 2
+const currentSchemaVersion = 3
 
 const schema = `
 CREATE TABLE IF NOT EXISTS tickets (
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS tickets (
     title TEXT NOT NULL CHECK (length(trim(title)) > 0),
     summary TEXT NOT NULL CHECK (length(trim(summary)) > 0),
     spec_path TEXT NOT NULL,
-    plan_path TEXT NOT NULL UNIQUE,
+    plan_path TEXT NOT NULL,
     prompt TEXT NOT NULL CHECK (length(trim(prompt)) > 0),
     status TEXT NOT NULL CHECK (status IN ('ready','in_progress','done','cancelled')),
     created_at TEXT NOT NULL,
@@ -32,7 +32,36 @@ CREATE TABLE IF NOT EXISTS tickets (
 );
 CREATE INDEX IF NOT EXISTS idx_tickets_status_fifo
 ON tickets(status, created_at, id);
-PRAGMA user_version = 2;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tickets_plan_path_unique
+ON tickets(plan_path) WHERE plan_path <> '';
+PRAGMA user_version = 3;
+`
+
+const migrateSchemaV2ToV3 = `
+BEGIN;
+ALTER TABLE tickets RENAME TO tickets_v2;
+CREATE TABLE tickets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+    summary TEXT NOT NULL CHECK (length(trim(summary)) > 0),
+    spec_path TEXT NOT NULL,
+    plan_path TEXT NOT NULL,
+    prompt TEXT NOT NULL CHECK (length(trim(prompt)) > 0),
+    status TEXT NOT NULL CHECK (status IN ('ready','in_progress','done','cancelled')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    cancelled_at TEXT
+);
+INSERT INTO tickets(id, title, summary, spec_path, plan_path, prompt, status, created_at, updated_at, started_at, completed_at, cancelled_at)
+SELECT id, title, summary, spec_path, plan_path, prompt, status, created_at, updated_at, started_at, completed_at, cancelled_at
+FROM tickets_v2;
+DROP TABLE tickets_v2;
+CREATE INDEX idx_tickets_status_fifo ON tickets(status, created_at, id);
+CREATE UNIQUE INDEX idx_tickets_plan_path_unique ON tickets(plan_path) WHERE plan_path <> '';
+PRAGMA user_version = 3;
+COMMIT;
 `
 
 type Store struct {
@@ -86,6 +115,13 @@ func openStore(ctx context.Context, root, databasePath string, now func() time.T
 		_ = db.Close()
 		return nil, fmt.Errorf("unsupported ticket schema version %d", version)
 	}
+	if version == 2 {
+		if _, err := db.ExecContext(ctx, migrateSchemaV2ToV3); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("migrate ticket schema from version 2 to 3: %w", err)
+		}
+		version = 3
+	}
 	if version == 0 {
 		if _, err := db.ExecContext(ctx, schema); err != nil {
 			_ = db.Close()
@@ -98,20 +134,43 @@ func openStore(ctx context.Context, root, databasePath string, now func() time.T
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) Add(ctx context.Context, input CreateInput) (Ticket, error) {
-	title := strings.TrimSpace(input.Title)
-	summary := strings.TrimSpace(input.Summary)
-	prompt := strings.TrimSpace(input.Prompt)
-	if prompt == "" || strings.Contains(prompt, completionMarkerPrefix) {
-		return Ticket{}, ErrInvalidPrompt
+	title, summary, prompt, err := normalizeCreateInput(input)
+	if err != nil {
+		return Ticket{}, err
 	}
 	spec, err := s.artifactPath(input.SpecPath, filepath.Join("docs", "superpowers", "specs"))
-	if err != nil || title == "" || summary == "" {
+	if err != nil {
 		return Ticket{}, ErrInvalidArtifact
 	}
 	plan, err := s.artifactPath(input.PlanPath, filepath.Join("docs", "superpowers", "plans"))
 	if err != nil {
 		return Ticket{}, ErrInvalidArtifact
 	}
+	return s.insert(ctx, title, summary, spec, plan, prompt)
+}
+
+func (s *Store) FastAdd(ctx context.Context, input CreateInput) (Ticket, error) {
+	title, summary, prompt, err := normalizeCreateInput(input)
+	if err != nil {
+		return Ticket{}, err
+	}
+	return s.insert(ctx, title, summary, "", "", prompt)
+}
+
+func normalizeCreateInput(input CreateInput) (string, string, string, error) {
+	title := strings.TrimSpace(input.Title)
+	summary := strings.TrimSpace(input.Summary)
+	prompt := strings.TrimSpace(input.Prompt)
+	if prompt == "" || strings.Contains(prompt, completionMarkerPrefix) {
+		return "", "", "", ErrInvalidPrompt
+	}
+	if title == "" || summary == "" {
+		return "", "", "", ErrInvalidArtifact
+	}
+	return title, summary, prompt, nil
+}
+
+func (s *Store) insert(ctx context.Context, title, summary, spec, plan, prompt string) (Ticket, error) {
 	now := s.now().UTC()
 	stamp := now.Format(time.RFC3339Nano)
 	result, err := s.db.ExecContext(ctx, `

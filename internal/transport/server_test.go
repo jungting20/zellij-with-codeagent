@@ -50,6 +50,51 @@ func TestServerCreatePane(t *testing.T) {
 	}
 }
 
+func TestServerShutdownStopsListeningAndRemovesSocket(t *testing.T) {
+	socketPath := fmt.Sprintf("/tmp/agentd-shutdown-test-%d.sock", time.Now().UnixNano())
+	defer os.Remove(socketPath)
+	server, err := NewServer(ServerOptions{
+		Service:    newFakeRuntimeService(),
+		SocketPath: socketPath,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- server.ListenAndServe(context.Background()) }()
+	client := NewClient(ClientOptions{SocketPath: socketPath, Timeout: time.Second})
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, err := client.Health(context.Background()); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("server did not become ready")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	response, err := client.Shutdown(context.Background())
+	if err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	if response.Status != "stopping" {
+		t.Fatalf("Shutdown() status = %q, want stopping", response.Status)
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("ListenAndServe() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ListenAndServe() did not stop")
+	}
+	if _, err := os.Stat(socketPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("socket stat error = %v, want not exist", err)
+	}
+}
+
 func TestServerCreatePaneInvalidTargetReturnsBadRequest(t *testing.T) {
 	service := newFakeRuntimeService()
 	service.createErr = rt.ErrInvalidPaneTarget

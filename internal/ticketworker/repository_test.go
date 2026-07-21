@@ -111,8 +111,8 @@ func TestInitializeProjectIsIdempotentAndUpdatesGitignoreOnce(t *testing.T) {
 	}
 	defer db.Close()
 	var version int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 2 {
-		t.Fatalf("schema version = %d, error = %v; want 2", version, err)
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 3 {
+		t.Fatalf("schema version = %d, error = %v; want 3", version, err)
 	}
 	data, err := os.ReadFile(filepath.Join(root, ".gitignore"))
 	if err != nil {

@@ -94,6 +94,12 @@ func (c *Client) Health(ctx context.Context) (HealthResponse, error) {
 	return response, err
 }
 
+func (c *Client) Shutdown(ctx context.Context) (ShutdownResponse, error) {
+	var response ShutdownResponse
+	err := c.do(ctx, http.MethodPost, "/v1/shutdown", struct{}{}, &response)
+	return response, err
+}
+
 func (c *Client) CreatePane(ctx context.Context, req CreatePaneRequest) (CreatePaneResponse, error) {
 	var response CreatePaneResponse
 	err := c.do(ctx, http.MethodPost, "/v1/panes", req, &response)

@@ -176,6 +176,49 @@ func TestOpenInitializesSchemaIdempotently(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesVersion2AndPreservesTickets(t *testing.T) {
+	store, root := newTestStore(t)
+	spec, plan := writeArtifacts(t, root, "before-migration")
+	created, err := store.Add(context.Background(), CreateInput{
+		Title: "Existing", Summary: "Preserve this ticket", SpecPath: spec, PlanPath: plan, Prompt: "Keep this ticket.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("PRAGMA user_version = 2"); err != nil {
+		t.Fatal(err)
+	}
+	databasePath := filepath.Join(root, ".local", "tickets.db")
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := Open(context.Background(), root, databasePath, func() time.Time { return fixedNow })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = migrated.Close() })
+	got, err := migrated.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != created {
+		t.Fatalf("migrated ticket = %#v, want %#v", got, created)
+	}
+	for _, title := range []string{"Fast one", "Fast two"} {
+		if _, err := migrated.FastAdd(context.Background(), CreateInput{Title: title, Summary: "After migration", Prompt: "Implement."}); err != nil {
+			t.Fatalf("FastAdd(%q) after migration error = %v", title, err)
+		}
+	}
+	var version int
+	if err := migrated.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, currentSchemaVersion)
+	}
+}
+
 func TestOpenRejectsUnsupportedFutureSchemaVersion(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
@@ -186,7 +229,7 @@ func TestOpenRejectsUnsupportedFutureSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec("PRAGMA user_version = 3"); err != nil {
+	if _, err := store.db.Exec("PRAGMA user_version = 4"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -195,7 +238,7 @@ func TestOpenRejectsUnsupportedFutureSchemaVersion(t *testing.T) {
 
 	if _, err := Open(context.Background(), root, databasePath, func() time.Time { return fixedNow }); err == nil {
 		t.Fatal("Open() error = nil, want unsupported future schema rejection")
-	} else if got, want := err.Error(), "unsupported ticket schema version 3"; got != want {
+	} else if got, want := err.Error(), "unsupported ticket schema version 4"; got != want {
 		t.Fatalf("Open() error = %q, want %q", got, want)
 	}
 }
@@ -237,6 +280,21 @@ func TestAddRejectsDuplicatePlanWithoutInserting(t *testing.T) {
 	_, err := store.Add(context.Background(), input)
 	if !errors.Is(err, ErrDuplicatePlan) {
 		t.Fatalf("Add() error = %v, want ErrDuplicatePlan", err)
+	}
+}
+
+func TestFastAddAcceptsMultipleTicketsWithoutArtifacts(t *testing.T) {
+	store, _ := newTestStore(t)
+	for i, title := range []string{"First", "Second"} {
+		created, err := store.FastAdd(context.Background(), CreateInput{
+			Title: title, Summary: "No artifact ticket", Prompt: "Implement " + title + ".",
+		})
+		if err != nil {
+			t.Fatalf("FastAdd(%d) error = %v", i, err)
+		}
+		if created.SpecPath != "" || created.PlanPath != "" {
+			t.Fatalf("FastAdd(%d) paths = %q, %q; want empty", i, created.SpecPath, created.PlanPath)
+		}
 	}
 }
 

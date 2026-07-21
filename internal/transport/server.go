@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	rt "zellij-with-codeagent/internal/runtime"
@@ -38,6 +39,8 @@ type Server struct {
 	requestTimeout time.Duration
 	version        string
 	httpServer     *http.Server
+	shutdown       chan struct{}
+	shutdownOnce   sync.Once
 }
 
 func NewServer(opts ServerOptions) (*Server, error) {
@@ -56,6 +59,7 @@ func NewServer(opts ServerOptions) (*Server, error) {
 		socketPath:     opts.SocketPath,
 		requestTimeout: requestTimeout,
 		version:        opts.Version,
+		shutdown:       make(chan struct{}),
 	}
 	server.httpServer = &http.Server{Handler: server}
 	return server, nil
@@ -81,17 +85,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
-			_ = listener.Close()
-			return err
-		}
-		err := <-errCh
-		if errors.Is(err, http.ErrServerClosed) {
-			return ctx.Err()
-		}
-		return err
+		return s.stop(listener, errCh, ctx.Err())
+	case <-s.shutdown:
+		return s.stop(listener, errCh, nil)
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
@@ -104,6 +100,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/health":
 		writeJSON(w, http.StatusOK, HealthResponse{Status: "ok", Version: s.version})
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/shutdown":
+		writeJSON(w, http.StatusOK, ShutdownResponse{Status: "stopping"})
+		s.shutdownOnce.Do(func() { close(s.shutdown) })
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/sessions":
 		s.handleListSessions(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/sessions/"):
@@ -129,6 +128,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeAPIError(w, APIError{Code: CodeNotFound, Message: "route not found"}, http.StatusNotFound)
 	}
+}
+
+func (s *Server) stop(listener net.Listener, errCh <-chan error, result error) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
+		_ = listener.Close()
+		return err
+	}
+	if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return result
 }
 
 func (s *Server) requestContext(r *http.Request) (context.Context, context.CancelFunc) {
