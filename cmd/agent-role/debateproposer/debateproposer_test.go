@@ -78,7 +78,13 @@ printf 'proposer answer\n'
 	if gotCWD != repo {
 		t.Errorf("agy cwd = %q, want %q", gotCWD, repo)
 	}
-	wantArgs := []string{"--new-project", "--mode", "plan", "--print", debaterole.ComposePrompt(expectedSystemPrompt, repositoryInputForTest(repo, "test problem"))}
+	wantArgs := []string{
+		"--new-project",
+		"--mode", "plan",
+		"--sandbox",
+		"--dangerously-skip-permissions",
+		"--print", debaterole.ComposePrompt(expectedSystemPrompt, repositoryInputForTest(repo, "test problem")),
+	}
 	gotArgs := strings.SplitN(strings.TrimSuffix(readFile(t, argsFile), "\n"), "\n", len(wantArgs))
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
 		t.Errorf("agy args = %#v, want %#v", gotArgs, wantArgs)
