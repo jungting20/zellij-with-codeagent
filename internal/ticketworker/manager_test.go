@@ -161,7 +161,7 @@ func TestManagerIgnoresPromptEchoAndCompletesExactMarker(t *testing.T) {
 	stream := newFakeEventStream()
 	client.streams = []*fakeEventStream{stream}
 	manager := newTestManager(t, store, client, 1)
-	var logs strings.Builder
+	var logs synchronizedBuffer
 	manager.log = &logs
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
@@ -208,7 +208,8 @@ func TestManagerIgnoresPromptEchoAndCompletesExactMarker(t *testing.T) {
 		`started ticket=42 title="Ticket" pane=ticket-coding-run-a-42`,
 		`closed ticket=42 title="Ticket" pane=ticket-coding-run-a-42`,
 	} {
-		if !strings.Contains(logs.String(), want) {
+		waitFor(t, func() bool { return logs.Contains(want) })
+		if !logs.Contains(want) {
 			t.Fatalf("manager log %q does not contain %q", logs.String(), want)
 		}
 	}
@@ -230,15 +231,17 @@ func TestManagerRetriesDoneBeforeClosing(t *testing.T) {
 	client.streams = []*fakeEventStream{stream}
 	ticks := make(chan time.Time, 2)
 	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
-	var logs strings.Builder
+	var logs synchronizedBuffer
 	manager.log = &logs
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(client.inputs()) == 1 })
 	stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-7", Message: "ZELLIJ_AGENT_TICKET_DONE 7"}
 	waitFor(t, func() bool { return len(store.transitions()) == 1 })
-	if want := `complete ticket=7 title="Ticket" failed: database busy`; !strings.Contains(logs.String(), want) {
-		t.Fatalf("manager log %q does not contain %q", logs.String(), want)
+	wantLog := `complete ticket=7 title="Ticket" failed: database busy`
+	waitFor(t, func() bool { return logs.Contains(wantLog) })
+	if !logs.Contains(wantLog) {
+		t.Fatalf("manager log %q does not contain %q", logs.String(), wantLog)
 	}
 	if len(client.closed()) != 0 {
 		t.Fatal("pane closed before done persisted")
@@ -257,13 +260,15 @@ func TestManagerSafeCreateFailureRequeuesClaimedTicket(t *testing.T) {
 	client.createErrors = []error{&transport.ClientError{APIError: transport.APIError{Code: transport.CodeBadRequest, Message: "invalid target"}}}
 	client.streams = []*fakeEventStream{newFakeEventStream()}
 	manager := newTestManager(t, store, client, 1)
-	var logs strings.Builder
+	var logs synchronizedBuffer
 	manager.log = &logs
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(store.requeues()) == 1 })
-	if want := `create ticket=9 title="Ticket" pane=ticket-coding-run-a-9 failed:`; !strings.Contains(logs.String(), want) {
-		t.Fatalf("manager log %q does not contain %q", logs.String(), want)
+	wantLog := `create ticket=9 title="Ticket" pane=ticket-coding-run-a-9 failed:`
+	waitFor(t, func() bool { return logs.Contains(wantLog) })
+	if !logs.Contains(wantLog) {
+		t.Fatalf("manager log %q does not contain %q", logs.String(), wantLog)
 	}
 	if store.requeues()[0] != 9 {
 		t.Fatalf("requeues = %#v", store.requeues())
@@ -547,6 +552,29 @@ func waitFor(t *testing.T, condition func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("condition not met before timeout")
+}
+
+type synchronizedBuffer struct {
+	mu      sync.Mutex
+	builder strings.Builder
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.builder.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.builder.String()
+}
+
+func (b *synchronizedBuffer) Contains(substring string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.Contains(b.builder.String(), substring)
 }
 
 type managerTransitionCall struct {
