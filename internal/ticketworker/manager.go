@@ -304,17 +304,6 @@ func (m *Manager) fillEmptySlots(ctx context.Context) {
 	}
 }
 
-const workerPaneTitleLimit = 32
-
-func workerPaneName(ticket Ticket) string {
-	title := strings.Join(strings.Fields(ticket.Title), " ")
-	runes := []rune(title)
-	if len(runes) > workerPaneTitleLimit {
-		title = string(runes[:workerPaneTitleLimit-1]) + "…"
-	}
-	return fmt.Sprintf("[%d] %s", ticket.ID, title)
-}
-
 func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 	ticket, err := m.store.Next(ctx)
 	if errors.Is(err, ErrEmptyQueue) {
@@ -336,7 +325,7 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 
 	req := transport.CreatePaneRequest{
 		ID: slot.paneID, TaskID: m.taskID, ZellijSession: m.zellijSession,
-		Role: "coding-agent", Name: workerPaneName(ticket), SameTabAsPaneID: m.anchorPaneID,
+		Role: "coding-agent", Name: slot.paneID, SameTabAsPaneID: m.anchorPaneID,
 		Command: []string{m.roleBin, "role", "coding-agent", "--yolo", m.root}, CWD: m.root,
 	}
 	slot.createRequest = req
