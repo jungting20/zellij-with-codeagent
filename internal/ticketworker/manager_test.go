@@ -33,9 +33,10 @@ func TestManagerWaitsForAnchorThenFillsConfiguredCapacity(t *testing.T) {
 	if store.nextCount() != 2 {
 		t.Fatalf("Next calls = %d, want 2", store.nextCount())
 	}
+	wantNames := []string{"[1] Ticket", "[2] Ticket"}
 	for i, req := range client.created() {
 		wantID := int64(i + 1)
-		if req.ID != "ticket-coding-run-a-"+string(rune('0'+wantID)) || req.Role != "coding-agent" || req.TaskID != "tickets" || req.SameTabAsPaneID != "ticket-manager" || req.ZellijSession != "physical-a" {
+		if req.ID != "ticket-coding-run-a-"+string(rune('0'+wantID)) || req.Name != wantNames[i] || req.Role != "coding-agent" || req.TaskID != "tickets" || req.SameTabAsPaneID != "ticket-manager" || req.ZellijSession != "physical-a" {
 			t.Fatalf("create[%d] = %#v", i, req)
 		}
 		wantCommand := []string{"zellij-agent", "role", "coding-agent", "--yolo", "/repo"}
@@ -113,6 +114,25 @@ func TestNewManagerGeneratesDistinctInstanceIDs(t *testing.T) {
 	}
 	if first.managerID == second.managerID || !validManagerID(first.managerID) || !validManagerID(second.managerID) {
 		t.Fatalf("manager IDs = %q, %q", first.managerID, second.managerID)
+	}
+}
+
+func TestWorkerPaneNameNormalizesAndLimitsTitle(t *testing.T) {
+	tests := []struct {
+		name   string
+		ticket Ticket
+		want   string
+	}{
+		{name: "plain", ticket: Ticket{ID: 7, Title: "검색 기능 구현"}, want: "[7] 검색 기능 구현"},
+		{name: "whitespace", ticket: Ticket{ID: 8, Title: "  검색\n\t기능 \r 구현  "}, want: "[8] 검색 기능 구현"},
+		{name: "long unicode", ticket: Ticket{ID: 9, Title: strings.Repeat("한", 32) + "끝"}, want: "[9] " + strings.Repeat("한", 31) + "…"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := workerPaneName(tt.ticket); got != tt.want {
+				t.Fatalf("workerPaneName(%#v) = %q, want %q", tt.ticket, got, tt.want)
+			}
+		})
 	}
 }
 
