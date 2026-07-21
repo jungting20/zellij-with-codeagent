@@ -329,7 +329,7 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 	slot.paneID = "ticket-coding-" + m.managerID + "-" + strconv.FormatInt(ticket.ID, 10)
 	slot.prompt, slot.marker, err = RenderTicketPrompt(ticket)
 	if err != nil {
-		m.logf("render ticket=%d failed: %v", ticket.ID, err)
+		m.logTicketf("render", ticket, "failed: %v", err)
 		m.requeueWithoutPane(ctx, slot)
 		return true
 	}
@@ -341,7 +341,7 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 	}
 	slot.createRequest = req
 	if _, err := m.client.CreatePane(ctx, req); err != nil {
-		m.logf("create ticket=%d pane=%s failed: %v", ticket.ID, slot.paneID, err)
+		m.logTicketf("create", ticket, "pane=%s failed: %v", slot.paneID, err)
 		if safeCreateFailure(err) {
 			m.requeueWithoutPane(ctx, slot)
 		} else {
@@ -365,7 +365,7 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 		return true
 	}
 	slot.state = managerSlotWorking
-	m.logf("started ticket=%d pane=%s", ticket.ID, slot.paneID)
+	m.logTicketf("started", ticket, "pane=%s", slot.paneID)
 	return false
 }
 
@@ -426,7 +426,7 @@ func (m *Manager) handleEvent(ctx context.Context, event transport.Event) {
 func (m *Manager) workerExists(ctx context.Context, slot *managerSlot) bool {
 	response, err := m.client.InspectRuntime(ctx)
 	if err != nil {
-		m.logf("inspect worker pane=%s failed: %v", slot.paneID, err)
+		m.logTicketf("inspect worker", slot.ticket, "pane=%s failed: %v", slot.paneID, err)
 		return false
 	}
 	for _, pane := range response.Panes {
@@ -468,7 +468,7 @@ func (m *Manager) retrySlots(ctx context.Context) {
 func (m *Manager) retryComplete(ctx context.Context, slot *managerSlot) {
 	if _, err := m.store.Transition(ctx, slot.ticket.ID, ActionDone); err != nil {
 		slot.lastError = err
-		m.logf("complete ticket=%d failed: %v", slot.ticket.ID, err)
+		m.logTicketf("complete", slot.ticket, "failed: %v", err)
 		return
 	}
 	slot.done = true
@@ -480,10 +480,10 @@ func (m *Manager) retryClose(ctx context.Context, slot *managerSlot) {
 	closed, err := m.closeOrAbsent(ctx, slot.paneID)
 	if !closed {
 		slot.lastError = err
-		m.logf("close ticket=%d pane=%s failed: %v", slot.ticket.ID, slot.paneID, err)
+		m.logTicketf("close", slot.ticket, "pane=%s failed: %v", slot.paneID, err)
 		return
 	}
-	m.logf("closed ticket=%d pane=%s", slot.ticket.ID, slot.paneID)
+	m.logTicketf("closed", slot.ticket, "pane=%s", slot.paneID)
 	*slot = managerSlot{}
 }
 
@@ -581,7 +581,7 @@ func (m *Manager) recoverSnapshots(ctx context.Context) {
 		}
 		response, err := m.client.SnapshotOutput(ctx, slot.paneID, transport.SnapshotOutputRequest{})
 		if err != nil {
-			m.logf("snapshot recovery pane=%s failed: %v", slot.paneID, err)
+			m.logTicketf("snapshot recovery", slot.ticket, "pane=%s failed: %v", slot.paneID, err)
 			continue
 		}
 		if m.matchesWorkerPane(response.Pane, slot, true) && containsExactLine(response.Output, slot.marker) {
@@ -620,6 +620,12 @@ func (m *Manager) shutdown() error {
 		*slot = managerSlot{}
 	}
 	return errors.Join(cleanupErrors...)
+}
+
+func (m *Manager) logTicketf(event string, ticket Ticket, format string, args ...any) {
+	values := []any{event, ticket.ID, ticket.Title}
+	values = append(values, args...)
+	m.logf("%s ticket=%d title=%q "+format, values...)
 }
 
 func (m *Manager) logf(format string, args ...any) {

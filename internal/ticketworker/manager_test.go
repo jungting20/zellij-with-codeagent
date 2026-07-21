@@ -117,6 +117,19 @@ func TestNewManagerGeneratesDistinctInstanceIDs(t *testing.T) {
 	}
 }
 
+func TestManagerLogTicketfIncludesQuotedTitle(t *testing.T) {
+	var output strings.Builder
+	manager := &Manager{log: &output}
+	ticket := Ticket{ID: 7, Title: "첫째 \"제목\"\n둘째"}
+
+	manager.logTicketf("started", ticket, "pane=%s", "pane-7")
+
+	want := "started ticket=7 title=\"첫째 \\\"제목\\\"\\n둘째\" pane=pane-7\n"
+	if got := output.String(); got != want {
+		t.Fatalf("log = %q, want %q", got, want)
+	}
+}
+
 func TestWorkerPaneNameNormalizesAndLimitsTitle(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -148,6 +161,8 @@ func TestManagerIgnoresPromptEchoAndCompletesExactMarker(t *testing.T) {
 	stream := newFakeEventStream()
 	client.streams = []*fakeEventStream{stream}
 	manager := newTestManager(t, store, client, 1)
+	var logs strings.Builder
+	manager.log = &logs
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(client.inputs()) == 1 })
@@ -189,6 +204,14 @@ func TestManagerIgnoresPromptEchoAndCompletesExactMarker(t *testing.T) {
 	if closeBeforeDone.Load() {
 		t.Fatal("coding-agent pane closed before ticket reached done")
 	}
+	for _, want := range []string{
+		`started ticket=42 title="Ticket" pane=ticket-coding-run-a-42`,
+		`closed ticket=42 title="Ticket" pane=ticket-coding-run-a-42`,
+	} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("manager log %q does not contain %q", logs.String(), want)
+		}
+	}
 	stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-42", Message: "ZELLIJ_AGENT_TICKET_DONE 42"}
 	time.Sleep(20 * time.Millisecond)
 	if len(store.transitions()) != 1 || len(client.closed()) != 1 {
@@ -207,11 +230,16 @@ func TestManagerRetriesDoneBeforeClosing(t *testing.T) {
 	client.streams = []*fakeEventStream{stream}
 	ticks := make(chan time.Time, 2)
 	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
+	var logs strings.Builder
+	manager.log = &logs
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(client.inputs()) == 1 })
 	stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-7", Message: "ZELLIJ_AGENT_TICKET_DONE 7"}
 	waitFor(t, func() bool { return len(store.transitions()) == 1 })
+	if want := `complete ticket=7 title="Ticket" failed: database busy`; !strings.Contains(logs.String(), want) {
+		t.Fatalf("manager log %q does not contain %q", logs.String(), want)
+	}
 	if len(client.closed()) != 0 {
 		t.Fatal("pane closed before done persisted")
 	}
@@ -229,9 +257,14 @@ func TestManagerSafeCreateFailureRequeuesClaimedTicket(t *testing.T) {
 	client.createErrors = []error{&transport.ClientError{APIError: transport.APIError{Code: transport.CodeBadRequest, Message: "invalid target"}}}
 	client.streams = []*fakeEventStream{newFakeEventStream()}
 	manager := newTestManager(t, store, client, 1)
+	var logs strings.Builder
+	manager.log = &logs
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(store.requeues()) == 1 })
+	if want := `create ticket=9 title="Ticket" pane=ticket-coding-run-a-9 failed:`; !strings.Contains(logs.String(), want) {
+		t.Fatalf("manager log %q does not contain %q", logs.String(), want)
+	}
 	if store.requeues()[0] != 9 {
 		t.Fatalf("requeues = %#v", store.requeues())
 	}
