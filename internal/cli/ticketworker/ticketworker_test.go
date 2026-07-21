@@ -486,6 +486,22 @@ func TestLifecycleCommandsApplyTransitions(t *testing.T) {
 	}
 }
 
+func TestHumanListIncludesEscapedPromptColumn(t *testing.T) {
+	h := newHarness(t)
+	spec, plan := h.artifacts(t, "escaped-list")
+	prompt := "첫째\\literal\n둘째\t셋째\r끝"
+	if got := h.run(t, "add", "--title", "Prompt title", "--summary", "Prompt summary", "--spec", spec, "--plan", plan, "--prompt", prompt, "--json"); got != ExitOK {
+		t.Fatalf("add exit = %d, stderr = %s", got, h.stderr.String())
+	}
+
+	if got := h.run(t, "list"); got != ExitOK {
+		t.Fatalf("list exit = %d, stderr = %s", got, h.stderr.String())
+	}
+	if got, want := h.stdout.String(), "1\tready\tPrompt title\tdocs/superpowers/plans/escaped-list.md\t첫째\\\\literal\\n둘째\\t셋째\\r끝\n"; got != want {
+		t.Fatalf("list output = %q, want %q", got, want)
+	}
+}
+
 func TestHumanOutputContract(t *testing.T) {
 	h := newHarness(t)
 	if got := h.run(t, "list"); got != ExitOK {
@@ -509,7 +525,7 @@ func TestHumanOutputContract(t *testing.T) {
 	if got := h.run(t, "list"); got != ExitOK {
 		t.Fatalf("list exit = %d, stderr = %s", got, h.stderr.String())
 	}
-	if got, want := h.stdout.String(), "1\tready\tHuman title\tdocs/superpowers/plans/human.md\n"; got != want {
+	if got, want := h.stdout.String(), "1\tready\tHuman title\tdocs/superpowers/plans/human.md\tImplement Human title.\n"; got != want {
 		t.Fatalf("list output = %q, want %q", got, want)
 	}
 }

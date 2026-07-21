@@ -369,6 +369,15 @@ func reportTicket(stdout, stderr io.Writer, jsonOutput bool, value ticketworker.
 	return ExitOK
 }
 
+func escapeListField(value string) string {
+	return strings.NewReplacer(
+		`\`, `\\`,
+		"\n", `\n`,
+		"\t", `\t`,
+		"\r", `\r`,
+	).Replace(value)
+}
+
 func reportTickets(stdout, stderr io.Writer, jsonOutput bool, values []ticketworker.Ticket) int {
 	if jsonOutput {
 		if err := json.NewEncoder(stdout).Encode(values); err != nil {
@@ -383,7 +392,7 @@ func reportTickets(stdout, stderr io.Writer, jsonOutput bool, values []ticketwor
 		return ExitOK
 	}
 	for _, value := range values {
-		if _, err := fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\n", value.ID, value.Status, value.Title, value.PlanPath); err != nil {
+		if _, err := fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\t%s\n", value.ID, value.Status, value.Title, value.PlanPath, escapeListField(value.Prompt)); err != nil {
 			return reportError(stderr, false, fmt.Errorf("write output: %w", err))
 		}
 	}
