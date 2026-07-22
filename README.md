@@ -202,7 +202,7 @@ as the coding-agent instruction. The manager appends its completion-marker
 instruction automatically. Queue and lifecycle commands are:
 
 ```bash
-./bin/zellij-agent ticket-worker list [--status ready]
+./bin/zellij-agent ticket-worker list [--status ready] [--no-prompt]
 ./bin/zellij-agent ticket-worker next
 ./bin/zellij-agent ticket-worker show ID
 ./bin/zellij-agent ticket-worker start [--zellij-session NAME]

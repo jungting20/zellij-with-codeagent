@@ -543,6 +543,36 @@ func TestHumanListIncludesEscapedPromptColumn(t *testing.T) {
 	}
 }
 
+func TestHumanListNoPromptOmitsPromptColumn(t *testing.T) {
+	h := newHarness(t)
+	spec, plan := h.artifacts(t, "no-prompt-list")
+	h.addJSON(t, "Hidden prompt", "Hide the prompt column", spec, plan)
+
+	if got := h.run(t, "list", "--no-prompt"); got != ExitOK {
+		t.Fatalf("list exit = %d, stderr = %s", got, h.stderr.String())
+	}
+	if got, want := h.stdout.String(), "1\tready\tHidden prompt\tticket/test\tdocs/superpowers/plans/no-prompt-list.md\n"; got != want {
+		t.Fatalf("list output = %q, want %q", got, want)
+	}
+}
+
+func TestListNoPromptDoesNotChangeJSONContract(t *testing.T) {
+	h := newHarness(t)
+	spec, plan := h.artifacts(t, "no-prompt-json")
+	h.addJSON(t, "JSON prompt", "Keep prompt in JSON", spec, plan)
+
+	if got := h.run(t, "list", "--no-prompt", "--json"); got != ExitOK {
+		t.Fatalf("list exit = %d, stderr = %s", got, h.stderr.String())
+	}
+	var tickets []ticketworker.Ticket
+	if err := json.Unmarshal(h.stdout.Bytes(), &tickets); err != nil {
+		t.Fatalf("decode list JSON %q: %v", h.stdout.Bytes(), err)
+	}
+	if len(tickets) != 1 || tickets[0].Prompt != "Implement JSON prompt." {
+		t.Fatalf("tickets = %#v", tickets)
+	}
+}
+
 func TestHumanOutputContract(t *testing.T) {
 	h := newHarness(t)
 	if got := h.run(t, "list"); got != ExitOK {
