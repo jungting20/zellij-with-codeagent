@@ -496,6 +496,57 @@ func TestManagerRejectsMarkerSnapshotWithWrongWorkerIdentity(t *testing.T) {
 	}
 }
 
+func TestManagerReleasesMissingWorkerWhenTicketCannotBeRequeued(t *testing.T) {
+	store := &fakeManagerStore{requeueErrors: []error{ErrInvalidTransition}}
+	client := newFakeManagerClient()
+	paneID := "ticket-coding-run-a-15"
+	client.snapshotErrors[paneID] = &transport.ClientError{
+		StatusCode: 404,
+		APIError:   transport.APIError{Code: transport.CodeNotFound, Message: "runtime pane not found"},
+	}
+	manager := newTestManager(t, store, client, 1)
+	manager.slots[0] = managerSlot{
+		state:       managerSlotWorking,
+		ticket:      managerTicket(15),
+		paneID:      paneID,
+		paneCreated: true,
+	}
+
+	manager.recoverSnapshots(context.Background())
+
+	if manager.slots[0].state != managerSlotEmpty {
+		t.Fatalf("slot state = %v, want empty", manager.slots[0].state)
+	}
+	if got := client.closed(); len(got) != 1 || got[0] != paneID {
+		t.Fatalf("closed panes = %v, want [%s]", got, paneID)
+	}
+	if got := store.requeues(); len(got) != 1 || got[0] != 15 {
+		t.Fatalf("requeued tickets = %v, want [15]", got)
+	}
+}
+
+func TestManagerDoesNotCreateDuplicateWorkerForClaimedTicket(t *testing.T) {
+	ticket := managerTicket(16)
+	store := &fakeManagerStore{ready: []Ticket{ticket}}
+	client := newFakeManagerClient()
+	manager := newTestManager(t, store, client, 2)
+	manager.slots[0] = managerSlot{
+		state:       managerSlotWorking,
+		ticket:      ticket,
+		paneID:      "ticket-coding-run-a-16",
+		paneCreated: true,
+	}
+
+	manager.startSlot(context.Background(), &manager.slots[1])
+
+	if got := client.created(); len(got) != 0 {
+		t.Fatalf("created panes = %v, want none", got)
+	}
+	if manager.slots[1].state != managerSlotEmpty {
+		t.Fatalf("duplicate slot state = %v, want empty", manager.slots[1].state)
+	}
+}
+
 func TestManagerShutdownClosesAndRequeuesActiveTicket(t *testing.T) {
 	store := &fakeManagerStore{ready: []Ticket{managerTicket(13)}}
 	client := newFakeManagerClient()
@@ -589,6 +640,7 @@ type fakeManagerStore struct {
 	transitionCalls  []managerTransitionCall
 	transitionErrors []error
 	requeueCalls     []int64
+	requeueErrors    []error
 }
 
 func (f *fakeManagerStore) Next(context.Context) (Ticket, error) {
@@ -622,6 +674,13 @@ func (f *fakeManagerStore) Requeue(_ context.Context, id int64) (Ticket, error) 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requeueCalls = append(f.requeueCalls, id)
+	if len(f.requeueErrors) > 0 {
+		err := f.requeueErrors[0]
+		f.requeueErrors = f.requeueErrors[1:]
+		if err != nil {
+			return Ticket{}, err
+		}
+	}
 	return Ticket{ID: id, Status: StatusReady}, nil
 }
 
@@ -672,6 +731,7 @@ type fakeManagerClient struct {
 	inputErrors       []error
 	snapshots         map[string]string
 	snapshotPanes     map[string]transport.Pane
+	snapshotErrors    map[string]error
 	closeRequests     []string
 	closeErrors       []error
 	beforeClose       func()
@@ -680,7 +740,7 @@ type fakeManagerClient struct {
 }
 
 func newFakeManagerClient() *fakeManagerClient {
-	return &fakeManagerClient{anchorReady: true, anchorTaskID: "tickets", anchorSessionID: "physical-a", successfulCreates: map[string]bool{}, snapshots: map[string]string{}, snapshotPanes: map[string]transport.Pane{}, absentPanes: map[string]bool{}, paneStatuses: map[string]string{}}
+	return &fakeManagerClient{anchorReady: true, anchorTaskID: "tickets", anchorSessionID: "physical-a", successfulCreates: map[string]bool{}, snapshots: map[string]string{}, snapshotPanes: map[string]transport.Pane{}, snapshotErrors: map[string]error{}, absentPanes: map[string]bool{}, paneStatuses: map[string]string{}}
 }
 
 func (f *fakeManagerClient) CreatePane(_ context.Context, req transport.CreatePaneRequest) (transport.CreatePaneResponse, error) {
@@ -716,6 +776,9 @@ func (f *fakeManagerClient) SendInput(_ context.Context, paneID string, req tran
 func (f *fakeManagerClient) SnapshotOutput(_ context.Context, paneID string, _ transport.SnapshotOutputRequest) (transport.SnapshotOutputResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.snapshotErrors[paneID]; err != nil {
+		return transport.SnapshotOutputResponse{}, err
+	}
 	output, ok := f.snapshots[paneID]
 	if !ok {
 		output = "›"

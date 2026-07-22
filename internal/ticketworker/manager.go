@@ -324,6 +324,11 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 		m.logf("claim ticket failed: %v", err)
 		return true
 	}
+	if m.ticketAssignedElsewhere(slot, ticket.ID) {
+		m.logTicketf("duplicate claim", ticket, "ignored because another slot already owns the ticket")
+		*slot = managerSlot{}
+		return false
+	}
 	slot.state = managerSlotStarting
 	slot.ticket = ticket
 	slot.paneID = "ticket-coding-" + m.managerID + "-" + strconv.FormatInt(ticket.ID, 10)
@@ -366,6 +371,19 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 	}
 	slot.state = managerSlotWorking
 	m.logTicketf("started", ticket, "pane=%s", slot.paneID)
+	return false
+}
+
+func (m *Manager) ticketAssignedElsewhere(slot *managerSlot, ticketID int64) bool {
+	for i := range m.slots {
+		other := &m.slots[i]
+		if other == slot || other.state == managerSlotEmpty {
+			continue
+		}
+		if other.ticket.ID == ticketID {
+			return true
+		}
+	}
 	return false
 }
 
@@ -502,6 +520,11 @@ func (m *Manager) retryCleanup(ctx context.Context, slot *managerSlot) {
 		slot.paneCreated = false
 	}
 	if _, err := m.store.Requeue(ctx, slot.ticket.ID); err != nil {
+		if errors.Is(err, ErrInvalidTransition) {
+			m.logTicketf("released", slot.ticket, "pane=%s ticket is no longer in progress", slot.paneID)
+			*slot = managerSlot{}
+			return
+		}
 		slot.lastError = err
 		return
 	}
@@ -582,6 +605,11 @@ func (m *Manager) recoverSnapshots(ctx context.Context) {
 		response, err := m.client.SnapshotOutput(ctx, slot.paneID, transport.SnapshotOutputRequest{})
 		if err != nil {
 			m.logTicketf("snapshot recovery", slot.ticket, "pane=%s failed: %v", slot.paneID, err)
+			if transport.IsNotFound(err) {
+				slot.lastError = err
+				slot.state = managerSlotCleanupFailed
+				m.retryCleanup(ctx, slot)
+			}
 			continue
 		}
 		if m.matchesWorkerPane(response.Pane, slot, true) && containsExactLine(response.Output, slot.marker) {
