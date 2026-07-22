@@ -111,8 +111,8 @@ func TestInitializeProjectIsIdempotentAndUpdatesGitignoreOnce(t *testing.T) {
 	}
 	defer db.Close()
 	var version int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 3 {
-		t.Fatalf("schema version = %d, error = %v; want 3", version, err)
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != currentSchemaVersion {
+		t.Fatalf("schema version = %d, error = %v; want %d", version, err, currentSchemaVersion)
 	}
 	data, err := os.ReadFile(filepath.Join(root, ".gitignore"))
 	if err != nil {
@@ -158,7 +158,7 @@ func TestInitializeProjectPreservesExistingTickets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`INSERT INTO tickets(title, summary, spec_path, plan_path, prompt, status, created_at, updated_at) VALUES ('Title', 'Summary', 'docs/superpowers/specs/example-design.md', 'docs/superpowers/plans/example.md', 'Implement it.', 'ready', '2026-07-17T00:00:00Z', '2026-07-17T00:00:00Z')`); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO tickets(title, summary, spec_path, plan_path, worktree_branch, prompt, status, created_at, updated_at) VALUES ('Title', 'Summary', 'docs/superpowers/specs/example-design.md', 'docs/superpowers/plans/example.md', 'ticket/example', 'Implement it.', 'ready', '2026-07-17T00:00:00Z', '2026-07-17T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {

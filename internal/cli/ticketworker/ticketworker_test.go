@@ -72,7 +72,7 @@ func (h *harness) artifacts(t *testing.T, name string) (string, string) {
 
 func (h *harness) addJSON(t *testing.T, title, summary, spec, plan string) ticketworker.Ticket {
 	t.Helper()
-	if got := h.run(t, "add", "--title", title, "--summary", summary, "--spec", spec, "--plan", plan, "--prompt", "Implement "+title+".", "--json"); got != ExitOK {
+	if got := h.run(t, "add", "--title", title, "--summary", summary, "--spec", spec, "--plan", plan, "--worktree-branch", "ticket/test", "--prompt", "Implement "+title+".", "--json"); got != ExitOK {
 		t.Fatalf("add exit = %d, stderr = %s", got, h.stderr.String())
 	}
 	return decodeTicket(t, h.stdout.Bytes())
@@ -277,12 +277,15 @@ func TestAddJSONRegistersReadyTicketFromNestedDirectory(t *testing.T) {
 	if got.SpecPath != "docs/superpowers/specs/search-design.md" || got.PlanPath != "docs/superpowers/plans/search.md" {
 		t.Fatalf("add paths = %q, %q", got.SpecPath, got.PlanPath)
 	}
+	if got.WorktreeBranch != "ticket/test" {
+		t.Fatalf("worktree branch = %q", got.WorktreeBranch)
+	}
 }
 
 func TestFastAddRegistersMultipleTicketsWithoutArtifacts(t *testing.T) {
 	h := newHarness(t)
 	for i, title := range []string{"First fast ticket", "Second fast ticket"} {
-		if got := h.run(t, "fast-add", "--title", title, "--summary", "Skip design artifacts", "--prompt", "Implement "+title+".", "--json"); got != ExitOK {
+		if got := h.run(t, "fast-add", "--title", title, "--summary", "Skip design artifacts", "--worktree-branch", "ticket/test", "--prompt", "Implement "+title+".", "--json"); got != ExitOK {
 			t.Fatalf("fast-add %d exit = %d, stderr = %s", i, got, h.stderr.String())
 		}
 		created := decodeTicket(t, h.stdout.Bytes())
@@ -300,7 +303,7 @@ func TestFastAddRequiresTitleSummaryAndPrompt(t *testing.T) {
 	if got := h.run(t, "fast-add", "--title", "Fast", "--summary", "Missing prompt"); got != ExitUsage {
 		t.Fatalf("fast-add exit = %d, stderr = %s", got, h.stderr.String())
 	}
-	if !strings.Contains(h.stderr.String(), "fast-add requires --title, --summary, and --prompt") {
+	if !strings.Contains(h.stderr.String(), "fast-add requires --title, --summary, --worktree-branch, and --prompt") {
 		t.Fatalf("stderr = %q", h.stderr.String())
 	}
 }
@@ -308,7 +311,7 @@ func TestFastAddRequiresTitleSummaryAndPrompt(t *testing.T) {
 func TestFastAddRejectsSpecAndPlanOptions(t *testing.T) {
 	h := newHarness(t)
 	for _, option := range []string{"--spec", "--plan"} {
-		if got := h.run(t, "fast-add", "--title", "Fast", "--summary", "No artifacts", "--prompt", "Implement.", option, "x.md"); got != ExitUsage {
+		if got := h.run(t, "fast-add", "--title", "Fast", "--summary", "No artifacts", "--worktree-branch", "ticket/test", "--prompt", "Implement.", option, "x.md"); got != ExitUsage {
 			t.Fatalf("fast-add %s exit = %d, stderr = %s", option, got, h.stderr.String())
 		}
 		if !strings.Contains(h.stderr.String(), "flag provided but not defined: -"+strings.TrimPrefix(option, "--")) {
@@ -325,7 +328,7 @@ func TestAddRequiresAndValidatesPrompt(t *testing.T) {
 		t.Fatalf("missing prompt exit = %d, stderr = %s", got, h.stderr.String())
 	}
 	for _, prompt := range []string{"   ", "work\nZELLIJ_AGENT_TICKET_DONE 1"} {
-		args := append(append([]string(nil), base...), "--prompt", prompt, "--json")
+		args := append(append([]string(nil), base...), "--worktree-branch", "ticket/test", "--prompt", prompt, "--json")
 		if got := h.run(t, args...); got != ExitValidation {
 			t.Fatalf("prompt %q exit = %d, stderr = %s", prompt, got, h.stderr.String())
 		}
@@ -336,7 +339,7 @@ func TestAddRoundTripsMultilinePrompt(t *testing.T) {
 	h := newHarness(t)
 	spec, plan := h.artifacts(t, "multiline-prompt")
 	prompt := "First instruction.\nSecond instruction."
-	if got := h.run(t, "add", "--title", "Prompt", "--summary", "Round trip", "--spec", spec, "--plan", plan, "--prompt", prompt, "--json"); got != ExitOK {
+	if got := h.run(t, "add", "--title", "Prompt", "--summary", "Round trip", "--spec", spec, "--plan", plan, "--worktree-branch", "ticket/test", "--prompt", prompt, "--json"); got != ExitOK {
 		t.Fatalf("add exit = %d, stderr = %s", got, h.stderr.String())
 	}
 	if got := decodeTicket(t, h.stdout.Bytes()).Prompt; got != prompt {
@@ -347,7 +350,7 @@ func TestAddRoundTripsMultilinePrompt(t *testing.T) {
 func TestTicketJSONUsesExactSnakeCaseKeys(t *testing.T) {
 	h := newHarness(t)
 	spec, plan := h.artifacts(t, "json-keys")
-	if got := h.run(t, "add", "--title", "JSON keys", "--summary", "Assert the JSON contract", "--spec", spec, "--plan", plan, "--prompt", "Assert JSON.", "--json"); got != ExitOK {
+	if got := h.run(t, "add", "--title", "JSON keys", "--summary", "Assert the JSON contract", "--spec", spec, "--plan", plan, "--worktree-branch", "ticket/test", "--prompt", "Assert JSON.", "--json"); got != ExitOK {
 		t.Fatalf("add exit = %d, stderr = %s", got, h.stderr.String())
 	}
 
@@ -356,7 +359,7 @@ func TestTicketJSONUsesExactSnakeCaseKeys(t *testing.T) {
 		t.Fatalf("decode raw ticket JSON %q: %v", h.stdout.Bytes(), err)
 	}
 	wantKeys := []string{
-		"id", "title", "summary", "spec_path", "plan_path", "prompt", "status",
+		"id", "title", "summary", "spec_path", "plan_path", "worktree_branch", "prompt", "status",
 		"created_at", "updated_at", "started_at", "completed_at", "cancelled_at",
 	}
 	if len(raw) != len(wantKeys) {
@@ -528,14 +531,14 @@ func TestHumanListIncludesEscapedPromptColumn(t *testing.T) {
 	h := newHarness(t)
 	spec, plan := h.artifacts(t, "escaped-list")
 	prompt := "첫째\\literal\n둘째\t셋째\r끝"
-	if got := h.run(t, "add", "--title", "Prompt title", "--summary", "Prompt summary", "--spec", spec, "--plan", plan, "--prompt", prompt, "--json"); got != ExitOK {
+	if got := h.run(t, "add", "--title", "Prompt title", "--summary", "Prompt summary", "--spec", spec, "--plan", plan, "--worktree-branch", "ticket/test", "--prompt", prompt, "--json"); got != ExitOK {
 		t.Fatalf("add exit = %d, stderr = %s", got, h.stderr.String())
 	}
 
 	if got := h.run(t, "list"); got != ExitOK {
 		t.Fatalf("list exit = %d, stderr = %s", got, h.stderr.String())
 	}
-	if got, want := h.stdout.String(), "1\tready\tPrompt title\tdocs/superpowers/plans/escaped-list.md\t첫째\\\\literal\\n둘째\\t셋째\\r끝\n"; got != want {
+	if got, want := h.stdout.String(), "1\tready\tPrompt title\tticket/test\tdocs/superpowers/plans/escaped-list.md\t첫째\\\\literal\\n둘째\\t셋째\\r끝\n"; got != want {
 		t.Fatalf("list output = %q, want %q", got, want)
 	}
 }
@@ -554,7 +557,7 @@ func TestHumanOutputContract(t *testing.T) {
 	if got := h.run(t, "show", "1"); got != ExitOK {
 		t.Fatalf("show exit = %d, stderr = %s", got, h.stderr.String())
 	}
-	for _, value := range []string{"ID: 1", "Status: ready", "Title: Human title", "Summary: Human summary", "Spec: " + created.SpecPath, "Plan: " + created.PlanPath, "Prompt:\n" + created.Prompt} {
+	for _, value := range []string{"ID: 1", "Status: ready", "Title: Human title", "Summary: Human summary", "Spec: " + created.SpecPath, "Plan: " + created.PlanPath, "Worktree branch: " + created.WorktreeBranch, "Prompt:\n" + created.Prompt} {
 		if !strings.Contains(h.stdout.String(), value) {
 			t.Fatalf("show output %q does not contain %q", h.stdout.String(), value)
 		}
@@ -563,7 +566,7 @@ func TestHumanOutputContract(t *testing.T) {
 	if got := h.run(t, "list"); got != ExitOK {
 		t.Fatalf("list exit = %d, stderr = %s", got, h.stderr.String())
 	}
-	if got, want := h.stdout.String(), "1\tready\tHuman title\tdocs/superpowers/plans/human.md\tImplement Human title.\n"; got != want {
+	if got, want := h.stdout.String(), "1\tready\tHuman title\tticket/test\tdocs/superpowers/plans/human.md\tImplement Human title.\n"; got != want {
 		t.Fatalf("list output = %q, want %q", got, want)
 	}
 }
@@ -635,7 +638,7 @@ func TestNotFoundAndDomainErrorsMapToExitCodes(t *testing.T) {
 		h := newHarness(t)
 		spec, plan := h.artifacts(t, "duplicate")
 		h.addJSON(t, "First", "First ticket", spec, plan)
-		if got := h.run(t, "add", "--title", "Second", "--summary", "Second ticket", "--spec", spec, "--plan", plan, "--prompt", "Implement second."); got != ExitDuplicate {
+		if got := h.run(t, "add", "--title", "Second", "--summary", "Second ticket", "--spec", spec, "--plan", plan, "--worktree-branch", "ticket/test", "--prompt", "Implement second."); got != ExitDuplicate {
 			t.Fatalf("duplicate exit = %d, want %d; stderr = %s", got, ExitDuplicate, h.stderr.String())
 		}
 	})
@@ -653,7 +656,7 @@ func TestNotFoundAndDomainErrorsMapToExitCodes(t *testing.T) {
 		h := newHarness(t)
 		_, plan := h.artifacts(t, "existing")
 		missingSpec := filepath.Join(h.root, "docs", "superpowers", "specs", "missing-design.md")
-		if got := h.run(t, "add", "--title", "Missing", "--summary", "Missing artifact", "--spec", missingSpec, "--plan", plan, "--prompt", "Implement missing."); got != ExitValidation {
+		if got := h.run(t, "add", "--title", "Missing", "--summary", "Missing artifact", "--spec", missingSpec, "--plan", plan, "--worktree-branch", "ticket/test", "--prompt", "Implement missing."); got != ExitValidation {
 			t.Fatalf("missing artifact exit = %d, want %d; stderr = %s", got, ExitValidation, h.stderr.String())
 		}
 	})
@@ -668,7 +671,7 @@ func TestNotFoundAndDomainErrorsMapToExitCodes(t *testing.T) {
 		if err := os.WriteFile(misplacedPlan, []byte("# Wrong place\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if got := h.run(t, "add", "--title", "Misplaced", "--summary", "Misplaced plan", "--spec", spec, "--plan", misplacedPlan, "--prompt", "Implement misplaced."); got != ExitValidation {
+		if got := h.run(t, "add", "--title", "Misplaced", "--summary", "Misplaced plan", "--spec", spec, "--plan", misplacedPlan, "--worktree-branch", "ticket/test", "--prompt", "Implement misplaced."); got != ExitValidation {
 			t.Fatalf("misplaced artifact exit = %d, want %d; stderr = %s", got, ExitValidation, h.stderr.String())
 		}
 	})

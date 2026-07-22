@@ -13,7 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 const schema = `
 CREATE TABLE IF NOT EXISTS tickets (
@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS tickets (
     summary TEXT NOT NULL CHECK (length(trim(summary)) > 0),
     spec_path TEXT NOT NULL,
     plan_path TEXT NOT NULL,
+    worktree_branch TEXT NOT NULL CHECK (length(trim(worktree_branch)) > 0),
     prompt TEXT NOT NULL CHECK (length(trim(prompt)) > 0),
     status TEXT NOT NULL CHECK (status IN ('ready','in_progress','done','cancelled')),
     created_at TEXT NOT NULL,
@@ -34,7 +35,7 @@ CREATE INDEX IF NOT EXISTS idx_tickets_status_fifo
 ON tickets(status, created_at, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tickets_plan_path_unique
 ON tickets(plan_path) WHERE plan_path <> '';
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;
 `
 
 const migrateSchemaV2ToV3 = `
@@ -61,6 +62,13 @@ DROP TABLE tickets_v2;
 CREATE INDEX idx_tickets_status_fifo ON tickets(status, created_at, id);
 CREATE UNIQUE INDEX idx_tickets_plan_path_unique ON tickets(plan_path) WHERE plan_path <> '';
 PRAGMA user_version = 3;
+COMMIT;
+`
+
+const migrateSchemaV3ToV4 = `
+BEGIN;
+ALTER TABLE tickets ADD COLUMN worktree_branch TEXT NOT NULL DEFAULT '';
+PRAGMA user_version = 4;
 COMMIT;
 `
 
@@ -122,6 +130,13 @@ func openStore(ctx context.Context, root, databasePath string, now func() time.T
 		}
 		version = 3
 	}
+	if version == 3 {
+		if _, err := db.ExecContext(ctx, migrateSchemaV3ToV4); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("migrate ticket schema from version 3 to 4: %w", err)
+		}
+		version = 4
+	}
 	if version == 0 {
 		if _, err := db.ExecContext(ctx, schema); err != nil {
 			_ = db.Close()
@@ -134,7 +149,7 @@ func openStore(ctx context.Context, root, databasePath string, now func() time.T
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) Add(ctx context.Context, input CreateInput) (Ticket, error) {
-	title, summary, prompt, err := normalizeCreateInput(input)
+	title, summary, branch, prompt, err := normalizeCreateInput(input)
 	if err != nil {
 		return Ticket{}, err
 	}
@@ -146,36 +161,40 @@ func (s *Store) Add(ctx context.Context, input CreateInput) (Ticket, error) {
 	if err != nil {
 		return Ticket{}, ErrInvalidArtifact
 	}
-	return s.insert(ctx, title, summary, spec, plan, prompt)
+	return s.insert(ctx, title, summary, spec, plan, branch, prompt)
 }
 
 func (s *Store) FastAdd(ctx context.Context, input CreateInput) (Ticket, error) {
-	title, summary, prompt, err := normalizeCreateInput(input)
+	title, summary, branch, prompt, err := normalizeCreateInput(input)
 	if err != nil {
 		return Ticket{}, err
 	}
-	return s.insert(ctx, title, summary, "", "", prompt)
+	return s.insert(ctx, title, summary, "", "", branch, prompt)
 }
 
-func normalizeCreateInput(input CreateInput) (string, string, string, error) {
+func normalizeCreateInput(input CreateInput) (string, string, string, string, error) {
 	title := strings.TrimSpace(input.Title)
 	summary := strings.TrimSpace(input.Summary)
+	branch := strings.TrimSpace(input.WorktreeBranch)
 	prompt := strings.TrimSpace(input.Prompt)
 	if prompt == "" || strings.Contains(prompt, completionMarkerPrefix) {
-		return "", "", "", ErrInvalidPrompt
+		return "", "", "", "", ErrInvalidPrompt
 	}
 	if title == "" || summary == "" {
-		return "", "", "", ErrInvalidArtifact
+		return "", "", "", "", ErrInvalidArtifact
 	}
-	return title, summary, prompt, nil
+	if branch == "" {
+		return "", "", "", "", ErrInvalidWorktreeBranch
+	}
+	return title, summary, branch, prompt, nil
 }
 
-func (s *Store) insert(ctx context.Context, title, summary, spec, plan, prompt string) (Ticket, error) {
+func (s *Store) insert(ctx context.Context, title, summary, spec, plan, branch, prompt string) (Ticket, error) {
 	now := s.now().UTC()
 	stamp := now.Format(time.RFC3339Nano)
 	result, err := s.db.ExecContext(ctx, `
-INSERT INTO tickets(title, summary, spec_path, plan_path, prompt, status, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, 'ready', ?, ?)`, title, summary, spec, plan, prompt, stamp, stamp)
+	INSERT INTO tickets(title, summary, spec_path, plan_path, worktree_branch, prompt, status, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, 'ready', ?, ?)`, title, summary, spec, plan, branch, prompt, stamp, stamp)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed: tickets.plan_path") {
 			return Ticket{}, ErrDuplicatePlan
@@ -186,12 +205,12 @@ VALUES (?, ?, ?, ?, ?, 'ready', ?, ?)`, title, summary, spec, plan, prompt, stam
 	if err != nil {
 		return Ticket{}, fmt.Errorf("read ticket id: %w", err)
 	}
-	return Ticket{ID: id, Title: title, Summary: summary, SpecPath: spec, PlanPath: plan, Prompt: prompt, Status: StatusReady, CreatedAt: now, UpdatedAt: now}, nil
+	return Ticket{ID: id, Title: title, Summary: summary, SpecPath: spec, PlanPath: plan, WorktreeBranch: branch, Prompt: prompt, Status: StatusReady, CreatedAt: now, UpdatedAt: now}, nil
 }
 
 func (s *Store) Get(ctx context.Context, id int64) (Ticket, error) {
 	ticket, err := scanTicket(s.db.QueryRowContext(ctx, `
-SELECT id, title, summary, spec_path, plan_path, prompt, status,
+	SELECT id, title, summary, spec_path, plan_path, worktree_branch, prompt, status,
        created_at, updated_at, started_at, completed_at, cancelled_at
 FROM tickets
 WHERE id = ?`, id))
@@ -209,7 +228,7 @@ func (s *Store) List(ctx context.Context, filter *Status) ([]Ticket, error) {
 		return nil, ErrInvalidStatus
 	}
 	query := `
-SELECT id, title, summary, spec_path, plan_path, prompt, status,
+	SELECT id, title, summary, spec_path, plan_path, worktree_branch, prompt, status,
        created_at, updated_at, started_at, completed_at, cancelled_at
 FROM tickets`
 	args := []any(nil)
@@ -256,7 +275,7 @@ func (s *Store) Next(ctx context.Context) (Ticket, error) {
 	}()
 
 	ticket, err := scanTicket(conn.QueryRowContext(ctx, `
-SELECT id, title, summary, spec_path, plan_path, prompt, status,
+	SELECT id, title, summary, spec_path, plan_path, worktree_branch, prompt, status,
        created_at, updated_at, started_at, completed_at, cancelled_at
 FROM tickets
 WHERE status = 'ready'
@@ -303,7 +322,7 @@ func (s *Store) Transition(ctx context.Context, id int64, action Action) (Ticket
 	}()
 
 	ticket, err := scanTicket(conn.QueryRowContext(ctx, `
-SELECT id, title, summary, spec_path, plan_path, prompt, status,
+	SELECT id, title, summary, spec_path, plan_path, worktree_branch, prompt, status,
        created_at, updated_at, started_at, completed_at, cancelled_at
 FROM tickets
 WHERE id = ?`, id))
@@ -368,7 +387,7 @@ func (s *Store) Requeue(ctx context.Context, id int64) (Ticket, error) {
 	}()
 
 	ticket, err := scanTicket(conn.QueryRowContext(ctx, `
-SELECT id, title, summary, spec_path, plan_path, prompt, status,
+	SELECT id, title, summary, spec_path, plan_path, worktree_branch, prompt, status,
        created_at, updated_at, started_at, completed_at, cancelled_at
 FROM tickets
 WHERE id = ?`, id))
@@ -460,6 +479,7 @@ func scanTicket(scanner interface{ Scan(...any) error }) (Ticket, error) {
 		&ticket.Summary,
 		&ticket.SpecPath,
 		&ticket.PlanPath,
+		&ticket.WorktreeBranch,
 		&ticket.Prompt,
 		&status,
 		&createdAt,

@@ -47,7 +47,7 @@ func TestOpenCreatesSchemaAndAddRegistersReadyTicket(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "search")
 
-	got, err := store.Add(context.Background(), CreateInput{
+	got, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test",
 		Title:    "Search story bible",
 		Summary:  "Add indexed story-bible search.",
 		SpecPath: spec,
@@ -71,7 +71,7 @@ func TestOpenCreatesSchemaAndAddRegistersReadyTicket(t *testing.T) {
 func TestAddStoresTrimmedMultilinePrompt(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "prompt")
-	created, err := store.Add(context.Background(), CreateInput{
+	created, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test",
 		Title: "Prompt", Summary: "Store it", SpecPath: spec, PlanPath: plan,
 		Prompt: "  first line\nsecond line  ",
 	})
@@ -103,7 +103,7 @@ func TestAddRejectsInvalidPrompt(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			spec, plan := writeArtifacts(t, root, "invalid-prompt-"+tt.name)
-			_, err := store.Add(context.Background(), CreateInput{
+			_, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test",
 				Title: "Prompt", Summary: "Validate it", SpecPath: spec,
 				PlanPath: plan, Prompt: tt.prompt,
 			})
@@ -165,7 +165,7 @@ func TestOpenInitializesSchemaIdempotently(t *testing.T) {
 	t.Cleanup(func() { _ = second.Close() })
 
 	spec, plan := writeArtifacts(t, root, "idempotent")
-	if _, err := second.Add(context.Background(), CreateInput{
+	if _, err := second.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test",
 		Title:    "Idempotent schema",
 		Summary:  "Open an initialized ticket database.",
 		SpecPath: spec,
@@ -179,7 +179,7 @@ func TestOpenInitializesSchemaIdempotently(t *testing.T) {
 func TestOpenMigratesVersion2AndPreservesTickets(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "before-migration")
-	created, err := store.Add(context.Background(), CreateInput{
+	created, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test",
 		Title: "Existing", Summary: "Preserve this ticket", SpecPath: spec, PlanPath: plan, Prompt: "Keep this ticket.",
 	})
 	if err != nil {
@@ -202,11 +202,13 @@ func TestOpenMigratesVersion2AndPreservesTickets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Schema versions before v4 did not store a worktree branch.
+	created.WorktreeBranch = ""
 	if got != created {
 		t.Fatalf("migrated ticket = %#v, want %#v", got, created)
 	}
 	for _, title := range []string{"Fast one", "Fast two"} {
-		if _, err := migrated.FastAdd(context.Background(), CreateInput{Title: title, Summary: "After migration", Prompt: "Implement."}); err != nil {
+		if _, err := migrated.FastAdd(context.Background(), CreateInput{WorktreeBranch: "ticket/test", Title: title, Summary: "After migration", Prompt: "Implement."}); err != nil {
 			t.Fatalf("FastAdd(%q) after migration error = %v", title, err)
 		}
 	}
@@ -216,6 +218,35 @@ func TestOpenMigratesVersion2AndPreservesTickets(t *testing.T) {
 	}
 	if version != currentSchemaVersion {
 		t.Fatalf("schema version = %d, want %d", version, currentSchemaVersion)
+	}
+}
+
+func TestAddRequiresAndTrimsWorktreeBranch(t *testing.T) {
+	store, root := newTestStore(t)
+	spec, plan := writeArtifacts(t, root, "worktree-branch")
+
+	if _, err := store.Add(context.Background(), CreateInput{
+		Title: "Missing branch", Summary: "Reject an empty branch", SpecPath: spec, PlanPath: plan, Prompt: "Implement.",
+	}); !errors.Is(err, ErrInvalidWorktreeBranch) {
+		t.Fatalf("Add() error = %v, want ErrInvalidWorktreeBranch", err)
+	}
+
+	created, err := store.Add(context.Background(), CreateInput{
+		Title: "Branch", Summary: "Store the branch", SpecPath: spec, PlanPath: plan,
+		WorktreeBranch: "  feat/ticket-worktree  ", Prompt: "Implement.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.WorktreeBranch != "feat/ticket-worktree" {
+		t.Fatalf("WorktreeBranch = %q", created.WorktreeBranch)
+	}
+	got, err := store.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.WorktreeBranch != created.WorktreeBranch {
+		t.Fatalf("Get().WorktreeBranch = %q, want %q", got.WorktreeBranch, created.WorktreeBranch)
 	}
 }
 
@@ -229,7 +260,7 @@ func TestOpenRejectsUnsupportedFutureSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec("PRAGMA user_version = 4"); err != nil {
+	if _, err := store.db.Exec("PRAGMA user_version = 5"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -238,7 +269,7 @@ func TestOpenRejectsUnsupportedFutureSchemaVersion(t *testing.T) {
 
 	if _, err := Open(context.Background(), root, databasePath, func() time.Time { return fixedNow }); err == nil {
 		t.Fatal("Open() error = nil, want unsupported future schema rejection")
-	} else if got, want := err.Error(), "unsupported ticket schema version 4"; got != want {
+	} else if got, want := err.Error(), "unsupported ticket schema version 5"; got != want {
 		t.Fatalf("Open() error = %q, want %q", got, want)
 	}
 }
@@ -255,7 +286,7 @@ func TestAddAcceptsRepositoryRelativeArtifactPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := store.Add(context.Background(), CreateInput{
+	got, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test",
 		Title:    "Relative artifacts",
 		Summary:  "Register repository-relative artifact paths.",
 		SpecPath: relativeSpec,
@@ -273,7 +304,7 @@ func TestAddAcceptsRepositoryRelativeArtifactPaths(t *testing.T) {
 func TestAddRejectsDuplicatePlanWithoutInserting(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "search")
-	input := CreateInput{Title: "Search", Summary: "Search stories.", SpecPath: spec, PlanPath: plan, Prompt: "Implement search."}
+	input := CreateInput{WorktreeBranch: "ticket/test", Title: "Search", Summary: "Search stories.", SpecPath: spec, PlanPath: plan, Prompt: "Implement search."}
 	if _, err := store.Add(context.Background(), input); err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +317,7 @@ func TestAddRejectsDuplicatePlanWithoutInserting(t *testing.T) {
 func TestFastAddAcceptsMultipleTicketsWithoutArtifacts(t *testing.T) {
 	store, _ := newTestStore(t)
 	for i, title := range []string{"First", "Second"} {
-		created, err := store.FastAdd(context.Background(), CreateInput{
+		created, err := store.FastAdd(context.Background(), CreateInput{WorktreeBranch: "ticket/test",
 			Title: title, Summary: "No artifact ticket", Prompt: "Implement " + title + ".",
 		})
 		if err != nil {
@@ -311,11 +342,11 @@ func TestAddRejectsInvalidArtifacts(t *testing.T) {
 	}
 
 	cases := []CreateInput{
-		{Title: "", Summary: "summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement."},
-		{Title: "title", Summary: "", SpecPath: spec, PlanPath: plan, Prompt: "Implement."},
-		{Title: "title", Summary: "summary", SpecPath: filepath.Join(root, "missing.md"), PlanPath: plan, Prompt: "Implement."},
-		{Title: "title", Summary: "summary", SpecPath: spec, PlanPath: outside, Prompt: "Implement."},
-		{Title: "title", Summary: "summary", SpecPath: spec, PlanPath: symlink, Prompt: "Implement."},
+		{Title: "", Summary: "summary", SpecPath: spec, PlanPath: plan, WorktreeBranch: "ticket/test", Prompt: "Implement."},
+		{Title: "title", Summary: "", SpecPath: spec, PlanPath: plan, WorktreeBranch: "ticket/test", Prompt: "Implement."},
+		{Title: "title", Summary: "summary", SpecPath: filepath.Join(root, "missing.md"), PlanPath: plan, WorktreeBranch: "ticket/test", Prompt: "Implement."},
+		{Title: "title", Summary: "summary", SpecPath: spec, PlanPath: outside, WorktreeBranch: "ticket/test", Prompt: "Implement."},
+		{Title: "title", Summary: "summary", SpecPath: spec, PlanPath: symlink, WorktreeBranch: "ticket/test", Prompt: "Implement."},
 	}
 	for _, input := range cases {
 		if _, err := store.Add(context.Background(), input); !errors.Is(err, ErrInvalidArtifact) {
@@ -327,7 +358,7 @@ func TestAddRejectsInvalidArtifacts(t *testing.T) {
 func TestGetReturnsTicketAndRejectsUnknownID(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "get")
-	created, err := store.Add(context.Background(), CreateInput{
+	created, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test",
 		Title:    "Get ticket",
 		Summary:  "Retrieve one ticket.",
 		SpecPath: spec,
@@ -353,12 +384,12 @@ func TestGetReturnsTicketAndRejectsUnknownID(t *testing.T) {
 func TestListFiltersStatusesAndOrdersFIFOTiesByID(t *testing.T) {
 	store, root := newTestStore(t)
 	firstSpec, firstPlan := writeArtifacts(t, root, "first")
-	first, err := store.Add(context.Background(), CreateInput{Title: "First", Summary: "First summary", SpecPath: firstSpec, PlanPath: firstPlan, Prompt: "Implement first."})
+	first, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test", Title: "First", Summary: "First summary", SpecPath: firstSpec, PlanPath: firstPlan, Prompt: "Implement first."})
 	if err != nil {
 		t.Fatal(err)
 	}
 	secondSpec, secondPlan := writeArtifacts(t, root, "second")
-	second, err := store.Add(context.Background(), CreateInput{Title: "Second", Summary: "Second summary", SpecPath: secondSpec, PlanPath: secondPlan, Prompt: "Implement second."})
+	second, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test", Title: "Second", Summary: "Second summary", SpecPath: secondSpec, PlanPath: secondPlan, Prompt: "Implement second."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,12 +451,12 @@ func TestNextClaimsOldestReady(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	spec1, plan1 := writeArtifacts(t, root, "first")
-	first, err := store.Add(context.Background(), CreateInput{Title: "First", Summary: "First summary", SpecPath: spec1, PlanPath: plan1, Prompt: "Implement first."})
+	first, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test", Title: "First", Summary: "First summary", SpecPath: spec1, PlanPath: plan1, Prompt: "Implement first."})
 	if err != nil {
 		t.Fatal(err)
 	}
 	spec2, plan2 := writeArtifacts(t, root, "second")
-	if _, err := store.Add(context.Background(), CreateInput{Title: "Second", Summary: "Second summary", SpecPath: spec2, PlanPath: plan2, Prompt: "Implement second."}); err != nil {
+	if _, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test", Title: "Second", Summary: "Second summary", SpecPath: spec2, PlanPath: plan2, Prompt: "Implement second."}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -456,7 +487,7 @@ func TestNextClaimsOldestReady(t *testing.T) {
 func TestNextReturnsEmptyQueueAfterReadyTicketsLeaveQueue(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "first")
-	created, err := store.Add(context.Background(), CreateInput{Title: "First", Summary: "First summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement first."})
+	created, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test", Title: "First", Summary: "First summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement first."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +511,7 @@ func TestRequeueMovesInProgressTicketToReadyAndClearsStartedAt(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	spec, plan := writeArtifacts(t, root, "requeue")
-	created, err := store.Add(context.Background(), CreateInput{Title: "Retry", Summary: "Retry safely", SpecPath: spec, PlanPath: plan, Prompt: "Retry safely."})
+	created, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test", Title: "Retry", Summary: "Retry safely", SpecPath: spec, PlanPath: plan, Prompt: "Retry safely."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +543,7 @@ func TestRequeueMovesInProgressTicketToReadyAndClearsStartedAt(t *testing.T) {
 func TestRequeueRejectsMissingAndNonInProgressTickets(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "requeue-invalid")
-	created, err := store.Add(context.Background(), CreateInput{Title: "Ready", Summary: "Stay ready", SpecPath: spec, PlanPath: plan, Prompt: "Stay ready."})
+	created, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test", Title: "Ready", Summary: "Stay ready", SpecPath: spec, PlanPath: plan, Prompt: "Stay ready."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +572,7 @@ func TestConcurrentNextClaimsTicketOnce(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = second.Close() })
 	spec, plan := writeArtifacts(t, root, "only")
-	created, err := first.Add(context.Background(), CreateInput{Title: "Only", Summary: "Only summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement only."})
+	created, err := first.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test", Title: "Only", Summary: "Only summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement only."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +625,7 @@ func TestLifecycleTransitionsUseAdvancingClockAndResetTimestamps(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	spec, plan := writeArtifacts(t, root, "flow")
-	created, err := store.Add(context.Background(), CreateInput{Title: "Flow", Summary: "Flow summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement flow."})
+	created, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test", Title: "Flow", Summary: "Flow summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement flow."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -663,7 +694,7 @@ func TestLifecycleAllowsCancellationAndReopening(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store, root := newTestStore(t)
 			spec, plan := writeArtifacts(t, root, "flow")
-			created, err := store.Add(context.Background(), CreateInput{Title: "Flow", Summary: "Flow summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement flow."})
+			created, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test", Title: "Flow", Summary: "Flow summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement flow."})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -711,14 +742,14 @@ func TestConcurrentTransitionsFromIndependentStoresSerialize(t *testing.T) {
 	t.Cleanup(func() { _ = firstStore.Close() })
 
 	firstSpec, firstPlan := writeArtifacts(t, root, "concurrent-first")
-	first, err := firstStore.Add(context.Background(), CreateInput{
+	first, err := firstStore.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test",
 		Title: "First", Summary: "First concurrent transition", SpecPath: firstSpec, PlanPath: firstPlan, Prompt: "Implement first.",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	secondSpec, secondPlan := writeArtifacts(t, root, "concurrent-second")
-	second, err := firstStore.Add(context.Background(), CreateInput{
+	second, err := firstStore.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test",
 		Title: "Second", Summary: "Second concurrent transition", SpecPath: secondSpec, PlanPath: secondPlan, Prompt: "Implement second.",
 	})
 	if err != nil {
@@ -805,7 +836,7 @@ func TestEveryInvalidTransitionAndActionRollsBack(t *testing.T) {
 			t.Run(string(state.status)+"/"+string(action), func(t *testing.T) {
 				store, root := newTestStore(t)
 				spec, plan := writeArtifacts(t, root, "invalid")
-				created, err := store.Add(context.Background(), CreateInput{Title: "Invalid", Summary: "Invalid transition", SpecPath: spec, PlanPath: plan, Prompt: "Invalid transition."})
+				created, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test", Title: "Invalid", Summary: "Invalid transition", SpecPath: spec, PlanPath: plan, Prompt: "Invalid transition."})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -837,7 +868,7 @@ func TestEveryInvalidTransitionAndActionRollsBack(t *testing.T) {
 func TestTransitionRejectsUnknownIDsAndActions(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "flow")
-	created, err := store.Add(context.Background(), CreateInput{Title: "Flow", Summary: "Flow summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement flow."})
+	created, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test", Title: "Flow", Summary: "Flow summary", SpecPath: spec, PlanPath: plan, Prompt: "Implement flow."})
 	if err != nil {
 		t.Fatal(err)
 	}

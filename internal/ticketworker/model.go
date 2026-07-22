@@ -24,35 +24,38 @@ const (
 )
 
 var (
-	ErrNotFound          = errors.New("ticket not found")
-	ErrDuplicatePlan     = errors.New("implementation plan already registered")
-	ErrEmptyQueue        = errors.New("no ready tickets")
-	ErrInvalidStatus     = errors.New("invalid ticket status")
-	ErrInvalidTransition = errors.New("invalid ticket status transition")
-	ErrInvalidArtifact   = errors.New("invalid ticket artifact")
-	ErrInvalidPrompt     = errors.New("invalid ticket prompt")
-	ErrNotInitialized    = errors.New("ticket-worker is not initialized; run zellij-agent ticket-worker init")
+	ErrNotFound              = errors.New("ticket not found")
+	ErrDuplicatePlan         = errors.New("implementation plan already registered")
+	ErrEmptyQueue            = errors.New("no ready tickets")
+	ErrInvalidStatus         = errors.New("invalid ticket status")
+	ErrInvalidTransition     = errors.New("invalid ticket status transition")
+	ErrInvalidArtifact       = errors.New("invalid ticket artifact")
+	ErrInvalidPrompt         = errors.New("invalid ticket prompt")
+	ErrInvalidWorktreeBranch = errors.New("invalid worktree branch")
+	ErrNotInitialized        = errors.New("ticket-worker is not initialized; run zellij-agent ticket-worker init")
 )
 
 type Ticket struct {
-	ID          int64      `json:"id"`
-	Title       string     `json:"title"`
-	Summary     string     `json:"summary"`
-	SpecPath    string     `json:"spec_path"`
-	PlanPath    string     `json:"plan_path"`
-	Prompt      string     `json:"prompt"`
-	Status      Status     `json:"status"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	StartedAt   *time.Time `json:"started_at"`
-	CompletedAt *time.Time `json:"completed_at"`
-	CancelledAt *time.Time `json:"cancelled_at"`
+	ID             int64      `json:"id"`
+	Title          string     `json:"title"`
+	Summary        string     `json:"summary"`
+	SpecPath       string     `json:"spec_path"`
+	PlanPath       string     `json:"plan_path"`
+	WorktreeBranch string     `json:"worktree_branch"`
+	Prompt         string     `json:"prompt"`
+	Status         Status     `json:"status"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	StartedAt      *time.Time `json:"started_at"`
+	CompletedAt    *time.Time `json:"completed_at"`
+	CancelledAt    *time.Time `json:"cancelled_at"`
 }
 
 type CreateInput struct {
-	Title    string
-	Summary  string
-	SpecPath string
-	PlanPath string
-	Prompt   string
+	Title          string
+	Summary        string
+	SpecPath       string
+	PlanPath       string
+	WorktreeBranch string
+	Prompt         string
 }

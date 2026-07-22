@@ -191,10 +191,11 @@ Register a ticket from an approved Superpowers design and implementation plan:
   --summary "Implement indexed search" \
   --spec docs/superpowers/specs/2026-07-17-search-design.md \
   --plan docs/superpowers/plans/2026-07-17-search.md \
+  --worktree-branch feat/search \
   --prompt $'Implement the approved search plan.\nRun the complete test suite.'
 ```
 
-The spec and plan must be existing Markdown files under
+The worktree branch name is required and stored with the ticket. The spec and plan must be existing Markdown files under
 `docs/superpowers/specs/` and `docs/superpowers/plans/`. A plan can be
 registered only once. The required prompt is stored with the ticket and used
 as the coding-agent instruction. The manager appends its completion-marker
