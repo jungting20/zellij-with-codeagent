@@ -65,7 +65,7 @@ func BuildStartPlan(req StartPlanRequest) (transport.ExecutionPlanPayload, error
 		Layout:        "single-tab",
 		Tabs: []transport.ExecutionPlanTab{
 			{
-				Name:         "ticket-worker",
+				Name:         "ticket:" + filepath.Base(root),
 				LayoutString: ticketWorkerLayout,
 				Panes: []transport.ExecutionPlanPane{
 					{

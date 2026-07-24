@@ -1,6 +1,7 @@
 package ticketworker
 
 import (
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -37,7 +38,7 @@ func TestBuildStartPlanCreatesTicketManagerAnchor(t *testing.T) {
 		t.Fatalf("ticket-worker layout 50%% pane count = %d, want 2", strings.Count(layout, `size="50%"`))
 	}
 	pane := got.Tabs[0].Panes[0]
-	if got.Tabs[0].Name != "ticket-worker" || pane.Role != "ticket-manager" || pane.CWD != root {
+	if got.Tabs[0].Name != "ticket:"+filepath.Base(root) || pane.Role != "ticket-manager" || pane.CWD != root {
 		t.Fatalf("manager pane = %#v", pane)
 	}
 	if !strings.HasPrefix(got.Session, "ticket-worker-") || !strings.HasPrefix(pane.ID, "ticket-manager-") {
@@ -83,6 +84,9 @@ func TestBuildStartPlanIdentityIsStableAndProjectScoped(t *testing.T) {
 	}
 	if first.Session == other.Session || first.Tabs[0].Panes[0].ID == other.Tabs[0].Panes[0].ID {
 		t.Fatal("different roots collided")
+	}
+	if first.Tabs[0].Name != "ticket:a" || other.Tabs[0].Name != "ticket:b" {
+		t.Fatalf("repository tab names = %q, %q", first.Tabs[0].Name, other.Tabs[0].Name)
 	}
 }
 
