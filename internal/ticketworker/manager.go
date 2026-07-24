@@ -17,6 +17,7 @@ import (
 
 type ManagerStore interface {
 	Next(context.Context) (Ticket, error)
+	Get(context.Context, int64) (Ticket, error)
 	Transition(context.Context, int64, Action) (Ticket, error)
 	Requeue(context.Context, int64) (Ticket, error)
 }
@@ -485,6 +486,15 @@ func (m *Manager) retrySlots(ctx context.Context) {
 
 func (m *Manager) retryComplete(ctx context.Context, slot *managerSlot) {
 	if _, err := m.store.Transition(ctx, slot.ticket.ID, ActionDone); err != nil {
+		if errors.Is(err, ErrInvalidTransition) {
+			current, getErr := m.store.Get(ctx, slot.ticket.ID)
+			if getErr == nil && current.Status == StatusDone {
+				slot.done = true
+				slot.state = managerSlotClosing
+				m.retryClose(ctx, slot)
+				return
+			}
+		}
 		slot.lastError = err
 		m.logTicketf("complete", slot.ticket, "failed: %v", err)
 		return

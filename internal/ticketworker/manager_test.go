@@ -254,6 +254,36 @@ func TestManagerRetriesDoneBeforeClosing(t *testing.T) {
 	}
 }
 
+func TestManagerClosesPaneWhenTicketIsAlreadyDone(t *testing.T) {
+	store := &fakeManagerStore{
+		ready:            []Ticket{managerTicket(25)},
+		transitionErrors: []error{ErrInvalidTransition},
+		tickets:          map[int64]Ticket{25: {ID: 25, Status: StatusDone}},
+	}
+	client := newFakeManagerClient()
+	stream := newFakeEventStream()
+	client.streams = []*fakeEventStream{stream}
+	ticks := make(chan time.Time, 1)
+	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.inputs()) == 1 })
+
+	stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-25", Message: "ZELLIJ_AGENT_TICKET_DONE 25"}
+	waitFor(t, func() bool { return len(store.transitions()) == 1 })
+	waitFor(t, func() bool { return len(client.closed()) == 1 })
+	ticks <- time.Now()
+	time.Sleep(20 * time.Millisecond)
+	if got := len(store.transitions()); got != 1 {
+		t.Fatalf("already-done ticket retried transition: %d calls", got)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManagerSafeCreateFailureRequeuesClaimedTicket(t *testing.T) {
 	store := &fakeManagerStore{ready: []Ticket{managerTicket(9)}}
 	client := newFakeManagerClient()
@@ -636,11 +666,22 @@ type managerTransitionCall struct {
 type fakeManagerStore struct {
 	mu               sync.Mutex
 	ready            []Ticket
+	tickets          map[int64]Ticket
 	nextCalls        int
 	transitionCalls  []managerTransitionCall
 	transitionErrors []error
 	requeueCalls     []int64
 	requeueErrors    []error
+}
+
+func (f *fakeManagerStore) Get(_ context.Context, id int64) (Ticket, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ticket, ok := f.tickets[id]
+	if !ok {
+		return Ticket{}, ErrNotFound
+	}
+	return ticket, nil
 }
 
 func (f *fakeManagerStore) Next(context.Context) (Ticket, error) {
