@@ -269,8 +269,15 @@ created, err := service.CreatePane(ctx, runtime.CreatePaneRequest{
     ZellijSession: "physical-a",
     Role:          runtime.PaneRoleTest,
     Command:       []string{"go", "test", "./..."},
+    InitialInput:          "Run the assigned task.\n",
+    InitialInputReadyText: "›",
 })
 ```
+
+When `InitialInput` is set, `CreatePane` returns success only after the pane
+shows `InitialInputReadyText` (when provided) and the runtime delivers the
+input. Initialization failure rolls back the new pane; a `cleanup_partial`
+error means callers must inspect and finish cleanup.
 
 The core operations are:
 
