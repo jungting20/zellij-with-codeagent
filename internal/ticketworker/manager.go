@@ -26,26 +26,29 @@ type ManagerClient interface {
 	CreatePane(context.Context, transport.CreatePaneRequest) (transport.CreatePaneResponse, error)
 	SnapshotOutput(context.Context, string, transport.SnapshotOutputRequest) (transport.SnapshotOutputResponse, error)
 	ClosePane(context.Context, string) (transport.ClosePaneResponse, error)
+	QueueVoiceNotification(context.Context, transport.VoiceNotificationRequest) (transport.VoiceNotificationResponse, error)
 	InspectRuntime(context.Context) (transport.InspectRuntimeResponse, error)
 	StreamEvents(context.Context) (*transport.EventStream, error)
 }
 
+type NotificationBackoff func(context.Context, time.Duration) error
+
 type ManagerOptions struct {
-	Store             ManagerStore
-	Client            ManagerClient
-	Config            Config
-	VoiceNotifier     VoiceNotifier
-	Root              string
-	TaskID            string
-	AnchorPaneID      string
-	ZellijSession     string
-	RoleBin           string
-	StartupTimeout    time.Duration
-	PollInterval      time.Duration
-	ReadyPollInterval time.Duration
-	Tick              <-chan time.Time
-	Log               io.Writer
-	ManagerID         string
+	Store               ManagerStore
+	Client              ManagerClient
+	Config              Config
+	Root                string
+	TaskID              string
+	AnchorPaneID        string
+	ZellijSession       string
+	RoleBin             string
+	StartupTimeout      time.Duration
+	PollInterval        time.Duration
+	ReadyPollInterval   time.Duration
+	Tick                <-chan time.Time
+	Log                 io.Writer
+	ManagerID           string
+	NotificationBackoff NotificationBackoff
 }
 
 type managerSlotState uint8
@@ -69,27 +72,28 @@ type managerSlot struct {
 	paneCreated       bool
 	creationUncertain bool
 	done              bool
+	summary           string
 	lastError         error
 }
 
 type Manager struct {
-	store             ManagerStore
-	client            ManagerClient
-	config            Config
-	voiceNotifier     VoiceNotifier
-	root              string
-	taskID            string
-	anchorPaneID      string
-	zellijSession     string
-	roleBin           string
-	startupTimeout    time.Duration
-	pollInterval      time.Duration
-	readyPollInterval time.Duration
-	tick              <-chan time.Time
-	log               io.Writer
-	managerID         string
-	slots             []managerSlot
-	stream            *transport.EventStream
+	store               ManagerStore
+	client              ManagerClient
+	config              Config
+	root                string
+	taskID              string
+	anchorPaneID        string
+	zellijSession       string
+	roleBin             string
+	startupTimeout      time.Duration
+	pollInterval        time.Duration
+	readyPollInterval   time.Duration
+	tick                <-chan time.Time
+	log                 io.Writer
+	managerID           string
+	notificationBackoff NotificationBackoff
+	slots               []managerSlot
+	stream              *transport.EventStream
 }
 
 func NewManager(opts ManagerOptions) (*Manager, error) {
@@ -102,9 +106,6 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	opts.Config.VoiceNotificationPrefix = strings.TrimSpace(opts.Config.VoiceNotificationPrefix)
 	if err := validateConfig(opts.Config); err != nil {
 		return nil, fmt.Errorf("ticket manager config: %w", err)
-	}
-	if opts.Config.VoiceNotifications && opts.VoiceNotifier == nil {
-		return nil, fmt.Errorf("ticket manager voice notifier is required")
 	}
 	root := strings.TrimSpace(opts.Root)
 	if root == "" {
@@ -162,12 +163,28 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	if !validManagerID(managerID) {
 		return nil, fmt.Errorf("ticket manager ID must contain only letters, digits, hyphens, or underscores")
 	}
+	notificationBackoff := opts.NotificationBackoff
+	if notificationBackoff == nil {
+		notificationBackoff = waitNotificationBackoff
+	}
 	return &Manager{
-		store: opts.Store, client: opts.Client, config: opts.Config, voiceNotifier: opts.VoiceNotifier,
+		store: opts.Store, client: opts.Client, config: opts.Config,
 		root: root, taskID: taskID, anchorPaneID: anchorPaneID, zellijSession: zellijSession, roleBin: roleBin,
 		startupTimeout: startupTimeout, pollInterval: pollInterval, readyPollInterval: readyPollInterval,
-		tick: opts.Tick, log: log, managerID: managerID, slots: make([]managerSlot, opts.Config.MaxWorkers),
+		tick: opts.Tick, log: log, managerID: managerID, notificationBackoff: notificationBackoff,
+		slots: make([]managerSlot, opts.Config.MaxWorkers),
 	}, nil
+}
+
+func waitNotificationBackoff(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func newManagerID() (string, error) {
@@ -192,13 +209,6 @@ func validManagerID(value string) bool {
 }
 
 func (m *Manager) Run(ctx context.Context) error {
-	if m.voiceNotifier != nil {
-		defer func() {
-			if err := m.voiceNotifier.Close(); err != nil {
-				m.logf("voice notifier close failed: %v", err)
-			}
-		}()
-	}
 	if err := m.waitForAnchor(ctx); err != nil {
 		return err
 	}
@@ -423,9 +433,29 @@ func (m *Manager) handleEvent(ctx context.Context, event transport.Event) {
 		if slot.state != managerSlotWorking || slot.paneID != event.PaneID {
 			continue
 		}
-		if containsExactLine(event.Message, slot.marker) && m.workerExists(ctx, slot) {
-			m.completeSlot(ctx, slot)
+		if strings.TrimSpace(event.Message) == strings.TrimSpace(slot.prompt) {
+			return
 		}
+		done, summary := parseCompletionOutput(event.Message, slot.marker)
+		if !done {
+			return
+		}
+		if summary == "" {
+			response, err := m.client.SnapshotOutput(ctx, slot.paneID, transport.SnapshotOutputRequest{})
+			if err != nil {
+				m.logTicketf("completion snapshot", slot.ticket, "pane=%s failed: %v", slot.paneID, err)
+				return
+			}
+			if !m.matchesWorkerPane(response.Pane, slot, true) {
+				return
+			}
+			_, snapshotSummary := parseCompletionOutput(response.Output, slot.marker)
+			summary = snapshotSummary
+		} else if !m.workerExists(ctx, slot) {
+			return
+		}
+		slot.summary = summary
+		m.completeSlot(ctx, slot)
 		return
 	}
 }
@@ -473,10 +503,12 @@ func (m *Manager) retrySlots(ctx context.Context) {
 }
 
 func (m *Manager) retryComplete(ctx context.Context, slot *managerSlot) {
-	if _, err := m.store.Transition(ctx, slot.ticket.ID, ActionDone); err != nil {
+	completed, err := m.store.Transition(ctx, slot.ticket.ID, ActionDone)
+	if err != nil {
 		if errors.Is(err, ErrInvalidTransition) {
 			current, getErr := m.store.Get(ctx, slot.ticket.ID)
 			if getErr == nil && current.Status == StatusDone {
+				slot.ticket = current
 				slot.done = true
 				slot.state = managerSlotClosing
 				m.retryClose(ctx, slot)
@@ -487,6 +519,7 @@ func (m *Manager) retryComplete(ctx context.Context, slot *managerSlot) {
 		m.logTicketf("complete", slot.ticket, "failed: %v", err)
 		return
 	}
+	slot.ticket = completed
 	slot.done = true
 	slot.state = managerSlotClosing
 	m.retryClose(ctx, slot)
@@ -499,18 +532,66 @@ func (m *Manager) retryClose(ctx context.Context, slot *managerSlot) {
 		m.logTicketf("close", slot.ticket, "pane=%s failed: %v", slot.paneID, err)
 		return
 	}
-	m.finalizeCompletedSlot(slot)
+	m.finalizeCompletedSlot(ctx, slot)
 }
 
-func (m *Manager) finalizeCompletedSlot(slot *managerSlot) {
+func (m *Manager) finalizeCompletedSlot(ctx context.Context, slot *managerSlot) {
+	defer func() { *slot = managerSlot{} }()
 	if m.config.VoiceNotifications {
-		message := fmt.Sprintf("%s:%d:완료", m.config.VoiceNotificationPrefix, slot.ticket.ID)
-		if err := m.voiceNotifier.Notify(message); err != nil {
+		if err := m.queueCompletionVoice(ctx, slot); err != nil {
 			m.logTicketf("notify", slot.ticket, "failed: %v", err)
 		}
 	}
 	m.logTicketf("closed", slot.ticket, "pane=%s", slot.paneID)
-	*slot = managerSlot{}
+}
+
+func completionVoiceRequestID(taskID string, ticket Ticket) (string, error) {
+	if ticket.CompletedAt == nil {
+		return "", errors.New("completed ticket is missing completed_at")
+	}
+	return fmt.Sprintf("%s:%d:%d", taskID, ticket.ID, ticket.CompletedAt.UTC().UnixNano()), nil
+}
+
+func (m *Manager) queueCompletionVoice(ctx context.Context, slot *managerSlot) error {
+	requestID, err := completionVoiceRequestID(m.taskID, slot.ticket)
+	if err != nil {
+		return err
+	}
+	request := transport.VoiceNotificationRequest{
+		RequestID: requestID,
+		Prefix:    m.config.VoiceNotificationPrefix,
+		TicketID:  slot.ticket.ID,
+		Summary:   slot.summary,
+	}
+	delays := [...]time.Duration{100 * time.Millisecond, 200 * time.Millisecond}
+	for attempt := 0; attempt < 3; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, time.Second)
+		response, requestErr := m.client.QueueVoiceNotification(attemptCtx, request)
+		cancel()
+		if requestErr == nil {
+			switch response.Status {
+			case "queued", "duplicate":
+				return nil
+			default:
+				return fmt.Errorf("unexpected voice notification status %q", response.Status)
+			}
+		}
+		if !retryVoiceNotificationError(requestErr) || attempt == len(delays) {
+			return requestErr
+		}
+		if err := m.notificationBackoff(ctx, delays[attempt]); err != nil {
+			return err
+		}
+	}
+	return errors.New("queue voice notification attempts exhausted")
+}
+
+func retryVoiceNotificationError(err error) bool {
+	var clientErr *transport.ClientError
+	if errors.As(err, &clientErr) {
+		return clientErr.APIError.Retryable
+	}
+	return true
 }
 
 func (m *Manager) retryCleanup(ctx context.Context, slot *managerSlot) {
@@ -626,7 +707,9 @@ func (m *Manager) recoverSnapshots(ctx context.Context) {
 			}
 			continue
 		}
-		if m.matchesWorkerPane(response.Pane, slot, true) && containsExactLine(response.Output, slot.marker) {
+		done, summary := parseCompletionOutput(response.Output, slot.marker)
+		if m.matchesWorkerPane(response.Pane, slot, true) && done {
+			slot.summary = summary
 			m.completeSlot(ctx, slot)
 		}
 	}
@@ -661,7 +744,7 @@ func (m *Manager) shutdown() error {
 			*slot = managerSlot{}
 			continue
 		}
-		m.finalizeCompletedSlot(slot)
+		m.finalizeCompletedSlot(cleanupCtx, slot)
 	}
 	return errors.Join(cleanupErrors...)
 }
