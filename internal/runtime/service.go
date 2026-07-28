@@ -119,7 +119,13 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 	}
 	response, createErr := s.createPaneOnce(ctx, req, id)
 	if createErr == nil {
-		createErr = s.initializeCreatedPane(ctx, response, req.InitialInput, req.InitialInputReadyText)
+		if err := s.initializeCreatedPane(ctx, response, req.InitialInput, req.InitialInputReadyText); err != nil {
+			cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			cleanupErr := s.cleanupCreatedPane(cleanupCtx, response.record)
+			cancelCleanup()
+			response = CreatePaneResponse{}
+			createErr = paneInitializationError(err, cleanupErr)
+		}
 	}
 	s.finishCreatePane(call, response, createErr)
 	return response, createErr

@@ -10,14 +10,15 @@ import (
 )
 
 var (
-	ErrPaneNotFound          = errors.New("runtime pane not found")
-	ErrMissingPaneID         = errors.New("runtime pane id is required")
-	ErrCleanupPartial        = errors.New("runtime cleanup partially failed")
-	ErrSessionNotFound       = errors.New("runtime session not found")
-	ErrTabNotFound           = errors.New("runtime tab not found")
-	ErrInvalidMessage        = errors.New("runtime: invalid message")
-	ErrInvalidPaneTarget     = errors.New("runtime: invalid pane target")
-	ErrZellijSessionRequired = errors.New("runtime: zellij session is required")
+	ErrPaneNotFound             = errors.New("runtime pane not found")
+	ErrMissingPaneID            = errors.New("runtime pane id is required")
+	ErrPaneInitializationFailed = errors.New("runtime pane initialization failed")
+	ErrCleanupPartial           = errors.New("runtime cleanup partially failed")
+	ErrSessionNotFound          = errors.New("runtime session not found")
+	ErrTabNotFound              = errors.New("runtime tab not found")
+	ErrInvalidMessage           = errors.New("runtime: invalid message")
+	ErrInvalidPaneTarget        = errors.New("runtime: invalid pane target")
+	ErrZellijSessionRequired    = errors.New("runtime: zellij session is required")
 )
 
 type (

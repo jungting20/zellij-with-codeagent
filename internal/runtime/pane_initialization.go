@@ -13,6 +13,32 @@ import (
 
 const paneInitialInputPollInterval = 50 * time.Millisecond
 
+func (s *Service) cleanupCreatedPane(ctx context.Context, record registry.PaneRecord) error {
+	if err := s.backend.ClosePane(ctx, zellij.ClosePaneRequest{
+		Session: string(record.SessionID),
+		PaneID:  zellij.PaneID(record.ZellijPaneID),
+	}); err != nil {
+		return err
+	}
+	if s.subs != nil {
+		s.subs.StopPaneGeneration(record.ID, record.Generation)
+	}
+	if _, err := s.registry.RemovePaneGeneration(record.ID, record.Generation); err != nil &&
+		!errors.Is(err, registry.ErrNotFound) &&
+		!errors.Is(err, registry.ErrStaleRecord) {
+		return err
+	}
+	return nil
+}
+
+func paneInitializationError(cause, cleanupErr error) error {
+	initializationErr := errors.Join(ErrPaneInitializationFailed, cause)
+	if cleanupErr == nil {
+		return initializationErr
+	}
+	return errors.Join(initializationErr, fmt.Errorf("%w: %v", ErrCleanupPartial, cleanupErr))
+}
+
 func (s *Service) initializeCreatedPane(
 	ctx context.Context,
 	created CreatePaneResponse,
