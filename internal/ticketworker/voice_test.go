@@ -3,20 +3,23 @@ package ticketworker
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf16"
 )
 
 func TestResolveSpeechBackend(t *testing.T) {
-	const windowsScript = "Add-Type -AssemblyName System.Speech; $speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer; $speaker.Speak($args[0])"
-
 	tests := []struct {
 		name        string
 		goos        string
@@ -39,7 +42,7 @@ func TestResolveSpeechBackend(t *testing.T) {
 				"espeak":  "/usr/bin/espeak",
 			},
 			wantPath: "/usr/bin/spd-say",
-			wantArgs: []string{"hello"},
+			wantArgs: []string{"--wait", "hello"},
 		},
 		{
 			name:        "Linux falls back to espeak",
@@ -56,14 +59,14 @@ func TestResolveSpeechBackend(t *testing.T) {
 				"pwsh.exe":       `C:\Program Files\PowerShell\7\pwsh.exe`,
 			},
 			wantPath: `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
-			wantArgs: []string{"-NoProfile", "-NonInteractive", "-Command", windowsScript, "hello"},
+			wantArgs: nil,
 		},
 		{
 			name:        "Windows falls back to PowerShell Core",
 			goos:        "windows",
 			executables: map[string]string{"pwsh.exe": `C:\Program Files\PowerShell\7\pwsh.exe`},
 			wantPath:    `C:\Program Files\PowerShell\7\pwsh.exe`,
-			wantArgs:    []string{"-NoProfile", "-NonInteractive", "-Command", windowsScript, "hello"},
+			wantArgs:    nil,
 		},
 	}
 
@@ -73,10 +76,148 @@ func TestResolveSpeechBackend(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if backend.path != tt.wantPath || !reflect.DeepEqual(backend.args("hello"), tt.wantArgs) {
-				t.Fatalf("backend = path:%q args:%q", backend.path, backend.args("hello"))
+			if backend.path != tt.wantPath {
+				t.Fatalf("backend path = %q, want %q", backend.path, tt.wantPath)
+			}
+			if got := backend.args("hello"); tt.wantArgs != nil && !reflect.DeepEqual(got, tt.wantArgs) {
+				t.Fatalf("backend args = %q, want %q", got, tt.wantArgs)
 			}
 		})
+	}
+}
+
+func TestSpeechBackendWindowsEncodedCommandPreservesMessage(t *testing.T) {
+	message := "hello'; Write-Error 'owned'\n$([char]0x41) 안녕 🔊"
+	tests := []struct {
+		name        string
+		executables map[string]string
+	}{
+		{
+			name:        "Windows PowerShell",
+			executables: map[string]string{"powershell.exe": `C:\Windows\powershell.exe`},
+		},
+		{
+			name:        "PowerShell Core",
+			executables: map[string]string{"pwsh.exe": `C:\Program Files\PowerShell\7\pwsh.exe`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend, err := resolveSpeechBackend("windows", mapLookPath(tt.executables))
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := backend.args(message)
+			if len(args) != 4 {
+				t.Fatalf("args = %q, want three fixed flags and one encoded command", args)
+			}
+			if want := []string{"-NoProfile", "-NonInteractive", "-EncodedCommand"}; !reflect.DeepEqual(args[:3], want) {
+				t.Fatalf("args prefix = %q, want %q", args[:3], want)
+			}
+			for _, arg := range args {
+				if strings.Contains(arg, message) {
+					t.Fatalf("raw message appears in process argument %q", arg)
+				}
+			}
+
+			command := decodeUTF16LEBase64(t, args[3])
+			if strings.Contains(command, message) {
+				t.Fatalf("raw message appears in decoded PowerShell command %q", command)
+			}
+			const messagePrefix = "$message = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('"
+			rest, ok := strings.CutPrefix(command, messagePrefix)
+			if !ok {
+				t.Fatalf("decoded command %q does not start with safe message decoding", command)
+			}
+			encodedMessage, rest, ok := strings.Cut(rest, "')); ")
+			if !ok {
+				t.Fatalf("decoded command %q does not terminate encoded message", command)
+			}
+			messageBytes, err := base64.StdEncoding.DecodeString(encodedMessage)
+			if err != nil {
+				t.Fatalf("decode embedded message: %v", err)
+			}
+			if got := string(messageBytes); got != message {
+				t.Fatalf("decoded message = %q, want %q", got, message)
+			}
+			if strings.Contains(rest, "$args[0]") || !strings.Contains(rest, "$speaker.Speak($message)") {
+				t.Fatalf("decoded command uses unsafe speech invocation: %q", command)
+			}
+		})
+	}
+}
+
+func decodeUTF16LEBase64(t *testing.T, value string) string {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		t.Fatalf("decode PowerShell command: %v", err)
+	}
+	if len(data)%2 != 0 {
+		t.Fatalf("encoded PowerShell command has odd byte length %d", len(data))
+	}
+	units := make([]uint16, len(data)/2)
+	for i := range units {
+		units[i] = binary.LittleEndian.Uint16(data[i*2:])
+	}
+	return string(utf16.Decode(units))
+}
+
+func TestSpeechBackendCancellationIsNotLogged(t *testing.T) {
+	readyPath := filepath.Join(t.TempDir(), "ready")
+	backend := speechBackend{
+		path: os.Args[0],
+		args: func(string) []string {
+			return []string{"-test.run=^TestSpeechBackendHelperProcess$", "--", "--speech-backend-helper", readyPath}
+		},
+	}
+	var log bytes.Buffer
+	notifier := newSerialVoiceNotifier(backend.speak, &log)
+	t.Cleanup(func() { _ = notifier.Close() })
+
+	if err := notifier.Notify("cancel me"); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, readyPath)
+	if err := notifier.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := log.String(); got != "" {
+		t.Fatalf("cancellation log = %q, want empty", got)
+	}
+}
+
+func TestSpeechBackendHelperProcess(t *testing.T) {
+	const marker = "--speech-backend-helper"
+	for i, arg := range os.Args {
+		if arg != marker {
+			continue
+		}
+		if i+1 >= len(os.Args) {
+			t.Fatal("helper ready path is missing")
+		}
+		if err := os.WriteFile(os.Args[i+1], []byte("ready"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(30 * time.Second)
+		return
+	}
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for helper file %s", path)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -297,6 +438,60 @@ func TestSerialVoiceNotifierCloseCancelsActiveAndDiscardsPending(t *testing.T) {
 	}
 	if err := notifier.Close(); err != nil {
 		t.Fatalf("second Close() error = %v", err)
+	}
+}
+
+func TestSerialVoiceNotifierConcurrentNotifyAndClose(t *testing.T) {
+	const notifyCount = 128
+
+	notifier := newSerialVoiceNotifier(func(ctx context.Context, _ string) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}, io.Discard)
+	start := make(chan struct{})
+	results := make(chan error, notifyCount)
+	var notifies sync.WaitGroup
+	for i := 0; i < notifyCount; i++ {
+		notifies.Add(1)
+		go func() {
+			defer notifies.Done()
+			<-start
+			results <- notifier.Notify("racing")
+		}()
+	}
+	closeResult := make(chan error, 1)
+	go func() {
+		<-start
+		closeResult <- notifier.Close()
+	}()
+
+	close(start)
+	notifyDone := make(chan struct{})
+	go func() {
+		notifies.Wait()
+		close(notifyDone)
+	}()
+	select {
+	case <-notifyDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("concurrent Notify calls hung during Close")
+	}
+	for i := 0; i < notifyCount; i++ {
+		err := <-results
+		if err != nil && !errors.Is(err, errVoiceNotifierClosed) {
+			t.Fatalf("concurrent Notify() error = %v", err)
+		}
+	}
+	select {
+	case err := <-closeResult:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close hung while racing with Notify")
+	}
+	if err := notifier.Notify("after close"); !errors.Is(err, errVoiceNotifierClosed) {
+		t.Fatalf("Notify() after Close() error = %v, want %v", err, errVoiceNotifierClosed)
 	}
 }
 

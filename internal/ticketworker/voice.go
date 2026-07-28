@@ -2,6 +2,8 @@ package ticketworker
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"unicode/utf16"
 )
 
 var errVoiceNotifierClosed = errors.New("voice notifier is closed")
@@ -24,7 +27,11 @@ type speechBackend struct {
 }
 
 func (b speechBackend) speak(ctx context.Context, message string) error {
-	return exec.CommandContext(ctx, b.path, b.args(message)...).Run()
+	err := exec.CommandContext(ctx, b.path, b.args(message)...).Run()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
 }
 
 func resolveSpeechBackend(goos string, lookPath func(string) (string, error)) (speechBackend, error) {
@@ -34,9 +41,11 @@ func resolveSpeechBackend(goos string, lookPath func(string) (string, error)) (s
 	}
 
 	messageOnly := func(message string) []string { return []string{message} }
+	spdSayArgs := func(message string) []string { return []string{"--wait", message} }
 	windowsArgs := func(message string) []string {
-		const script = "Add-Type -AssemblyName System.Speech; $speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer; $speaker.Speak($args[0])"
-		return []string{"-NoProfile", "-NonInteractive", "-Command", script, message}
+		encodedMessage := base64.StdEncoding.EncodeToString([]byte(message))
+		script := fmt.Sprintf("$message = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('%s')); Add-Type -AssemblyName System.Speech; $speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer; $speaker.Speak($message)", encodedMessage)
+		return []string{"-NoProfile", "-NonInteractive", "-EncodedCommand", encodePowerShellCommand(script)}
 	}
 
 	var candidates []candidate
@@ -45,7 +54,7 @@ func resolveSpeechBackend(goos string, lookPath func(string) (string, error)) (s
 		candidates = []candidate{{name: "say", args: messageOnly}}
 	case "linux":
 		candidates = []candidate{
-			{name: "spd-say", args: messageOnly},
+			{name: "spd-say", args: spdSayArgs},
 			{name: "espeak", args: messageOnly},
 		}
 	case "windows":
@@ -67,6 +76,15 @@ func resolveSpeechBackend(goos string, lookPath func(string) (string, error)) (s
 		return speechBackend{}, fmt.Errorf("resolve speech backend for OS %q: unsupported OS (candidates: none)", goos)
 	}
 	return speechBackend{}, fmt.Errorf("resolve speech backend for OS %q: no executable found (candidates: %s)", goos, strings.Join(names, ", "))
+}
+
+func encodePowerShellCommand(command string) string {
+	units := utf16.Encode([]rune(command))
+	data := make([]byte, len(units)*2)
+	for i, unit := range units {
+		binary.LittleEndian.PutUint16(data[i*2:], unit)
+	}
+	return base64.StdEncoding.EncodeToString(data)
 }
 
 func NewNativeVoiceNotifier(log io.Writer) VoiceNotifier {
