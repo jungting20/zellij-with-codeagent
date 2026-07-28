@@ -14,7 +14,8 @@
 - Keep `ZELLIJ_AGENT_TICKET_DONE <positive ID>` backward-compatible.
 - Accept at most an 8 KiB body, 256-byte request ID, 128-code-point prefix, and 4 KiB one-line summary.
 - Strip control characters, collapse whitespace, and speak at most 120 summary code points.
-- Cap pending items at 256 and remembered accepted IDs at 1,024 per daemon lifetime.
+- Cap pending items at 256 and total remembered accepted IDs (active plus recently completed) at 1,024 per daemon lifetime.
+- Preserve raw request IDs at or below 256 bytes and use the documented deterministic SHA-256 task-ID fallback above that limit.
 - Use one-second attempts, at most three attempts, and 100 ms then 200 ms backoff.
 - Notification failure never changes `done`, reopens a pane, or retains a completed slot.
 - Daemon shutdown cancels speech and discards the queue; add no persistence.
@@ -65,7 +66,7 @@ func (*Service) Enqueue(Notification) (EnqueueStatus, error)
 func (*Service) Close() error
 ```
 
-Cover formatting with and without summary, control/whitespace normalization, 120-rune truncation, FIFO, no overlap, queued/in-flight/recent deduplication, 256-capacity rejection, rejected-ID retry, 1,024-ID eviction, command failure continuation, close cancellation/discard, and concurrent enqueue/close.
+Cover formatting with and without summary, control/whitespace normalization, 120-rune truncation, FIFO, no overlap, queued/in-flight/recent deduplication, 256-capacity rejection, rejected-ID retry, the combined 1,024-ID invariant at default and custom boundaries, active-pressure eviction, concurrent acceptance, command failure continuation, close cancellation/discard, and concurrent enqueue/close.
 
 - [ ] **Step 2: Verify the tests fail before implementation**
 
@@ -92,7 +93,7 @@ func formatMessage(n Notification) string {
 }
 ```
 
-Under one mutex, check closed, duplicate, then capacity; add `RequestID` to `seen` only after acceptance. One goroutine speaks FIFO items serially. `Close` is idempotent, clears pending items, cancels the active process context, and waits for worker exit.
+After applying defaults, reject options where `Capacity + 1 > RecentLimit`; the extra item is the possible in-flight notification. Under one mutex, check closed, duplicate, then capacity. Before accepting a new active ID, evict oldest completed IDs until active plus recent IDs fit `RecentLimit`, and add `RequestID` only after acceptance. One goroutine speaks FIFO items serially. `Close` is idempotent, clears pending items, cancels the active process context, and waits for worker exit.
 
 - [ ] **Step 4: Port backend code and tests, then verify**
 
@@ -204,7 +205,7 @@ type daemonVoiceService interface {
 }
 ```
 
-Test field conversion, queued/duplicate conversion, `voice.ErrQueueFull` to `transport.ErrVoiceQueueFull`, canceled context rejection, and exactly one `Close` after `RunContext` server shutdown.
+Test field conversion, queued/duplicate conversion, `voice.ErrQueueFull` to `transport.ErrVoiceQueueFull`, canceled context rejection, and exactly one `Close` after `RunContext` server shutdown. Require `os.ErrNotExist` when the fake inspects the socket during `Close`, and verify a returned close error is logged.
 
 - [ ] **Step 2: Verify daemon tests fail**
 
@@ -221,7 +222,7 @@ func (a voiceQueueAdapter) QueueVoiceNotification(
 ) (transport.VoiceNotificationResponse, error)
 ```
 
-Check `ctx.Err`, translate fields/status/errors, and add an overridable factory returning `daemonVoiceService`, defaulting to `voice.NewNativeService(stdout)`. In `serve`, create the service before `transport.NewServer`, pass the adapter, and defer `Close`; `ListenAndServe` stops HTTP before the deferred voice close.
+Check `ctx.Err`, translate fields/status/errors, and add an overridable factory returning `daemonVoiceService`, defaulting to `voice.NewNativeService(stdout)`. In `serve`, create the service before `transport.NewServer`, pass the adapter, and defer `Close`; `ListenAndServe` stops HTTP before the deferred voice close, and any close error is written to the daemon error log.
 
 - [ ] **Step 4: Verify daemon plus transport**
 
@@ -255,7 +256,7 @@ const completionSummaryPrefix = "ZELLIJ_AGENT_TICKET_SUMMARY"
 func parseCompletionOutput(output, marker string) (done bool, summary string)
 ```
 
-Test the exact final-two-line instruction, nearest preceding summary, marker-only compatibility, empty summary, wrong marker, display bullet prefix, multiple summaries, and summary-after-marker rejection.
+Test the exact final-two-line instruction, an exactly adjacent summary, marker-only compatibility, empty summary, unrelated intervening output, summary-like stored prompt text, mixed foreign/target markers, wrong marker, display bullet prefix, multiple summaries, and summary-after-marker rejection.
 
 - [ ] **Step 2: Verify prompt tests fail**
 
@@ -265,7 +266,7 @@ Expected: FAIL because summary support is absent.
 
 - [ ] **Step 3: Implement prompt and parser**
 
-Scan lines, normalize existing optional `• ` display prefixes, remember the latest non-empty summary, and return it only at the exact requested marker. Keep a `containsExactLine` compatibility wrapper until Task 5 replaces call sites. Tell the agent in Korean to emit a concise actual-change summary followed by the unchanged marker.
+Scan lines and normalize existing optional `• ` display prefixes. At the exact requested marker, inspect only the immediately preceding normalized line and return its non-empty summary value when it has the exact prefix; never carry a summary across unrelated output, blanks, or foreign markers. Keep marker-only completion compatible and retain a `containsExactLine` compatibility wrapper until Task 5 replaces call sites. Tell the agent in Korean to emit a concise actual-change summary followed by the unchanged marker.
 
 - [ ] **Step 4: Verify backward compatibility**
 
@@ -318,10 +319,14 @@ Add `summary string` to `managerSlot`. Parse event output; if it has the marker 
 
 ```go
 func completionVoiceRequestID(taskID string, ticket Ticket) (string, error) {
-	if ticket.CompletedAt == nil {
-		return "", errors.New("completed ticket is missing completed_at")
-	}
-	return fmt.Sprintf("%s:%d:%d", taskID, ticket.ID, ticket.CompletedAt.UTC().UnixNano()), nil
+    if ticket.CompletedAt == nil {
+        return "", errors.New("completed ticket is missing completed_at")
+    }
+    completedAt := ticket.CompletedAt.UTC().UnixNano()
+    raw := fmt.Sprintf("%s:%d:%d", taskID, ticket.ID, completedAt)
+    if len(raw) <= 256 { return raw, nil }
+    taskHash := sha256.Sum256([]byte(taskID))
+    return fmt.Sprintf("sha256:%x:%d:%d", taskHash, ticket.ID, completedAt), nil
 }
 ```
 
@@ -332,7 +337,7 @@ func (m *Manager) finalizeCompletedSlot(ctx context.Context, slot *managerSlot)
 func (m *Manager) queueCompletionVoice(ctx context.Context, slot *managerSlot) error
 ```
 
-Each attempt gets `context.WithTimeout(ctx, time.Second)`. Treat queued/duplicate as success. Retry network ambiguity and `ClientError.APIError.Retryable`; do not retry non-retryable client errors. Use injected 100/200 ms backoff, log final failure, and clear the slot unconditionally.
+Each attempt gets `context.WithTimeout(ctx, time.Second)`. Treat queued/duplicate as success. Retry network ambiguity, retryable API errors, and all structured HTTP 5xx responses even when `ClientError.APIError.Retryable` is false; do not retry structured HTTP 4xx validation errors. Use injected 100/200 ms backoff, log final failure, and clear the slot unconditionally.
 
 - [ ] **Step 5: Remove manager-owned voice wiring**
 
@@ -381,11 +386,11 @@ Expected: no formatting errors and no feature-unrelated changes in the isolated 
 
 - [ ] **Step 2: Run complete and race suites**
 
-Run: `go test ./...`
+Run: `go test ./... -count=1`
 
 Expected: PASS for all packages.
 
-Run: `go test -race ./internal/voice ./internal/transport ./internal/ticketworker -count=1`
+Run: `go test -race ./internal/voice ./internal/transport ./internal/ticketworker ./internal/cli/daemon -count=1`
 
 Expected: PASS with no races.
 
@@ -404,7 +409,7 @@ Expected: every command exits zero and the executable is never overwritten in pl
 
 ```bash
 git status --short
-git log -6 --oneline
+git log --oneline 8ea57ef..HEAD
 ```
 
-Expected: the isolated feature worktree is clean and Tasks 1-5 appear as Korean commits. The original main checkout still retains its pre-existing `.zellij-agent/worker/config.yaml` modification.
+Expected: the isolated feature worktree is clean and every implementation/fix commit after the implementation-plan commit appears with a Korean message. The original main checkout still retains its pre-existing `.zellij-agent/worker/config.yaml` modification.

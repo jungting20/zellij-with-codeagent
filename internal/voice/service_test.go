@@ -110,6 +110,36 @@ func TestNewServiceEnforcesHardLimits(t *testing.T) {
 	}
 }
 
+func TestNewServiceRequiresRememberedLimitForPendingAndInflightIDs(t *testing.T) {
+	speak := func(context.Context, string) error { return nil }
+	for _, tt := range []struct {
+		name    string
+		options Options
+		wantErr bool
+	}{
+		{name: "defaults", options: Options{Speak: speak}},
+		{name: "exact boundary", options: Options{Capacity: 2, RecentLimit: 3, Speak: speak}},
+		{name: "missing inflight allowance", options: Options{Capacity: 2, RecentLimit: 2, Speak: speak}, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			service, err := NewService(tt.options)
+			if tt.wantErr {
+				if err == nil {
+					_ = service.Close()
+					t.Fatal("NewService() error = nil, want incompatible limit error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("NewService() error = %v", err)
+			}
+			if err := service.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestServiceDeduplicatesQueuedInflightAndRecentIDs(t *testing.T) {
 	started := make(chan string, 2)
 	release := make(chan struct{})
@@ -196,10 +226,94 @@ func TestServiceEvictsOldestRecentID(t *testing.T) {
 	eventuallyEnqueue(t, service, Notification{RequestID: "request-0", Prefix: "ticket", TicketID: 0})
 }
 
+func TestServiceDefaultLimitIncludesPendingInflightAndRecentIDs(t *testing.T) {
+	var block atomic.Bool
+	activeStarted := make(chan struct{}, 1)
+	service := newTestService(t, Options{Speak: func(ctx context.Context, _ string) error {
+		if !block.Load() {
+			return nil
+		}
+		activeStarted <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	}})
+
+	for i := 0; i < DefaultRecentLimit; i++ {
+		mustEnqueue(t, service, Notification{RequestID: fmt.Sprintf("recent-%d", i)})
+		waitForRememberedCounts(t, service, 0, i+1)
+	}
+	block.Store(true)
+	mustEnqueue(t, service, Notification{RequestID: "active"})
+	select {
+	case <-activeStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for active speech")
+	}
+	for i := 0; i < DefaultCapacity; i++ {
+		mustEnqueue(t, service, Notification{RequestID: fmt.Sprintf("pending-%d", i)})
+	}
+
+	active, recent := rememberedCounts(service)
+	if active != DefaultCapacity+1 || recent != DefaultRecentLimit-(DefaultCapacity+1) {
+		t.Fatalf("remembered counts = active %d + recent %d, want %d + %d", active, recent, DefaultCapacity+1, DefaultRecentLimit-(DefaultCapacity+1))
+	}
+}
+
+func TestServiceConcurrentActivePressurePreservesTotalRememberedLimit(t *testing.T) {
+	const (
+		capacity = 8
+		limit    = capacity + 1
+	)
+	var block atomic.Bool
+	activeStarted := make(chan struct{}, 1)
+	service := newTestService(t, Options{Capacity: capacity, RecentLimit: limit, Speak: func(ctx context.Context, _ string) error {
+		if !block.Load() {
+			return nil
+		}
+		activeStarted <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	}})
+	for i := 0; i < limit; i++ {
+		mustEnqueue(t, service, Notification{RequestID: fmt.Sprintf("recent-%d", i)})
+		waitForRememberedCounts(t, service, 0, i+1)
+	}
+	block.Store(true)
+	mustEnqueue(t, service, Notification{RequestID: "active"})
+	select {
+	case <-activeStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for active speech")
+	}
+
+	start := make(chan struct{})
+	results := make(chan error, capacity)
+	for i := 0; i < capacity; i++ {
+		go func(i int) {
+			<-start
+			status, err := service.Enqueue(Notification{RequestID: fmt.Sprintf("pending-%d", i)})
+			if err == nil && status != EnqueueStatusQueued {
+				err = fmt.Errorf("status = %q, want queued", status)
+			}
+			results <- err
+		}(i)
+	}
+	close(start)
+	for i := 0; i < capacity; i++ {
+		if err := <-results; err != nil {
+			t.Fatalf("concurrent Enqueue() error = %v", err)
+		}
+	}
+	active, recent := rememberedCounts(service)
+	if active+recent > limit {
+		t.Fatalf("remembered IDs = active %d + recent %d = %d, want at most %d", active, recent, active+recent, limit)
+	}
+}
+
 func TestServiceKeepsInflightIDDuplicateUnderRecentLimitPressure(t *testing.T) {
 	historyDone := make(chan struct{})
 	activeStarted := make(chan struct{})
-	service := newTestService(t, Options{RecentLimit: 1, Speak: func(ctx context.Context, message string) error {
+	service := newTestService(t, Options{Capacity: 1, RecentLimit: 2, Speak: func(ctx context.Context, message string) error {
 		switch message {
 		case "ticket 1 완료":
 			close(historyDone)
@@ -382,6 +496,27 @@ func eventuallyEnqueue(t *testing.T, service *Service, notification Notification
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %q eviction", notification.RequestID)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func rememberedCounts(service *Service) (active, recent int) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	return len(service.active), len(service.recent)
+}
+
+func waitForRememberedCounts(t *testing.T, service *Service, wantActive, wantRecent int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		active, recent := rememberedCounts(service)
+		if active == wantActive && recent == wantRecent {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("remembered counts = active %d + recent %d, want %d + %d", active, recent, wantActive, wantRecent)
 		}
 		time.Sleep(time.Millisecond)
 	}

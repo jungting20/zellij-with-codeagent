@@ -3,10 +3,12 @@ package ticketworker
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -548,7 +550,13 @@ func completionVoiceRequestID(taskID string, ticket Ticket) (string, error) {
 	if ticket.CompletedAt == nil {
 		return "", errors.New("completed ticket is missing completed_at")
 	}
-	return fmt.Sprintf("%s:%d:%d", taskID, ticket.ID, ticket.CompletedAt.UTC().UnixNano()), nil
+	completedAt := ticket.CompletedAt.UTC().UnixNano()
+	raw := fmt.Sprintf("%s:%d:%d", taskID, ticket.ID, completedAt)
+	if len(raw) <= 256 {
+		return raw, nil
+	}
+	taskHash := sha256.Sum256([]byte(taskID))
+	return fmt.Sprintf("sha256:%x:%d:%d", taskHash, ticket.ID, completedAt), nil
 }
 
 func (m *Manager) queueCompletionVoice(ctx context.Context, slot *managerSlot) error {
@@ -588,6 +596,12 @@ func (m *Manager) queueCompletionVoice(ctx context.Context, slot *managerSlot) e
 func retryVoiceNotificationError(err error) bool {
 	var clientErr *transport.ClientError
 	if errors.As(err, &clientErr) {
+		if clientErr.StatusCode >= http.StatusInternalServerError && clientErr.StatusCode < 600 {
+			return true
+		}
+		if clientErr.StatusCode >= http.StatusBadRequest && clientErr.StatusCode < http.StatusInternalServerError {
+			return false
+		}
 		return clientErr.APIError.Retryable
 	}
 	return true

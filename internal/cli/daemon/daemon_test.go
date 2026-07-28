@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -87,7 +88,7 @@ func TestVoiceQueueAdapterRejectsCanceledContext(t *testing.T) {
 func TestRunContextClosesVoiceServiceAfterSocketShutdown(t *testing.T) {
 	socketPath := fmt.Sprintf("/tmp/agentd-voice-daemon-%d.sock", time.Now().UnixNano())
 	defer os.Remove(socketPath)
-	service := &fakeDaemonVoiceService{closeSocketPath: socketPath}
+	service := &fakeDaemonVoiceService{closeSocketPath: socketPath, closeErr: errors.New("speaker shutdown failed")}
 	originalFactory := newDaemonVoiceService
 	newDaemonVoiceService = func(io.Writer) daemonVoiceService { return service }
 	t.Cleanup(func() { newDaemonVoiceService = originalFactory })
@@ -134,8 +135,11 @@ func TestRunContextClosesVoiceServiceAfterSocketShutdown(t *testing.T) {
 	if got := service.closeCalls(); got != 1 {
 		t.Fatalf("Close() calls = %d, want 1", got)
 	}
-	if service.socketExistedWhenClosed() {
-		t.Fatal("voice service closed before the daemon socket shut down")
+	if err := service.socketErrorWhenClosed(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("voice service Close() socket stat error = %v, want os.ErrNotExist", err)
+	}
+	if !strings.Contains(stderr.String(), "close voice service: speaker shutdown failed") {
+		t.Fatalf("stderr = %q, want voice Close error", stderr.String())
 	}
 	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
 		t.Fatalf("socket still exists after daemon shutdown: %v", err)
@@ -143,14 +147,15 @@ func TestRunContextClosesVoiceServiceAfterSocketShutdown(t *testing.T) {
 }
 
 type fakeDaemonVoiceService struct {
-	mu                     sync.Mutex
-	enqueueStatus          voice.EnqueueStatus
-	enqueueErr             error
-	enqueued               voice.Notification
-	enqueueCallCount       int
-	closeCallCount         int
-	closeSocketPath        string
-	socketExistedAtClosing bool
+	mu               sync.Mutex
+	enqueueStatus    voice.EnqueueStatus
+	enqueueErr       error
+	enqueued         voice.Notification
+	enqueueCallCount int
+	closeCallCount   int
+	closeSocketPath  string
+	closeSocketErr   error
+	closeErr         error
 }
 
 func (f *fakeDaemonVoiceService) Enqueue(notification voice.Notification) (voice.EnqueueStatus, error) {
@@ -167,9 +172,9 @@ func (f *fakeDaemonVoiceService) Close() error {
 	f.closeCallCount++
 	if f.closeSocketPath != "" {
 		_, err := os.Stat(f.closeSocketPath)
-		f.socketExistedAtClosing = err == nil
+		f.closeSocketErr = err
 	}
-	return nil
+	return f.closeErr
 }
 
 func (f *fakeDaemonVoiceService) notification() voice.Notification {
@@ -190,10 +195,10 @@ func (f *fakeDaemonVoiceService) closeCalls() int {
 	return f.closeCallCount
 }
 
-func (f *fakeDaemonVoiceService) socketExistedWhenClosed() bool {
+func (f *fakeDaemonVoiceService) socketErrorWhenClosed() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.socketExistedAtClosing
+	return f.closeSocketErr
 }
 
 func TestRunStopFallsBackForDaemonWithoutShutdownRoute(t *testing.T) {

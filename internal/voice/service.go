@@ -84,6 +84,9 @@ func NewService(options Options) (*Service, error) {
 	if options.RecentLimit == 0 {
 		options.RecentLimit = DefaultRecentLimit
 	}
+	if options.Capacity+1 > options.RecentLimit {
+		return nil, fmt.Errorf("voice notification capacity plus one in-flight item must not exceed recent limit")
+	}
 	if options.Log == nil {
 		options.Log = io.Discard
 	}
@@ -141,6 +144,9 @@ func (s *Service) Enqueue(notification Notification) (EnqueueStatus, error) {
 	if len(s.queue) >= s.capacity {
 		return "", ErrQueueFull
 	}
+	for len(s.active)+len(s.recent) >= s.recentLimit {
+		s.evictOldestRecentLocked()
+	}
 
 	s.queue = append(s.queue, notification)
 	s.active[notification.RequestID] = struct{}{}
@@ -197,12 +203,16 @@ func (s *Service) finish(requestID string) {
 	}
 	s.recent[requestID] = struct{}{}
 	s.recentOrder = append(s.recentOrder, requestID)
-	if len(s.recentOrder) > s.recentLimit {
-		oldest := s.recentOrder[0]
-		s.recentOrder[0] = ""
-		s.recentOrder = s.recentOrder[1:]
-		delete(s.recent, oldest)
+	for len(s.active)+len(s.recent) > s.recentLimit {
+		s.evictOldestRecentLocked()
 	}
+}
+
+func (s *Service) evictOldestRecentLocked() {
+	oldest := s.recentOrder[0]
+	s.recentOrder[0] = ""
+	s.recentOrder = s.recentOrder[1:]
+	delete(s.recent, oldest)
 }
 
 func formatMessage(notification Notification) string {

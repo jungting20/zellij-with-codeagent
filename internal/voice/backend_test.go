@@ -121,6 +121,10 @@ func TestSpeechBackendPreservesCommandFailureAndNormalizesCancellation(t *testin
 }
 
 func TestSpeechBackendRunsFailingAndCancelledChildProcesses(t *testing.T) {
+	// Normalize sanitizer delay in recursively executed test binaries so the
+	// deadline measures backend startup and cancellation rather than race cleanup.
+	t.Setenv("GORACE", "atexit_sleep_ms=0")
+
 	childBackend := func(mode, marker string) speechBackend {
 		return speechBackend{
 			path: os.Args[0],
@@ -194,7 +198,7 @@ func mapLookPath(executables map[string]string) func(string) (string, error) {
 
 func waitForFile(t *testing.T, path string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for {
 		if _, err := os.Stat(path); err == nil {
 			return

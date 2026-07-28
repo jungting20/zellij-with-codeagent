@@ -59,7 +59,11 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) in
 			return 2
 		}
 		voiceService := newDaemonVoiceService(stdout)
-		defer func() { _ = voiceService.Close() }()
+		defer func() {
+			if err := voiceService.Close(); err != nil {
+				fmt.Fprintf(stderr, "close voice service: %v\n", err)
+			}
+		}()
 		server, err := transport.NewServer(transport.ServerOptions{
 			Service:            newRuntimeService(),
 			VoiceNotifications: voiceQueueAdapter{service: voiceService},

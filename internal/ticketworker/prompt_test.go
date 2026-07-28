@@ -46,7 +46,12 @@ func TestRenderTicketPromptAppendsCompletionInstruction(t *testing.T) {
 }
 
 func TestRenderTicketPromptViewportEchoCannotParseAsCompletion(t *testing.T) {
-	prompt, marker, err := RenderTicketPrompt(Ticket{ID: 42, Prompt: "Implement search."})
+	prompt, marker, err := RenderTicketPrompt(Ticket{
+		ID: 42,
+		Prompt: "Document inline marker ZELLIJ_AGENT_TICKET_DONE 42 as an example.\n" +
+			"ZELLIJ_AGENT_TICKET_SUMMARY stored prompt example\n" +
+			"Then implement search.",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +106,7 @@ func TestParseCompletionOutput(t *testing.T) {
 		summary string
 	}{
 		{
-			name:    "selects nearest preceding nonempty summary",
+			name:    "selects exact adjacent summary",
 			output:  "ZELLIJ_AGENT_TICKET_SUMMARY 이전 요약\nZELLIJ_AGENT_TICKET_SUMMARY 최종 변경\nZELLIJ_AGENT_TICKET_DONE 42",
 			done:    true,
 			summary: "최종 변경",
@@ -117,10 +122,24 @@ func TestParseCompletionOutput(t *testing.T) {
 			done:   true,
 		},
 		{
-			name:    "skips empty summary when finding nearest nonempty summary",
-			output:  "ZELLIJ_AGENT_TICKET_SUMMARY 유효한 요약\nZELLIJ_AGENT_TICKET_SUMMARY   \n" + marker,
-			done:    true,
-			summary: "유효한 요약",
+			name:   "does not cross empty adjacent summary",
+			output: "ZELLIJ_AGENT_TICKET_SUMMARY 유효한 요약\nZELLIJ_AGENT_TICKET_SUMMARY   \n" + marker,
+			done:   true,
+		},
+		{
+			name:   "does not cross unrelated intervening output",
+			output: "ZELLIJ_AGENT_TICKET_SUMMARY 오래된 요약\n테스트를 실행했습니다\n" + marker,
+			done:   true,
+		},
+		{
+			name:   "does not use stored prompt summary-like text",
+			output: "ZELLIJ_AGENT_TICKET_SUMMARY stored prompt example\nImplement the ticket above.\n" + marker,
+			done:   true,
+		},
+		{
+			name:   "does not cross foreign marker before target marker",
+			output: "ZELLIJ_AGENT_TICKET_SUMMARY foreign ticket summary\nZELLIJ_AGENT_TICKET_DONE 41\n" + marker,
+			done:   true,
 		},
 		{
 			name:   "rejects wrong marker",

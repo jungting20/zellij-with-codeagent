@@ -40,16 +40,17 @@ func containsExactLine(output, marker string) bool {
 
 func parseCompletionOutput(output, marker string) (done bool, summary string) {
 	scanner := bufio.NewScanner(strings.NewReader(output))
+	previous := ""
 	for scanner.Scan() {
 		line := normalizeCompletionLine(scanner.Text())
 		if line == marker {
-			return true, summary
-		}
-		if strings.HasPrefix(line, completionSummaryPrefix+" ") {
-			if value := strings.TrimSpace(strings.TrimPrefix(line, completionSummaryPrefix+" ")); value != "" {
-				summary = value
+			prefix := completionSummaryPrefix + " "
+			if strings.HasPrefix(previous, prefix) {
+				return true, strings.TrimSpace(strings.TrimPrefix(previous, prefix))
 			}
+			return true, ""
 		}
+		previous = line
 	}
 	return false, ""
 }

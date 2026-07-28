@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
@@ -372,6 +373,35 @@ func TestManagerQueuesCompletionWithoutSummaryWhenSnapshotHasNone(t *testing.T) 
 	}
 	if got := client.snapshotCount("ticket-coding-run-a-42"); got != 1 {
 		t.Fatalf("fallback snapshot calls = %d, want exactly 1", got)
+	}
+}
+
+func TestManagerDoesNotRecoverForeignSummaryAcrossTargetMarker(t *testing.T) {
+	client := newFakeManagerClient()
+	_, err := client.CreatePane(context.Background(), transport.CreatePaneRequest{
+		ID: "ticket-coding-run-a-42", TaskID: "tickets", ZellijSession: "physical-a", Role: "coding-agent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.setSnapshot("ticket-coding-run-a-42", strings.Join([]string{
+		"ZELLIJ_AGENT_TICKET_SUMMARY foreign ticket summary",
+		"ZELLIJ_AGENT_TICKET_DONE 41",
+		"ZELLIJ_AGENT_TICKET_DONE 42",
+	}, "\n"))
+	manager := newTestManagerWithVoice(t, client, true, nil)
+	manager.slots[0] = managerSlot{
+		state: managerSlotWorking, ticket: managerTicket(42), paneID: "ticket-coding-run-a-42",
+		marker: "ZELLIJ_AGENT_TICKET_DONE 42", paneCreated: true,
+	}
+
+	manager.handleEvent(context.Background(), transport.Event{
+		Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-42", Message: "ZELLIJ_AGENT_TICKET_DONE 42",
+	})
+
+	requests := client.voiceRequests()
+	if len(requests) != 1 || requests[0].Summary != "" {
+		t.Fatalf("voice requests = %#v, want target completion without foreign summary", requests)
 	}
 }
 
@@ -779,6 +809,49 @@ func TestCompletionVoiceRequestIDChangesAfterReopenedTicketCompletesAgain(t *tes
 	}
 }
 
+func TestCompletionVoiceRequestIDPreservesRawFormatAndHashesOnlyWhenNeeded(t *testing.T) {
+	ticket := completedManagerTicket(42)
+	tests := []struct {
+		name   string
+		taskID string
+		want   string
+	}{
+		{
+			name:   "documented raw format",
+			taskID: "tickets",
+			want:   "tickets:42:1782864000123456789",
+		},
+		{
+			name:   "raw format at endpoint byte limit",
+			taskID: strings.Repeat("t", 233),
+			want:   strings.Repeat("t", 233) + ":42:1782864000123456789",
+		},
+		{
+			name:   "deterministic hash fallback above endpoint byte limit",
+			taskID: strings.Repeat("task/", 60),
+			want:   "sha256:4f1da0aa79b2921d3f4bd44add8eb746975fd7482b5a92fb013a987ab7e65383:42:1782864000123456789",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := completionVoiceRequestID(tt.taskID, ticket)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("completionVoiceRequestID() = %q, want %q", got, tt.want)
+			}
+			if len(got) > 256 {
+				t.Fatalf("request ID length = %d, want at most 256 bytes", len(got))
+			}
+			again, err := completionVoiceRequestID(tt.taskID, ticket)
+			if err != nil || again != got {
+				t.Fatalf("second completionVoiceRequestID() = (%q, %v), want deterministic %q", again, err, got)
+			}
+		})
+	}
+}
+
 func TestManagerVoiceNotificationWaitsForSuccessfulCloseRetry(t *testing.T) {
 	client := newFakeManagerClient()
 	client.closeErrors = []error{errors.New("close failed"), nil}
@@ -851,9 +924,12 @@ func TestManagerVoiceNotificationRetriesStableRequestWithExactBackoff(t *testing
 	}
 }
 
-func TestManagerVoiceNotificationDoesNotRetryNonRetryableClientError(t *testing.T) {
+func TestManagerVoiceNotificationDoesNotRetryNonRetryableHTTP400(t *testing.T) {
 	client := newFakeManagerClient()
-	client.voiceErrors = []error{&transport.ClientError{APIError: transport.APIError{Code: transport.CodeBadRequest, Message: "invalid request"}}}
+	client.voiceErrors = []error{&transport.ClientError{
+		StatusCode: http.StatusBadRequest,
+		APIError:   transport.APIError{Code: transport.CodeBadRequest, Message: "invalid request"},
+	}}
 	var backoffCalls int
 	manager := newTestManagerWithVoice(t, client, true, func(context.Context, time.Duration) error {
 		backoffCalls++
@@ -876,6 +952,35 @@ func TestManagerVoiceNotificationDoesNotRetryNonRetryableClientError(t *testing.
 	}
 	if !logs.Contains("notify ticket=42") || !logs.Contains("invalid request") {
 		t.Fatalf("manager log = %q, want final notification failure", logs.String())
+	}
+}
+
+func TestManagerVoiceNotificationRetriesHTTP5xxWithoutRetryableFlag(t *testing.T) {
+	client := newFakeManagerClient()
+	client.voiceErrors = []error{
+		&transport.ClientError{
+			StatusCode: http.StatusInternalServerError,
+			APIError:   transport.APIError{Code: transport.CodeRuntimeError, Message: "daemon failed"},
+		},
+		nil,
+	}
+	var delays []time.Duration
+	manager := newTestManagerWithVoice(t, client, true, func(_ context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return nil
+	})
+	manager.slots[0] = completedManagerSlot(42, "tests passed")
+
+	manager.retryClose(context.Background(), &manager.slots[0])
+
+	if got := len(client.voiceRequests()); got != 2 {
+		t.Fatalf("voice requests = %d, want 2", got)
+	}
+	if !reflect.DeepEqual(delays, []time.Duration{100 * time.Millisecond}) {
+		t.Fatalf("backoff delays = %v, want [100ms]", delays)
+	}
+	if manager.slots[0].state != managerSlotEmpty {
+		t.Fatalf("slot state = %v, want empty", manager.slots[0].state)
 	}
 }
 
