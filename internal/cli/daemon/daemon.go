@@ -58,10 +58,13 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		if !ok {
 			return 2
 		}
+		voiceService := newDaemonVoiceService(stdout)
+		defer func() { _ = voiceService.Close() }()
 		server, err := transport.NewServer(transport.ServerOptions{
-			Service:    newRuntimeService(),
-			SocketPath: socketPath,
-			Version:    version,
+			Service:            newRuntimeService(),
+			VoiceNotifications: voiceQueueAdapter{service: voiceService},
+			SocketPath:         socketPath,
+			Version:            version,
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "start transport server: %v\n", err)
