@@ -29,12 +29,19 @@ func TestManagerWaitsForAnchorThenFillsConfiguredCapacity(t *testing.T) {
 	}
 
 	client.setAnchorReady(true)
-	waitFor(t, func() bool { return len(client.created()) == 2 && len(client.inputs()) == 2 })
+	waitFor(t, func() bool { return len(client.created()) == 2 })
 	if store.nextCount() != 2 {
 		t.Fatalf("Next calls = %d, want 2", store.nextCount())
 	}
 	wantNames := []string{"[1] Ticket", "[2] Ticket"}
 	for i, req := range client.created() {
+		if req.InitialInputReadyText != "›" {
+			t.Fatalf("create[%d] ready text = %q", i, req.InitialInputReadyText)
+		}
+		if !strings.HasSuffix(req.InitialInput, "\n") ||
+			!strings.Contains(req.InitialInput, "Implement ticket.") {
+			t.Fatalf("create[%d] initial input = %q", i, req.InitialInput)
+		}
 		wantID := int64(i + 1)
 		if req.ID != "ticket-coding-run-a-"+string(rune('0'+wantID)) || req.Name != wantNames[i] || req.Role != "coding-agent" || req.TaskID != "tickets" || req.SameTabAsPaneID != "ticket-manager" || req.ZellijSession != "physical-a" {
 			t.Fatalf("create[%d] = %#v", i, req)
@@ -165,9 +172,9 @@ func TestManagerIgnoresPromptEchoAndCompletesExactMarker(t *testing.T) {
 	manager.log = &logs
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
-	waitFor(t, func() bool { return len(client.inputs()) == 1 })
+	waitFor(t, func() bool { return len(client.created()) == 1 })
 
-	prompt := client.inputs()[0].req.Text
+	prompt := client.created()[0].InitialInput
 	if len(prompt) == 0 || prompt[len(prompt)-1] != '\n' {
 		t.Fatalf("submitted prompt = %q, want trailing newline to send Enter", prompt)
 	}
@@ -235,7 +242,7 @@ func TestManagerRetriesDoneBeforeClosing(t *testing.T) {
 	manager.log = &logs
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
-	waitFor(t, func() bool { return len(client.inputs()) == 1 })
+	waitFor(t, func() bool { return len(client.created()) == 1 })
 	stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-7", Message: "ZELLIJ_AGENT_TICKET_DONE 7"}
 	waitFor(t, func() bool { return len(store.transitions()) == 1 })
 	wantLog := `complete ticket=7 title="Ticket" failed: database busy`
@@ -267,7 +274,7 @@ func TestManagerClosesPaneWhenTicketIsAlreadyDone(t *testing.T) {
 	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
-	waitFor(t, func() bool { return len(client.inputs()) == 1 })
+	waitFor(t, func() bool { return len(client.created()) == 1 })
 
 	stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-25", Message: "ZELLIJ_AGENT_TICKET_DONE 25"}
 	waitFor(t, func() bool { return len(store.transitions()) == 1 })
@@ -330,6 +337,10 @@ func TestManagerUncertainCreateFailureRetriesSamePaneThenRequeues(t *testing.T) 
 	if created[0].ID != created[1].ID {
 		t.Fatalf("retried pane IDs = %q, %q", created[0].ID, created[1].ID)
 	}
+	if created[0].InitialInput == "" || created[1].InitialInput != created[0].InitialInput ||
+		created[1].InitialInputReadyText != created[0].InitialInputReadyText {
+		t.Fatalf("retried initialization = %#v, want initial request retained", created[1])
+	}
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -358,23 +369,69 @@ func TestManagerUncertainCreateFailureCleansPaneCreatedBeforeResponseLoss(t *tes
 	}
 }
 
-func TestManagerInputFailureClosesBeforeRequeue(t *testing.T) {
+func TestManagerInitializationFailureRequeuesWithoutClose(t *testing.T) {
 	store := &fakeManagerStore{ready: []Ticket{managerTicket(10)}}
 	client := newFakeManagerClient()
-	client.inputErrors = []error{errors.New("input failed")}
+	client.createErrors = []error{&transport.ClientError{APIError: transport.APIError{
+		Code: transport.CodeInitializationFailed, Message: "prompt failed", Retryable: true,
+	}}}
 	client.streams = []*fakeEventStream{newFakeEventStream()}
-	client.beforeClose = func() {
-		if len(store.requeues()) != 0 {
-			t.Error("ticket requeued before pane close")
-		}
-	}
 	manager := newTestManager(t, store, client, 1)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
-	waitFor(t, func() bool { return len(client.closed()) == 1 && len(store.requeues()) == 1 })
+	waitFor(t, func() bool { return len(store.requeues()) == 1 })
+	if len(client.closed()) != 0 {
+		t.Fatalf("closed panes = %v, want none", client.closed())
+	}
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestManagerCleanupPartialKeepsUncertainRecovery(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(10)}}
+	client := newFakeManagerClient()
+	client.createErrors = []error{&transport.ClientError{APIError: transport.APIError{
+		Code: transport.CodeCleanupPartial, Message: "cleanup failed", Retryable: true,
+	}}}
+	client.createOnError = true
+	client.streams = []*fakeEventStream{newFakeEventStream()}
+	ticks := make(chan time.Time, 1)
+	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.created()) == 1 })
+	inspectionsBeforeRecovery := client.inspections()
+	ticks <- time.Now()
+	waitFor(t, func() bool { return len(client.closed()) == 1 && len(store.requeues()) == 1 })
+	if client.inspections() <= inspectionsBeforeRecovery {
+		t.Fatal("uncertain create was not discovered before cleanup")
+	}
+	if len(client.created()) != 1 {
+		t.Fatalf("creates = %d, want no retry after discovery", len(client.created()))
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagerCreateUsesStartupTimeout(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(10)}}
+	client := newFakeManagerClient()
+	manager := newTestManager(t, store, client, 1)
+
+	manager.startSlot(context.Background(), &manager.slots[0])
+
+	deadlines := client.createDeadlines()
+	if len(deadlines) != 1 || deadlines[0].IsZero() {
+		t.Fatalf("create deadlines = %v, want one deadline", deadlines)
+	}
+	if latest := time.Now().Add(manager.startupTimeout); deadlines[0].After(latest) {
+		t.Fatalf("create deadline = %v, want no later than %v", deadlines[0], latest)
 	}
 }
 
@@ -388,7 +445,7 @@ func TestManagerCloseFailureRetainsCapacityUntilPaneAbsent(t *testing.T) {
 	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
-	waitFor(t, func() bool { return len(client.inputs()) == 1 })
+	waitFor(t, func() bool { return len(client.created()) == 1 })
 	stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-21", Message: "ZELLIJ_AGENT_TICKET_DONE 21"}
 	waitFor(t, func() bool { return len(client.closed()) == 1 })
 	ticks <- time.Now()
@@ -416,7 +473,7 @@ func TestManagerCloseFailureWithRuntimeErrorStatusRetainsCapacity(t *testing.T) 
 	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
-	waitFor(t, func() bool { return len(client.inputs()) == 1 })
+	waitFor(t, func() bool { return len(client.created()) == 1 })
 	stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-23", Message: "ZELLIJ_AGENT_TICKET_DONE 23"}
 	waitFor(t, func() bool { return len(client.closed()) == 1 })
 	if len(client.created()) != 1 {
@@ -437,7 +494,7 @@ func TestManagerStreamLossPausesClaimsUntilReconnect(t *testing.T) {
 	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
-	waitFor(t, func() bool { return len(client.inputs()) == 1 })
+	waitFor(t, func() bool { return len(client.created()) == 1 })
 	first.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-31", Message: "ZELLIJ_AGENT_TICKET_DONE 31"}
 	waitFor(t, func() bool { return len(client.closed()) == 1 })
 	first.errs <- errors.New("stream lost")
@@ -466,7 +523,7 @@ func TestManagerReconnectsAndRecoversMarkerFromSnapshot(t *testing.T) {
 	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
-	waitFor(t, func() bool { return len(client.inputs()) == 1 })
+	waitFor(t, func() bool { return len(client.created()) == 1 })
 	first.errs <- errors.New("stream lost")
 	waitFor(t, func() bool { return client.streamCalls() == 1 })
 	client.setSnapshot("ticket-coding-run-a-11", "work\nZELLIJ_AGENT_TICKET_DONE 11\n")
@@ -488,7 +545,7 @@ func TestManagerRecoversDroppedMarkerEventFromPeriodicSnapshot(t *testing.T) {
 	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
-	waitFor(t, func() bool { return len(client.inputs()) == 1 })
+	waitFor(t, func() bool { return len(client.created()) == 1 })
 	client.setSnapshot("ticket-coding-run-a-12", "work\nZELLIJ_AGENT_TICKET_DONE 12\n")
 	ticks <- time.Now()
 	waitFor(t, func() bool { return len(store.transitions()) == 1 && len(client.closed()) == 1 })
@@ -509,7 +566,7 @@ func TestManagerRejectsMarkerSnapshotWithWrongWorkerIdentity(t *testing.T) {
 	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
-	waitFor(t, func() bool { return len(client.inputs()) == 1 })
+	waitFor(t, func() bool { return len(client.created()) == 1 })
 	client.setSnapshot("ticket-coding-run-a-14", "ZELLIJ_AGENT_TICKET_DONE 14\n")
 	client.setSnapshotPane("ticket-coding-run-a-14", transport.Pane{ID: "ticket-coding-run-a-14", TaskID: "tickets", SessionID: "wrong-session", Role: "coding-agent", Status: "running"})
 	ticks <- time.Now()
@@ -584,7 +641,7 @@ func TestManagerShutdownClosesAndRequeuesActiveTicket(t *testing.T) {
 	manager := newTestManager(t, store, client, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
-	waitFor(t, func() bool { return len(client.inputs()) == 1 })
+	waitFor(t, func() bool { return len(client.created()) == 1 })
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Run() shutdown error = %v", err)
@@ -737,11 +794,6 @@ func (f *fakeManagerStore) requeues() []int64 {
 	return append([]int64(nil), f.requeueCalls...)
 }
 
-type fakeInput struct {
-	paneID string
-	req    transport.SendInputRequest
-}
-
 type fakeEventStream struct {
 	events chan transport.Event
 	errs   chan error
@@ -765,11 +817,10 @@ type fakeManagerClient struct {
 	streams           []*fakeEventStream
 	streamCallN       int
 	createRequests    []transport.CreatePaneRequest
+	createDeadlineLog []time.Time
 	successfulCreates map[string]bool
 	createErrors      []error
 	createOnError     bool
-	inputRequests     []fakeInput
-	inputErrors       []error
 	snapshots         map[string]string
 	snapshotPanes     map[string]transport.Pane
 	snapshotErrors    map[string]error
@@ -784,10 +835,12 @@ func newFakeManagerClient() *fakeManagerClient {
 	return &fakeManagerClient{anchorReady: true, anchorTaskID: "tickets", anchorSessionID: "physical-a", successfulCreates: map[string]bool{}, snapshots: map[string]string{}, snapshotPanes: map[string]transport.Pane{}, snapshotErrors: map[string]error{}, absentPanes: map[string]bool{}, paneStatuses: map[string]string{}}
 }
 
-func (f *fakeManagerClient) CreatePane(_ context.Context, req transport.CreatePaneRequest) (transport.CreatePaneResponse, error) {
+func (f *fakeManagerClient) CreatePane(ctx context.Context, req transport.CreatePaneRequest) (transport.CreatePaneResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.createRequests = append(f.createRequests, req)
+	deadline, _ := ctx.Deadline()
+	f.createDeadlineLog = append(f.createDeadlineLog, deadline)
 	if len(f.createErrors) > 0 {
 		err := f.createErrors[0]
 		f.createErrors = f.createErrors[1:]
@@ -800,18 +853,6 @@ func (f *fakeManagerClient) CreatePane(_ context.Context, req transport.CreatePa
 	}
 	f.successfulCreates[req.ID] = true
 	return transport.CreatePaneResponse{Pane: transport.Pane{ID: req.ID, TaskID: req.TaskID, SessionID: req.ZellijSession}}, nil
-}
-
-func (f *fakeManagerClient) SendInput(_ context.Context, paneID string, req transport.SendInputRequest) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.inputRequests = append(f.inputRequests, fakeInput{paneID: paneID, req: req})
-	if len(f.inputErrors) > 0 {
-		err := f.inputErrors[0]
-		f.inputErrors = f.inputErrors[1:]
-		return err
-	}
-	return nil
 }
 
 func (f *fakeManagerClient) SnapshotOutput(_ context.Context, paneID string, _ transport.SnapshotOutputRequest) (transport.SnapshotOutputResponse, error) {
@@ -925,10 +966,10 @@ func (f *fakeManagerClient) created() []transport.CreatePaneRequest {
 	defer f.mu.Unlock()
 	return append([]transport.CreatePaneRequest(nil), f.createRequests...)
 }
-func (f *fakeManagerClient) inputs() []fakeInput {
+func (f *fakeManagerClient) createDeadlines() []time.Time {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]fakeInput(nil), f.inputRequests...)
+	return append([]time.Time(nil), f.createDeadlineLog...)
 }
 func (f *fakeManagerClient) closed() []string {
 	f.mu.Lock()

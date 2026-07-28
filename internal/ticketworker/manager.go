@@ -24,7 +24,6 @@ type ManagerStore interface {
 
 type ManagerClient interface {
 	CreatePane(context.Context, transport.CreatePaneRequest) (transport.CreatePaneResponse, error)
-	SendInput(context.Context, string, transport.SendInputRequest) error
 	SnapshotOutput(context.Context, string, transport.SnapshotOutputRequest) (transport.SnapshotOutputResponse, error)
 	ClosePane(context.Context, string) (transport.ClosePaneResponse, error)
 	InspectRuntime(context.Context) (transport.InspectRuntimeResponse, error)
@@ -344,32 +343,24 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 		ID: slot.paneID, TaskID: m.taskID, ZellijSession: m.zellijSession,
 		Role: "coding-agent", Name: workerPaneName(ticket), SameTabAsPaneID: m.anchorPaneID,
 		Command: []string{m.roleBin, "role", "coding-agent", "--yolo", m.root}, CWD: m.root,
+		InitialInput: slot.prompt + "\n", InitialInputReadyText: "›",
 	}
 	slot.createRequest = req
-	if _, err := m.client.CreatePane(ctx, req); err != nil {
-		m.logTicketf("create", ticket, "pane=%s failed: %v", slot.paneID, err)
-		if safeCreateFailure(err) {
+	createCtx, cancel := context.WithTimeout(ctx, m.startupTimeout)
+	_, createErr := m.client.CreatePane(createCtx, req)
+	cancel()
+	if createErr != nil {
+		m.logTicketf("create", ticket, "pane=%s failed: %v", slot.paneID, createErr)
+		if safeCreateFailure(createErr) {
 			m.requeueWithoutPane(ctx, slot)
 		} else {
 			slot.state = managerSlotCleanupFailed
 			slot.creationUncertain = true
-			slot.lastError = err
+			slot.lastError = createErr
 		}
 		return true
 	}
 	slot.paneCreated = true
-	if err := m.waitForInputReady(ctx, slot.paneID); err != nil {
-		slot.lastError = err
-		slot.state = managerSlotCleanupFailed
-		m.retryCleanup(ctx, slot)
-		return true
-	}
-	if err := m.client.SendInput(ctx, slot.paneID, transport.SendInputRequest{Text: slot.prompt + "\n"}); err != nil {
-		slot.lastError = err
-		slot.state = managerSlotCleanupFailed
-		m.retryCleanup(ctx, slot)
-		return true
-	}
 	slot.state = managerSlotWorking
 	m.logTicketf("started", ticket, "pane=%s", slot.paneID)
 	return false
@@ -393,25 +384,9 @@ func safeCreateFailure(err error) bool {
 	if !errors.As(err, &clientErr) {
 		return false
 	}
-	return clientErr.APIError.Code == transport.CodeBadRequest || clientErr.APIError.Code == transport.CodeNotFound
-}
-
-func (m *Manager) waitForInputReady(ctx context.Context, paneID string) error {
-	readyCtx, cancel := context.WithTimeout(ctx, m.startupTimeout)
-	defer cancel()
-	ticker := time.NewTicker(m.readyPollInterval)
-	defer ticker.Stop()
-	for {
-		response, err := m.client.SnapshotOutput(readyCtx, paneID, transport.SnapshotOutputRequest{})
-		if err == nil && strings.Contains(response.Output, "›") {
-			return nil
-		}
-		select {
-		case <-readyCtx.Done():
-			return fmt.Errorf("wait for coding-agent prompt pane=%s: %w", paneID, readyCtx.Err())
-		case <-ticker.C:
-		}
-	}
+	return clientErr.APIError.Code == transport.CodeBadRequest ||
+		clientErr.APIError.Code == transport.CodeNotFound ||
+		clientErr.APIError.Code == transport.CodeInitializationFailed
 }
 
 func (m *Manager) requeueWithoutPane(ctx context.Context, slot *managerSlot) {
