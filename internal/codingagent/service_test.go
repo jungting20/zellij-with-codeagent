@@ -212,6 +212,242 @@ func TestServiceStartAgentRuntimeFailureStopsMonitorAndDeletesRecord(t *testing.
 	}
 }
 
+func TestServiceStartAgentProvisioningRecordIsNotRemovedByConcurrentList(t *testing.T) {
+	store := NewMemoryStore(nil)
+	monitor := &serviceFakeMonitor{}
+	createEntered := make(chan struct{})
+	releaseCreate := make(chan struct{})
+	listEntered := make(chan struct{})
+	releaseList := make(chan struct{})
+	runtimeService := &serviceFakeRuntime{
+		createFn: func(_ context.Context, request runtime.CreatePaneRequest) (runtime.CreatePaneResponse, error) {
+			close(createEntered)
+			<-releaseCreate
+			return runtime.CreatePaneResponse{Pane: runtime.Pane{ID: request.ID, Status: runtime.PaneStatusRunning}}, nil
+		},
+		listFn: func(context.Context) (runtime.ListPanesResponse, error) {
+			close(listEntered)
+			<-releaseList
+			return runtime.ListPanesResponse{}, nil
+		},
+	}
+	service := NewService(ServiceOptions{
+		RuntimeService:   runtimeService,
+		Store:            store,
+		LifecycleMonitor: monitor,
+		NewAgentID:       func() ID { return "agent-1" },
+	})
+	startRequest := validStartRequest(t, KindCodex)
+	startResult := make(chan error, 1)
+	go func() {
+		_, err := service.StartAgent(context.Background(), startRequest)
+		startResult <- err
+	}()
+	<-createEntered
+
+	type listAgentResult struct {
+		response ListAgentsResponse
+		err      error
+	}
+	listResult := make(chan listAgentResult, 1)
+	go func() {
+		response, err := service.ListAgents(context.Background())
+		listResult <- listAgentResult{response: response, err: err}
+	}()
+	<-listEntered
+	close(releaseCreate)
+	if err := <-startResult; err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	close(releaseList)
+	listed := <-listResult
+	response, err := listed.response, listed.err
+	if err != nil {
+		t.Fatalf("ListAgents() error = %v", err)
+	}
+	if len(response.Agents) != 0 {
+		t.Fatalf("ListAgents() provisioning rows = %d, want 0", len(response.Agents))
+	}
+	if _, err := store.Get("agent-1"); err != nil {
+		t.Fatalf("provisioning record removed: %v", err)
+	}
+	if len(monitor.stopped) != 0 {
+		t.Fatalf("Monitor.Stop calls during provisioning = %v", monitor.stopped)
+	}
+	if _, err := store.Get("agent-1"); err != nil {
+		t.Fatalf("successful StartAgent record missing: %v", err)
+	}
+}
+
+func TestServiceListAgentStaleSnapshotDoesNotDeleteReusedID(t *testing.T) {
+	base := time.Date(2026, 7, 28, 11, 0, 0, 0, time.UTC)
+	store := NewMemoryStore(nil)
+	old := Record{ID: "agent-1", Kind: KindCodex, PaneID: "agent-1", State: StateUnknown, CreatedAt: base, StateChangedAt: base}
+	if _, err := store.Create(old); err != nil {
+		t.Fatal(err)
+	}
+	listEntered := make(chan struct{})
+	releaseList := make(chan struct{})
+	runtimeService := &serviceFakeRuntime{
+		listFn: func(context.Context) (runtime.ListPanesResponse, error) {
+			close(listEntered)
+			<-releaseList
+			return runtime.ListPanesResponse{}, nil
+		},
+		createFn: func(_ context.Context, request runtime.CreatePaneRequest) (runtime.CreatePaneResponse, error) {
+			return runtime.CreatePaneResponse{Pane: runtime.Pane{ID: request.ID, Status: runtime.PaneStatusRunning}}, nil
+		},
+	}
+	monitor := &serviceFakeMonitor{}
+	service := NewService(ServiceOptions{
+		RuntimeService:   runtimeService,
+		Store:            store,
+		LifecycleMonitor: monitor,
+		Now:              func() time.Time { return base.Add(time.Second) },
+		NewAgentID:       func() ID { return "agent-1" },
+	})
+	listResult := make(chan error, 1)
+	go func() {
+		_, err := service.ListAgents(context.Background())
+		listResult <- err
+	}()
+	<-listEntered
+
+	if err := store.Delete(old.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StartAgent(context.Background(), validStartRequest(t, KindClaude)); err != nil {
+		t.Fatalf("reused StartAgent() error = %v", err)
+	}
+	close(releaseList)
+	if err := <-listResult; err != nil {
+		t.Fatalf("ListAgents() error = %v", err)
+	}
+
+	current, err := store.Get("agent-1")
+	if err != nil {
+		t.Fatalf("reused record removed by stale cleanup: %v", err)
+	}
+	if current.Kind != KindClaude || !current.CreatedAt.Equal(base.Add(time.Second)) {
+		t.Fatalf("current record = %#v, want reused Claude record", current)
+	}
+	if len(monitor.stopped) != 0 {
+		t.Fatalf("stale cleanup stopped reused monitor: %v", monitor.stopped)
+	}
+}
+
+func TestServiceStartAgentPartialRuntimeCleanupPolicy(t *testing.T) {
+	createCause := errors.New("pane initialization failed")
+	createErr := errors.Join(createCause, runtime.ErrCleanupPartial)
+
+	tests := []struct {
+		name          string
+		cleanup       runtime.CleanupResponse
+		cleanupErr    error
+		confirm       runtime.ListPanesResponse
+		confirmErr    error
+		wantPreserved bool
+		wantDiag      error
+	}{
+		{
+			name:    "successful retry and absent confirmation removes record",
+			cleanup: runtime.CleanupResponse{Closed: []runtime.Pane{{ID: "agent-1"}}},
+		},
+		{
+			name:          "failed retry even with absent logical pane preserves tracking",
+			cleanup:       runtime.CleanupResponse{Failed: []runtime.CleanupFailure{{Pane: runtime.Pane{ID: "agent-1"}, Error: "still open"}}},
+			cleanupErr:    runtime.ErrCleanupPartial,
+			wantPreserved: true,
+			wantDiag:      runtime.ErrCleanupPartial,
+		},
+		{
+			name:          "remaining pane after nominal retry preserves tracking",
+			cleanup:       runtime.CleanupResponse{Closed: []runtime.Pane{{ID: "agent-1"}}},
+			confirm:       runtime.ListPanesResponse{Panes: []runtime.Pane{{ID: "agent-1", Status: runtime.PaneStatusError}}},
+			wantPreserved: true,
+			wantDiag:      runtime.ErrCleanupPartial,
+		},
+		{
+			name:          "confirmation failure preserves tracking",
+			cleanup:       runtime.CleanupResponse{Closed: []runtime.Pane{{ID: "agent-1"}}},
+			confirmErr:    errors.New("runtime list unavailable"),
+			wantPreserved: true,
+			wantDiag:      errors.New("runtime list unavailable"),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewMemoryStore(nil)
+			monitor := &serviceFakeMonitor{}
+			listCalls := 0
+			runtimeService := &serviceFakeRuntime{
+				createErr: createErr,
+				cleanupFn: func(ctx context.Context, request runtime.CleanupRequest) (runtime.CleanupResponse, error) {
+					deadline, ok := ctx.Deadline()
+					if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 6*time.Second {
+						t.Fatalf("Cleanup context deadline = %v, want bounded future deadline", deadline)
+					}
+					if !reflect.DeepEqual(request, runtime.CleanupRequest{PaneIDs: []runtime.PaneID{"agent-1"}}) {
+						t.Fatalf("Cleanup request = %#v", request)
+					}
+					return test.cleanup, test.cleanupErr
+				},
+				listFn: func(context.Context) (runtime.ListPanesResponse, error) {
+					listCalls++
+					if listCalls == 1 {
+						return test.confirm, test.confirmErr
+					}
+					return runtime.ListPanesResponse{}, nil
+				},
+			}
+			service := NewService(ServiceOptions{
+				RuntimeService:   runtimeService,
+				Store:            store,
+				LifecycleMonitor: monitor,
+				NewAgentID:       func() ID { return "agent-1" },
+			})
+
+			_, err := service.StartAgent(context.Background(), validStartRequest(t, KindCursor))
+			if !errors.Is(err, createCause) || !errors.Is(err, runtime.ErrCleanupPartial) {
+				t.Fatalf("StartAgent() error = %v, want original cause and ErrCleanupPartial", err)
+			}
+			if test.wantDiag != nil && !strings.Contains(err.Error(), test.wantDiag.Error()) {
+				t.Fatalf("StartAgent() error = %v, want diagnostic %q", err, test.wantDiag)
+			}
+			if len(runtimeService.cleaned) != 1 {
+				t.Fatalf("Cleanup call count = %d, want 1", len(runtimeService.cleaned))
+			}
+			_, getErr := store.Get("agent-1")
+			if test.wantPreserved {
+				if getErr != nil {
+					t.Fatalf("record not preserved: %v", getErr)
+				}
+				if len(monitor.stopped) != 0 {
+					t.Fatalf("preserved monitor stopped: %v", monitor.stopped)
+				}
+				response, listErr := service.ListAgents(context.Background())
+				if listErr != nil {
+					t.Fatalf("ListAgents() after uncertain cleanup error = %v", listErr)
+				}
+				if len(response.Agents) != 0 {
+					t.Fatalf("uncertain missing pane rows = %d, want 0", len(response.Agents))
+				}
+				if _, getErr := store.Get("agent-1"); getErr != nil {
+					t.Fatalf("ListAgents removed uncertain record: %v", getErr)
+				}
+			} else {
+				if !errors.Is(getErr, ErrNotFound) {
+					t.Fatalf("store.Get() error = %v, want %v", getErr, ErrNotFound)
+				}
+				if !reflect.DeepEqual(monitor.stopped, []ID{"agent-1"}) {
+					t.Fatalf("Monitor.Stop calls = %v, want [agent-1]", monitor.stopped)
+				}
+			}
+		})
+	}
+}
+
 func TestServiceListAgentsJoinsRuntimePanesInCreationOrderAndRemovesOrphans(t *testing.T) {
 	store := NewMemoryStore(nil)
 	base := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
@@ -273,6 +509,63 @@ func TestServiceListAgentsReturnsRuntimeFailureWithoutDeletingRecords(t *testing
 	}
 }
 
+func TestServiceListAgentsRemovesMissingPaneAfterStartedAgentBecomesActive(t *testing.T) {
+	store := NewMemoryStore(nil)
+	monitor := &serviceFakeMonitor{}
+	runtimeService := &serviceFakeRuntime{}
+	service := NewService(ServiceOptions{
+		RuntimeService:   runtimeService,
+		Store:            store,
+		LifecycleMonitor: monitor,
+		NewAgentID:       func() ID { return "agent-1" },
+	})
+	if _, err := service.StartAgent(context.Background(), validStartRequest(t, KindGemini)); err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+
+	response, err := service.ListAgents(context.Background())
+	if err != nil {
+		t.Fatalf("ListAgents() error = %v", err)
+	}
+	if len(response.Agents) != 0 {
+		t.Fatalf("ListAgents() rows = %d, want 0", len(response.Agents))
+	}
+	if _, err := store.Get("agent-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("active orphan store.Get() error = %v, want %v", err, ErrNotFound)
+	}
+	if !reflect.DeepEqual(monitor.stopped, []ID{"agent-1"}) {
+		t.Fatalf("Monitor.Stop calls = %v, want [agent-1]", monitor.stopped)
+	}
+}
+
+func TestServiceListAgentsReleasesOwnershipAfterCloseObserverRemovedRecord(t *testing.T) {
+	store := NewMemoryStore(nil)
+	monitor := &serviceFakeMonitor{}
+	service := NewService(ServiceOptions{
+		RuntimeService:   &serviceFakeRuntime{},
+		Store:            store,
+		LifecycleMonitor: monitor,
+		NewAgentID:       func() ID { return "agent-1" },
+	})
+	if _, err := service.StartAgent(context.Background(), validStartRequest(t, KindClaude)); err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	if err := store.Delete("agent-1"); err != nil {
+		t.Fatalf("simulate close observer delete: %v", err)
+	}
+	monitor.Stop("agent-1")
+
+	if _, err := service.ListAgents(context.Background()); err != nil {
+		t.Fatalf("ListAgents() error = %v", err)
+	}
+	service.lifecycleMu.Lock()
+	_, ownerExists := service.owners["agent-1"]
+	service.lifecycleMu.Unlock()
+	if ownerExists {
+		t.Fatal("ListAgents() retained ownership after close observer removed the record")
+	}
+}
+
 func TestServiceFocusAgentForwardsLogicalPaneAndSourceContext(t *testing.T) {
 	store := NewMemoryStore(nil)
 	now := time.Now()
@@ -300,6 +593,78 @@ func TestServiceFocusAgentForwardsLogicalPaneAndSourceContext(t *testing.T) {
 	}
 }
 
+func TestServiceFocusAgentNormalizesStaleRuntimeTargetsToAgentNotFound(t *testing.T) {
+	tests := []struct {
+		name     string
+		focusErr error
+		pane     runtime.Pane
+	}{
+		{name: "runtime pane missing", focusErr: runtime.ErrPaneNotFound},
+		{name: "runtime pane invalid", focusErr: runtime.ErrInvalidPaneTarget},
+		{name: "closed response", pane: runtime.Pane{ID: "pane-1", Status: runtime.PaneStatusClosed}},
+		{name: "exited response", pane: runtime.Pane{ID: "pane-1", Status: runtime.PaneStatusExited}},
+		{name: "lost response", pane: runtime.Pane{ID: "pane-1", Status: runtime.PaneStatusLost}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewMemoryStore(nil)
+			now := time.Now()
+			if _, err := store.Create(Record{ID: "agent-1", Kind: KindCodex, PaneID: "pane-1", State: StateUnknown, CreatedAt: now, StateChangedAt: now}); err != nil {
+				t.Fatal(err)
+			}
+			runtimeService := &serviceFakeRuntime{focusErr: test.focusErr, focusResponse: runtime.FocusPaneResponse{Pane: test.pane}}
+			service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
+
+			_, err := service.FocusAgent(context.Background(), FocusAgentRequest{
+				AgentID: "agent-1", SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1",
+			})
+			if !errors.Is(err, ErrNotFound) {
+				t.Fatalf("FocusAgent() error = %v, want codingagent %v", err, ErrNotFound)
+			}
+			if test.focusErr != nil && !errors.Is(err, test.focusErr) {
+				t.Fatalf("FocusAgent() error = %v, want runtime cause %v", err, test.focusErr)
+			}
+		})
+	}
+}
+
+func TestServiceNewServiceRejectsNilAndTypedNilDependencies(t *testing.T) {
+	validRuntime := &serviceFakeRuntime{}
+	validStore := NewMemoryStore(nil)
+	validMonitor := &serviceFakeMonitor{}
+	var nilRuntime *serviceFakeRuntime
+	var nilStore *serviceNilStore
+	var nilMonitor *serviceFakeMonitor
+
+	tests := []struct {
+		name    string
+		options ServiceOptions
+	}{
+		{name: "plain nil runtime", options: ServiceOptions{Store: validStore, LifecycleMonitor: validMonitor}},
+		{name: "typed nil runtime", options: ServiceOptions{RuntimeService: nilRuntime, Store: validStore, LifecycleMonitor: validMonitor}},
+		{name: "plain nil store", options: ServiceOptions{RuntimeService: validRuntime, LifecycleMonitor: validMonitor}},
+		{name: "typed nil store", options: ServiceOptions{RuntimeService: validRuntime, Store: nilStore, LifecycleMonitor: validMonitor}},
+		{name: "plain nil monitor", options: ServiceOptions{RuntimeService: validRuntime, Store: validStore}},
+		{name: "typed nil monitor", options: ServiceOptions{RuntimeService: validRuntime, Store: validStore, LifecycleMonitor: nilMonitor}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if service := NewService(test.options); service != nil {
+				t.Fatalf("NewService() = %#v, want nil", service)
+			}
+		})
+	}
+
+	valueRuntime := serviceValueRuntime{}
+	valueStore := serviceValueStore{Store: NewMemoryStore(nil)}
+	valueMonitor := serviceValueMonitor{}
+	if service := NewService(ServiceOptions{RuntimeService: valueRuntime, Store: valueStore, LifecycleMonitor: valueMonitor}); service == nil {
+		t.Fatal("NewService() rejected non-nil value implementations")
+	}
+}
+
 func TestServiceImplementsAgentAndRuntimeServices(t *testing.T) {
 	var _ AgentService = (*Service)(nil)
 	var _ runtime.RuntimeService = (*Service)(nil)
@@ -310,6 +675,10 @@ type serviceFakeRuntime struct {
 	createFn      func(context.Context, runtime.CreatePaneRequest) (runtime.CreatePaneResponse, error)
 	createErr     error
 	created       []runtime.CreatePaneRequest
+	cleanupFn     func(context.Context, runtime.CleanupRequest) (runtime.CleanupResponse, error)
+	cleanupErr    error
+	cleaned       []runtime.CleanupRequest
+	listFn        func(context.Context) (runtime.ListPanesResponse, error)
 	listResponse  runtime.ListPanesResponse
 	listErr       error
 	focusResponse runtime.FocusPaneResponse
@@ -328,7 +697,18 @@ func (f *serviceFakeRuntime) CreatePane(ctx context.Context, request runtime.Cre
 	return runtime.CreatePaneResponse{Pane: runtime.Pane{ID: request.ID}}, nil
 }
 
-func (f *serviceFakeRuntime) ListPanes(context.Context) (runtime.ListPanesResponse, error) {
+func (f *serviceFakeRuntime) Cleanup(ctx context.Context, request runtime.CleanupRequest) (runtime.CleanupResponse, error) {
+	f.cleaned = append(f.cleaned, request)
+	if f.cleanupFn != nil {
+		return f.cleanupFn(ctx, request)
+	}
+	return runtime.CleanupResponse{}, f.cleanupErr
+}
+
+func (f *serviceFakeRuntime) ListPanes(ctx context.Context) (runtime.ListPanesResponse, error) {
+	if f.listFn != nil {
+		return f.listFn(ctx)
+	}
 	return f.listResponse, f.listErr
 }
 
@@ -343,6 +723,23 @@ type serviceFakeMonitor struct {
 	started  []Record
 	stopped  []ID
 }
+
+type serviceNilStore struct {
+	Store
+}
+
+type serviceValueRuntime struct {
+	runtime.RuntimeService
+}
+
+type serviceValueStore struct {
+	Store
+}
+
+type serviceValueMonitor struct{}
+
+func (serviceValueMonitor) Start(Record) error { return nil }
+func (serviceValueMonitor) Stop(ID)            {}
 
 func (m *serviceFakeMonitor) Start(record Record) error {
 	m.started = append(m.started, record)

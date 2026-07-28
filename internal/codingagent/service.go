@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -78,16 +80,45 @@ type Service struct {
 	monitor    LifecycleMonitor
 	now        func() time.Time
 	newAgentID func() ID
+
+	lifecycleMu sync.Mutex
+	nextOwner   uint64
+	owners      map[ID]*agentOwnership
 }
 
+type agentLifecycle uint8
+
+const (
+	agentProvisioning agentLifecycle = iota
+	agentActive
+	agentCleanupUncertain
+	agentCleaning
+)
+
+type agentOwnership struct {
+	token  uint64
+	record Record
+	state  agentLifecycle
+}
+
+type agentSnapshot struct {
+	record    Record
+	token     uint64
+	lifecycle agentLifecycle
+	owned     bool
+}
+
+const partialCleanupTimeout = 5 * time.Second
+
+// NewService returns nil when any required runtime, store, or monitor dependency
+// is nil, including an interface containing a typed-nil value.
 func NewService(opts ServiceOptions) *Service {
+	if isNilDependency(opts.RuntimeService) || isNilDependency(opts.Store) || isNilDependency(opts.LifecycleMonitor) {
+		return nil
+	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
-	}
-	store := opts.Store
-	if store == nil {
-		store = NewMemoryStore(now)
 	}
 	newAgentID := opts.NewAgentID
 	if newAgentID == nil {
@@ -95,10 +126,11 @@ func NewService(opts ServiceOptions) *Service {
 	}
 	return &Service{
 		RuntimeService: opts.RuntimeService,
-		store:          store,
+		store:          opts.Store,
 		monitor:        opts.LifecycleMonitor,
 		now:            now,
 		newAgentID:     newAgentID,
+		owners:         make(map[ID]*agentOwnership),
 	}
 }
 
@@ -116,13 +148,6 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 	if sourceSession == "" || sourcePaneID == "" {
 		return StartAgentResponse{}, ErrAgentSourceRequired
 	}
-	if s.RuntimeService == nil {
-		return StartAgentResponse{}, ErrAgentRuntimeRequired
-	}
-	if s.monitor == nil {
-		return StartAgentResponse{}, ErrAgentMonitorRequired
-	}
-
 	id := s.newAgentID()
 	if id == "" {
 		return StartAgentResponse{}, ErrAgentIDRequired
@@ -136,14 +161,15 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 		CreatedAt:      now,
 		StateChangedAt: now,
 	}
-	created, err := s.store.Create(record)
+	created, owner, err := s.registerStart(record)
 	if err != nil {
 		return StartAgentResponse{}, fmt.Errorf("register coding agent %q: %w", id, err)
 	}
 	if err := s.monitor.Start(created); err != nil {
+		_, rollbackErr := s.cleanupOwnedRecord(owner, false)
 		return StartAgentResponse{}, errors.Join(
 			fmt.Errorf("start coding agent monitor %q: %w", id, err),
-			s.deleteRecord(id),
+			rollbackErr,
 		)
 	}
 
@@ -158,21 +184,22 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 		CWD:                   cwd,
 	})
 	if err != nil {
-		s.monitor.Stop(created.ID)
+		if errors.Is(err, runtime.ErrCleanupPartial) {
+			return StartAgentResponse{}, s.recoverPartialCreate(ctx, owner, err)
+		}
+		_, rollbackErr := s.cleanupOwnedRecord(owner, true)
 		return StartAgentResponse{}, errors.Join(
 			fmt.Errorf("create coding agent pane %q: %w", id, err),
-			s.deleteRecord(id),
+			rollbackErr,
 		)
 	}
 
+	s.markOwnerState(owner, agentActive)
 	return StartAgentResponse{Agent: AgentWithPane{Agent: created, Pane: paneResponse.Pane}}, nil
 }
 
 func (s *Service) ListAgents(ctx context.Context) (ListAgentsResponse, error) {
-	if s.RuntimeService == nil {
-		return ListAgentsResponse{}, ErrAgentRuntimeRequired
-	}
-	records, err := s.store.List()
+	snapshots, err := s.snapshotAgents()
 	if err != nil {
 		return ListAgentsResponse{}, fmt.Errorf("list coding agents: %w", err)
 	}
@@ -185,18 +212,17 @@ func (s *Service) ListAgents(ctx context.Context) (ListAgentsResponse, error) {
 		panesByID[pane.ID] = pane
 	}
 
-	agents := make([]AgentWithPane, 0, len(records))
+	agents := make([]AgentWithPane, 0, len(snapshots))
 	var cleanupErr error
-	for _, record := range records {
-		pane, ok := panesByID[record.PaneID]
+	for _, snapshot := range snapshots {
+		pane, ok := panesByID[snapshot.record.PaneID]
 		if !ok {
-			if s.monitor != nil {
-				s.monitor.Stop(record.ID)
-			}
-			cleanupErr = errors.Join(cleanupErr, s.deleteRecord(record.ID))
+			cleanupErr = errors.Join(cleanupErr, s.cleanupOrphan(snapshot))
 			continue
 		}
-		agents = append(agents, AgentWithPane{Agent: record, Pane: pane})
+		if s.snapshotIsCurrent(snapshot) {
+			agents = append(agents, AgentWithPane{Agent: snapshot.record, Pane: pane})
+		}
 	}
 	if cleanupErr != nil {
 		return ListAgentsResponse{}, fmt.Errorf("remove orphaned coding agents: %w", cleanupErr)
@@ -205,9 +231,6 @@ func (s *Service) ListAgents(ctx context.Context) (ListAgentsResponse, error) {
 }
 
 func (s *Service) FocusAgent(ctx context.Context, request FocusAgentRequest) (FocusAgentResponse, error) {
-	if s.RuntimeService == nil {
-		return FocusAgentResponse{}, ErrAgentRuntimeRequired
-	}
 	record, err := s.store.Get(request.AgentID)
 	if err != nil {
 		return FocusAgentResponse{}, fmt.Errorf("get coding agent %q: %w", request.AgentID, err)
@@ -218,17 +241,245 @@ func (s *Service) FocusAgent(ctx context.Context, request FocusAgentRequest) (Fo
 		SourceZellijPaneID:  request.SourceZellijPaneID,
 	})
 	if err != nil {
+		if errors.Is(err, runtime.ErrPaneNotFound) || errors.Is(err, runtime.ErrInvalidPaneTarget) {
+			return FocusAgentResponse{}, errors.Join(
+				fmt.Errorf("%w: %q", ErrNotFound, request.AgentID),
+				fmt.Errorf("focus coding agent %q: %w", request.AgentID, err),
+			)
+		}
 		return FocusAgentResponse{}, fmt.Errorf("focus coding agent %q: %w", request.AgentID, err)
+	}
+	if terminalAgentPane(response.Pane.Status) {
+		return FocusAgentResponse{}, fmt.Errorf("%w: %q runtime pane is %s", ErrNotFound, request.AgentID, response.Pane.Status)
 	}
 	return FocusAgentResponse{Agent: AgentWithPane{Agent: record, Pane: response.Pane}}, nil
 }
 
-func (s *Service) deleteRecord(id ID) error {
-	err := s.store.Delete(id)
-	if errors.Is(err, ErrNotFound) {
+func (s *Service) registerStart(record Record) (Record, *agentOwnership, error) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+
+	if existing := s.owners[record.ID]; existing != nil {
+		if existing.state == agentProvisioning || existing.state == agentCleaning {
+			return Record{}, nil, fmt.Errorf("%w: %q is reserved", ErrDuplicateID, record.ID)
+		}
+		if _, err := s.store.Get(record.ID); err == nil {
+			return Record{}, nil, fmt.Errorf("%w: %q", ErrDuplicateID, record.ID)
+		} else if !errors.Is(err, ErrNotFound) {
+			return Record{}, nil, err
+		}
+		delete(s.owners, record.ID)
+	}
+
+	s.nextOwner++
+	owner := &agentOwnership{token: s.nextOwner, record: record, state: agentProvisioning}
+	s.owners[record.ID] = owner
+	created, err := s.store.Create(record)
+	if err != nil {
+		delete(s.owners, record.ID)
+		return Record{}, nil, err
+	}
+	owner.record = created
+	return created, owner, nil
+}
+
+func (s *Service) snapshotAgents() ([]agentSnapshot, error) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	records, err := s.store.List()
+	if err != nil {
+		return nil, err
+	}
+	currentByID := make(map[ID]Record, len(records))
+	for _, record := range records {
+		currentByID[record.ID] = record
+	}
+	for id, owner := range s.owners {
+		if current, ok := currentByID[id]; !ok || !sameRecordIdentity(owner.record, current) {
+			delete(s.owners, id)
+		}
+	}
+	snapshots := make([]agentSnapshot, 0, len(records))
+	for _, record := range records {
+		snapshot := agentSnapshot{record: record}
+		if owner := s.owners[record.ID]; owner != nil && sameRecordIdentity(owner.record, record) {
+			snapshot.token = owner.token
+			snapshot.lifecycle = owner.state
+			snapshot.owned = true
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	return snapshots, nil
+}
+
+func (s *Service) snapshotIsCurrent(snapshot agentSnapshot) bool {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if !s.ownerMatchesSnapshot(snapshot) {
+		return false
+	}
+	current, err := s.store.Get(snapshot.record.ID)
+	return err == nil && sameRecordIdentity(current, snapshot.record)
+}
+
+func (s *Service) cleanupOrphan(snapshot agentSnapshot) error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+
+	if !s.ownerMatchesSnapshot(snapshot) {
 		return nil
 	}
-	return err
+	if snapshot.owned && (snapshot.lifecycle == agentProvisioning || snapshot.lifecycle == agentCleanupUncertain) {
+		return nil
+	}
+	owner := s.owners[snapshot.record.ID]
+	if owner != nil {
+		switch owner.state {
+		case agentProvisioning, agentCleanupUncertain, agentCleaning:
+			return nil
+		}
+	} else {
+		s.nextOwner++
+		owner = &agentOwnership{
+			token:  s.nextOwner,
+			record: snapshot.record,
+			state:  agentCleaning,
+		}
+		s.owners[snapshot.record.ID] = owner
+	}
+
+	current, err := s.store.Get(snapshot.record.ID)
+	if errors.Is(err, ErrNotFound) {
+		delete(s.owners, snapshot.record.ID)
+		return nil
+	}
+	if err != nil {
+		owner.state = agentCleanupUncertain
+		return err
+	}
+	if !sameRecordIdentity(current, snapshot.record) {
+		delete(s.owners, snapshot.record.ID)
+		return nil
+	}
+	owner.state = agentCleaning
+	if err := s.store.Delete(snapshot.record.ID); err != nil && !errors.Is(err, ErrNotFound) {
+		owner.state = agentCleanupUncertain
+		return err
+	}
+	s.monitor.Stop(snapshot.record.ID)
+	delete(s.owners, snapshot.record.ID)
+	return nil
+}
+
+func (s *Service) ownerMatchesSnapshot(snapshot agentSnapshot) bool {
+	owner := s.owners[snapshot.record.ID]
+	if snapshot.token == 0 {
+		return owner == nil
+	}
+	return owner != nil && owner.token == snapshot.token && sameRecordIdentity(owner.record, snapshot.record)
+}
+
+func (s *Service) cleanupOwnedRecord(owner *agentOwnership, stopMonitor bool) (bool, error) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if owner == nil || s.owners[owner.record.ID] != owner {
+		return false, nil
+	}
+	current, err := s.store.Get(owner.record.ID)
+	if errors.Is(err, ErrNotFound) {
+		delete(s.owners, owner.record.ID)
+		return false, nil
+	}
+	if err != nil {
+		owner.state = agentCleanupUncertain
+		return false, err
+	}
+	if !sameRecordIdentity(current, owner.record) {
+		delete(s.owners, owner.record.ID)
+		return false, nil
+	}
+	owner.state = agentCleaning
+	if err := s.store.Delete(owner.record.ID); err != nil && !errors.Is(err, ErrNotFound) {
+		owner.state = agentCleanupUncertain
+		return false, err
+	}
+	if stopMonitor {
+		s.monitor.Stop(owner.record.ID)
+	}
+	delete(s.owners, owner.record.ID)
+	return true, nil
+}
+
+func (s *Service) recoverPartialCreate(ctx context.Context, owner *agentOwnership, createErr error) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), partialCleanupTimeout)
+	defer cancel()
+	cleanupResponse, cleanupErr := s.RuntimeService.Cleanup(cleanupCtx, runtime.CleanupRequest{PaneIDs: []runtime.PaneID{owner.record.PaneID}})
+	confirmation, confirmErr := s.RuntimeService.ListPanes(cleanupCtx)
+	paneRemains := false
+	if confirmErr == nil {
+		for _, pane := range confirmation.Panes {
+			if pane.ID == owner.record.PaneID {
+				paneRemains = true
+				break
+			}
+		}
+	}
+	cleanupSucceeded := cleanupErr == nil && len(cleanupResponse.Failed) == 0
+	if cleanupSucceeded && confirmErr == nil && !paneRemains {
+		_, rollbackErr := s.cleanupOwnedRecord(owner, true)
+		return errors.Join(
+			fmt.Errorf("create coding agent pane %q: %w", owner.record.ID, createErr),
+			rollbackErr,
+		)
+	}
+
+	s.markOwnerState(owner, agentCleanupUncertain)
+	diagnostics := []error{fmt.Errorf("create coding agent pane %q: %w", owner.record.ID, createErr)}
+	if cleanupErr != nil {
+		diagnostics = append(diagnostics, fmt.Errorf("retry runtime cleanup for pane %q: %w", owner.record.PaneID, cleanupErr))
+	} else if len(cleanupResponse.Failed) > 0 {
+		diagnostics = append(diagnostics, fmt.Errorf("%w: cleanup retry reported %d failure(s)", runtime.ErrCleanupPartial, len(cleanupResponse.Failed)))
+	}
+	if confirmErr != nil {
+		diagnostics = append(diagnostics, fmt.Errorf("confirm runtime cleanup for pane %q: %w", owner.record.PaneID, confirmErr))
+	} else if paneRemains {
+		diagnostics = append(diagnostics, fmt.Errorf("%w: runtime pane %q remains after cleanup retry", runtime.ErrCleanupPartial, owner.record.PaneID))
+	}
+	return errors.Join(diagnostics...)
+}
+
+func (s *Service) markOwnerState(owner *agentOwnership, state agentLifecycle) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if owner != nil && s.owners[owner.record.ID] == owner {
+		owner.state = state
+	}
+}
+
+func sameRecordIdentity(left, right Record) bool {
+	return left.ID == right.ID && left.Kind == right.Kind && left.PaneID == right.PaneID && left.CreatedAt.Equal(right.CreatedAt)
+}
+
+func terminalAgentPane(status runtime.PaneStatus) bool {
+	switch status {
+	case runtime.PaneStatusClosed, runtime.PaneStatusExited, runtime.PaneStatusLost:
+		return true
+	default:
+		return false
+	}
+}
+
+func isNilDependency(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice, reflect.UnsafePointer:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
 
 func resolveAgentCWD(cwd string) (string, error) {
