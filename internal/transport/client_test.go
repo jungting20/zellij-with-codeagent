@@ -202,10 +202,11 @@ func TestClientAutoStartsDaemonOnMissingSocket(t *testing.T) {
 				t.Fatalf("SocketPath = %q, want %q", opts.SocketPath, socketPath)
 			}
 			server, err := NewServer(ServerOptions{
-				Service:        service,
-				SocketPath:     socketPath,
-				RequestTimeout: time.Second,
-				Version:        "test",
+				Service:            service,
+				VoiceNotifications: noopVoiceNotificationService{},
+				SocketPath:         socketPath,
+				RequestTimeout:     time.Second,
+				Version:            "test",
 			})
 			if err != nil {
 				return err
@@ -247,10 +248,11 @@ func startUnixTransport(t *testing.T, service *fakeRuntimeService) (*Client, fun
 	t.Helper()
 	socketPath := shortSocketPath(t)
 	server, err := NewServer(ServerOptions{
-		Service:        service,
-		SocketPath:     socketPath,
-		RequestTimeout: time.Second,
-		Version:        "test",
+		Service:            service,
+		VoiceNotifications: noopVoiceNotificationService{},
+		SocketPath:         socketPath,
+		RequestTimeout:     time.Second,
+		Version:            "test",
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)

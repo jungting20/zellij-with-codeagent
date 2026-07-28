@@ -17,10 +17,11 @@ import (
 const DefaultRequestTimeout = 30 * time.Second
 
 type ServerOptions struct {
-	Service        ServerRuntime
-	SocketPath     string
-	RequestTimeout time.Duration
-	Version        string
+	Service            ServerRuntime
+	VoiceNotifications VoiceNotificationService
+	SocketPath         string
+	RequestTimeout     time.Duration
+	Version            string
 }
 
 type ServerRuntime interface {
@@ -34,18 +35,22 @@ type ServerRuntime interface {
 }
 
 type Server struct {
-	service        ServerRuntime
-	socketPath     string
-	requestTimeout time.Duration
-	version        string
-	httpServer     *http.Server
-	shutdown       chan struct{}
-	shutdownOnce   sync.Once
+	service            ServerRuntime
+	voiceNotifications VoiceNotificationService
+	socketPath         string
+	requestTimeout     time.Duration
+	version            string
+	httpServer         *http.Server
+	shutdown           chan struct{}
+	shutdownOnce       sync.Once
 }
 
 func NewServer(opts ServerOptions) (*Server, error) {
 	if opts.Service == nil {
 		return nil, errors.New("transport: runtime service is required")
+	}
+	if opts.VoiceNotifications == nil {
+		return nil, errors.New("transport: voice notification service is required")
 	}
 	if opts.SocketPath == "" {
 		return nil, errors.New("transport: socket path is required")
@@ -55,11 +60,12 @@ func NewServer(opts ServerOptions) (*Server, error) {
 		requestTimeout = DefaultRequestTimeout
 	}
 	server := &Server{
-		service:        opts.Service,
-		socketPath:     opts.SocketPath,
-		requestTimeout: requestTimeout,
-		version:        opts.Version,
-		shutdown:       make(chan struct{}),
+		service:            opts.Service,
+		voiceNotifications: opts.VoiceNotifications,
+		socketPath:         opts.SocketPath,
+		requestTimeout:     requestTimeout,
+		version:            opts.Version,
+		shutdown:           make(chan struct{}),
 	}
 	server.httpServer = &http.Server{Handler: server}
 	return server, nil
@@ -125,6 +131,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleCleanup(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/requests":
 		s.handleRequests(w, r)
+	case r.URL.Path == "/v1/voice-notifications":
+		s.handleVoiceNotifications(w, r)
 	default:
 		writeAPIError(w, APIError{Code: CodeNotFound, Message: "route not found"}, http.StatusNotFound)
 	}

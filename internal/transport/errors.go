@@ -21,7 +21,10 @@ const (
 	CodeInitializationFailed ErrorCode = "initialization_failed"
 	CodeStreamClosed         ErrorCode = "stream_closed"
 	CodeTimeout              ErrorCode = "timeout"
+	CodeQueueFull            ErrorCode = "queue_full"
 )
+
+var ErrVoiceQueueFull = errors.New("voice notification queue is full")
 
 type APIError struct {
 	Code      ErrorCode `json:"code"`
@@ -58,6 +61,8 @@ func ErrorFor(err error) (APIError, int) {
 		return APIError{}, http.StatusOK
 	}
 	switch {
+	case errors.Is(err, ErrVoiceQueueFull):
+		return APIError{Code: CodeQueueFull, Message: err.Error(), Retryable: true}, http.StatusServiceUnavailable
 	case errors.Is(err, rt.ErrPaneNotFound), errors.Is(err, rt.ErrSessionNotFound), errors.Is(err, rt.ErrTabNotFound):
 		return APIError{Code: CodeNotFound, Message: err.Error()}, http.StatusNotFound
 	case errors.Is(err, rt.ErrMissingPaneID), errors.Is(err, rt.ErrInvalidExecutionPlan), errors.Is(err, rt.ErrInvalidMessage), errors.Is(err, rt.ErrInvalidPaneTarget), errors.Is(err, rt.ErrZellijSessionRequired):
