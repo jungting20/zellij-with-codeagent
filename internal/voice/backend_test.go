@@ -5,9 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf16"
 )
 
@@ -117,12 +120,89 @@ func TestSpeechBackendPreservesCommandFailureAndNormalizesCancellation(t *testin
 	}
 }
 
+func TestSpeechBackendRunsFailingAndCancelledChildProcesses(t *testing.T) {
+	childBackend := func(mode, marker string) speechBackend {
+		return speechBackend{
+			path: os.Args[0],
+			args: func(string) []string {
+				return []string{"-test.run=^TestSpeechBackendChildProcess$", "--", mode, marker}
+			},
+		}
+	}
+
+	t.Run("failing child process", func(t *testing.T) {
+		err := childBackend("fail", "").speak(context.Background(), "ignored")
+		if err == nil {
+			t.Fatal("speak() error = nil, want child-process failure")
+		}
+	})
+
+	t.Run("cancelled child process", func(t *testing.T) {
+		marker := filepath.Join(t.TempDir(), "started")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		errs := make(chan error, 1)
+		go func() { errs <- childBackend("block", marker).speak(ctx, "ignored") }()
+		waitForFile(t, marker)
+		cancel()
+		select {
+		case err := <-errs:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("speak() error = %v, want %v", err, context.Canceled)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for cancelled child process")
+		}
+	})
+}
+
+func TestSpeechBackendChildProcess(t *testing.T) {
+	separator := -1
+	for i, arg := range os.Args {
+		if arg == "--" {
+			separator = i
+			break
+		}
+	}
+	if separator == -1 || len(os.Args) < separator+2 {
+		return
+	}
+	switch os.Args[separator+1] {
+	case "fail":
+		os.Exit(23)
+	case "block":
+		if len(os.Args) < separator+3 {
+			os.Exit(24)
+		}
+		if err := os.WriteFile(os.Args[separator+2], []byte("started"), 0o600); err != nil {
+			os.Exit(25)
+		}
+		for {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
 func mapLookPath(executables map[string]string) func(string) (string, error) {
 	return func(name string) (string, error) {
 		if path := executables[name]; path != "" {
 			return path, nil
 		}
 		return "", errors.New("executable not found")
+	}
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for child process marker %q", path)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

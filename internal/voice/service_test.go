@@ -68,18 +68,45 @@ func TestServicePreservesFIFOAndSerializesSpeech(t *testing.T) {
 		}
 	}})
 
-	for _, id := range []string{"one", "two", "three"} {
-		if status, err := service.Enqueue(Notification{RequestID: id, Prefix: "ticket", TicketID: int64(len(id))}); err != nil || status != EnqueueStatusQueued {
-			t.Fatalf("Enqueue(%q) = (%q, %v), want (queued, nil)", id, status, err)
+	for _, notification := range []Notification{
+		{RequestID: "one", Prefix: "ticket", TicketID: 1},
+		{RequestID: "two", Prefix: "ticket", TicketID: 2},
+		{RequestID: "three", Prefix: "ticket", TicketID: 3},
+	} {
+		if status, err := service.Enqueue(notification); err != nil || status != EnqueueStatusQueued {
+			t.Fatalf("Enqueue(%q) = (%q, %v), want (queued, nil)", notification.RequestID, status, err)
 		}
 	}
 
-	for _, want := range []string{"ticket 3 완료", "ticket 3 완료", "ticket 5 완료"} {
+	for _, want := range []string{"ticket 1 완료", "ticket 2 완료", "ticket 3 완료"} {
 		wantSpeech(t, started, want)
 		release <- struct{}{}
 	}
 	if got := maximum.Load(); got != 1 {
 		t.Fatalf("maximum concurrent speech = %d, want 1", got)
+	}
+}
+
+func TestNewServiceEnforcesHardLimits(t *testing.T) {
+	options := Options{Capacity: DefaultCapacity, RecentLimit: DefaultRecentLimit, Speak: func(context.Context, string) error { return nil }}
+	service, err := NewService(options)
+	if err != nil {
+		t.Fatalf("NewService at limits: %v", err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	options.Capacity = DefaultCapacity + 1
+	if service, err := NewService(options); err == nil {
+		_ = service.Close()
+		t.Fatal("NewService accepted capacity above hard maximum")
+	}
+	options.Capacity = DefaultCapacity
+	options.RecentLimit = DefaultRecentLimit + 1
+	if service, err := NewService(options); err == nil {
+		_ = service.Close()
+		t.Fatal("NewService accepted recent limit above hard maximum")
 	}
 }
 
@@ -139,14 +166,66 @@ func TestServiceRejectsFullQueueWithoutRememberingRejectedID(t *testing.T) {
 	release <- struct{}{}
 }
 
+func TestServiceRejectsFullQueueAtDefaultCapacity(t *testing.T) {
+	started := make(chan string, 1)
+	service := newTestService(t, Options{Speak: func(ctx context.Context, message string) error {
+		started <- message
+		<-ctx.Done()
+		return ctx.Err()
+	}})
+	mustEnqueue(t, service, Notification{RequestID: "active", Prefix: "ticket", TicketID: 1})
+	wantSpeech(t, started, "ticket 1 완료")
+	for i := 0; i < DefaultCapacity; i++ {
+		mustEnqueue(t, service, Notification{RequestID: fmt.Sprintf("pending-%d", i), Prefix: "ticket", TicketID: int64(i + 2)})
+	}
+	if status, err := service.Enqueue(Notification{RequestID: "over-capacity"}); status != "" || !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("default-capacity Enqueue() = (%q, %v), want (empty, %v)", status, err, ErrQueueFull)
+	}
+}
+
 func TestServiceEvictsOldestRecentID(t *testing.T) {
-	service := newTestService(t, Options{Capacity: DefaultRecentLimit + 2, Speak: func(context.Context, string) error { return nil }})
+	spoken := make(chan string, 1)
+	service := newTestService(t, Options{Speak: func(_ context.Context, message string) error {
+		spoken <- message
+		return nil
+	}})
 	for i := 0; i <= DefaultRecentLimit; i++ {
 		mustEnqueue(t, service, Notification{RequestID: fmt.Sprintf("request-%d", i), Prefix: "ticket", TicketID: int64(i)})
+		wantSpeech(t, spoken, fmt.Sprintf("ticket %d 완료", i))
 	}
-	if status, err := service.Enqueue(Notification{RequestID: "request-0", Prefix: "ticket", TicketID: 0}); err != nil || status != EnqueueStatusQueued {
-		t.Fatalf("evicted ID Enqueue() = (%q, %v), want (queued, nil)", status, err)
+	eventuallyEnqueue(t, service, Notification{RequestID: "request-0", Prefix: "ticket", TicketID: 0})
+}
+
+func TestServiceKeepsInflightIDDuplicateUnderRecentLimitPressure(t *testing.T) {
+	historyDone := make(chan struct{})
+	activeStarted := make(chan struct{})
+	service := newTestService(t, Options{RecentLimit: 1, Speak: func(ctx context.Context, message string) error {
+		switch message {
+		case "ticket 1 완료":
+			close(historyDone)
+			return nil
+		case "ticket 2 완료":
+			close(activeStarted)
+			<-ctx.Done()
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}})
+	mustEnqueue(t, service, Notification{RequestID: "history", Prefix: "ticket", TicketID: 1})
+	select {
+	case <-historyDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for history speech")
 	}
+	mustEnqueue(t, service, Notification{RequestID: "active", Prefix: "ticket", TicketID: 2})
+	select {
+	case <-activeStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for active speech")
+	}
+	mustEnqueue(t, service, Notification{RequestID: "pressure", Prefix: "ticket", TicketID: 3})
+	mustDuplicate(t, service, Notification{RequestID: "active", Prefix: "ticket", TicketID: 2})
 }
 
 func TestServiceContinuesAfterSpeechFailure(t *testing.T) {
@@ -287,5 +366,23 @@ func wantSpeech(t *testing.T, started <-chan string, want string) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timed out waiting for %q", want)
+	}
+}
+
+func eventuallyEnqueue(t *testing.T, service *Service, notification Notification) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		status, err := service.Enqueue(notification)
+		if err == nil && status == EnqueueStatusQueued {
+			return
+		}
+		if err != nil || status != EnqueueStatusDuplicate {
+			t.Fatalf("Enqueue(%q) = (%q, %v), want eventual queued status", notification.RequestID, status, err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %q eviction", notification.RequestID)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

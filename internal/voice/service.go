@@ -45,12 +45,13 @@ type Options struct {
 }
 
 type Service struct {
-	mu     sync.Mutex
-	cond   *sync.Cond
-	queue  []Notification
-	seen   map[string]struct{}
-	recent []string
-	closed bool
+	mu          sync.Mutex
+	cond        *sync.Cond
+	queue       []Notification
+	active      map[string]struct{}
+	recent      map[string]struct{}
+	recentOrder []string
+	closed      bool
 
 	capacity    int
 	recentLimit int
@@ -68,8 +69,14 @@ func NewService(options Options) (*Service, error) {
 	if options.Capacity < 0 {
 		return nil, errors.New("voice notification capacity must not be negative")
 	}
+	if options.Capacity > DefaultCapacity {
+		return nil, fmt.Errorf("voice notification capacity must not exceed %d", DefaultCapacity)
+	}
 	if options.RecentLimit < 0 {
 		return nil, errors.New("voice notification recent limit must not be negative")
+	}
+	if options.RecentLimit > DefaultRecentLimit {
+		return nil, fmt.Errorf("voice notification recent limit must not exceed %d", DefaultRecentLimit)
 	}
 	if options.Capacity == 0 {
 		options.Capacity = DefaultCapacity
@@ -87,7 +94,8 @@ func NewService(options Options) (*Service, error) {
 		recentLimit: options.RecentLimit,
 		speak:       options.Speak,
 		log:         options.Log,
-		seen:        make(map[string]struct{}),
+		active:      make(map[string]struct{}),
+		recent:      make(map[string]struct{}),
 		ctx:         ctx,
 		cancel:      cancel,
 		done:        make(chan struct{}),
@@ -124,7 +132,10 @@ func (s *Service) Enqueue(notification Notification) (EnqueueStatus, error) {
 	if s.closed {
 		return "", ErrClosed
 	}
-	if _, ok := s.seen[notification.RequestID]; ok {
+	if _, ok := s.active[notification.RequestID]; ok {
+		return EnqueueStatusDuplicate, nil
+	}
+	if _, ok := s.recent[notification.RequestID]; ok {
 		return EnqueueStatusDuplicate, nil
 	}
 	if len(s.queue) >= s.capacity {
@@ -132,14 +143,7 @@ func (s *Service) Enqueue(notification Notification) (EnqueueStatus, error) {
 	}
 
 	s.queue = append(s.queue, notification)
-	s.seen[notification.RequestID] = struct{}{}
-	s.recent = append(s.recent, notification.RequestID)
-	if len(s.recent) > s.recentLimit {
-		oldest := s.recent[0]
-		s.recent[0] = ""
-		s.recent = s.recent[1:]
-		delete(s.seen, oldest)
-	}
+	s.active[notification.RequestID] = struct{}{}
 	s.cond.Signal()
 	return EnqueueStatusQueued, nil
 }
@@ -150,6 +154,7 @@ func (s *Service) Close() error {
 		s.closed = true
 		clear(s.queue)
 		s.queue = nil
+		clear(s.active)
 		s.cancel()
 		s.cond.Broadcast()
 	}
@@ -179,6 +184,24 @@ func (s *Service) run() {
 		if err := s.speak(s.ctx, formatMessage(notification)); err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintf(s.log, "voice notification failed: %v\n", err)
 		}
+		s.finish(notification.RequestID)
+	}
+}
+
+func (s *Service) finish(requestID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.active, requestID)
+	if s.closed {
+		return
+	}
+	s.recent[requestID] = struct{}{}
+	s.recentOrder = append(s.recentOrder, requestID)
+	if len(s.recentOrder) > s.recentLimit {
+		oldest := s.recentOrder[0]
+		s.recentOrder[0] = ""
+		s.recentOrder = s.recentOrder[1:]
+		delete(s.recent, oldest)
 	}
 }
 
