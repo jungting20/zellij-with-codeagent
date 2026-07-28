@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	agentcli "zellij-with-codeagent/internal/cli/agent"
 	chromecli "zellij-with-codeagent/internal/cli/chrome"
 	codereviewcli "zellij-with-codeagent/internal/cli/codereview"
 	ctlcli "zellij-with-codeagent/internal/cli/ctl"
@@ -55,6 +56,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		})
 	case "dashboard":
 		return dashboardcli.Run(args[1:], stdin, stdout, stderr, newDashboardClient, dashboardcli.Config{})
+	case "agent":
+		return agentcli.Run(args[1:], stdin, stdout, stderr, newAgentClient, agentcli.Config{
+			Getwd:  os.Getwd,
+			Getenv: os.Getenv,
+		})
 	case "ticket-worker":
 		cwd, err := getWorkingDirectory()
 		if err != nil {
@@ -100,6 +106,10 @@ var newTicketWorkerClient ticketworkercli.ClientFactory = func(socketPath string
 	return newAutoStartClient(socketPath, timeout)
 }
 
+var newAgentClient agentcli.ClientFactory = func(socketPath string, timeout time.Duration) agentcli.AgentClient {
+	return newAutoStartClient(socketPath, timeout)
+}
+
 func newDashboardClient(socketPath string, timeout time.Duration) dashboard.Client {
 	return newAutoStartClient(socketPath, timeout)
 }
@@ -138,6 +148,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  chrome   Start a Chrome network tracking tab")
 	fmt.Fprintln(w, "  dashboard")
 	fmt.Fprintln(w, "           Supervise the managed runtime in a live TUI")
+	fmt.Fprintln(w, "  agent    Start a managed coding agent in the current Zellij tab")
 	fmt.Fprintln(w, "  ticket-worker")
 	fmt.Fprintln(w, "           Manage a project-local SQLite ticket queue")
 	fmt.Fprintln(w, "  code-review")

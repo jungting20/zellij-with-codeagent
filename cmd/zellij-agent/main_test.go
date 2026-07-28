@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	agentcli "zellij-with-codeagent/internal/cli/agent"
 	ticketworkercli "zellij-with-codeagent/internal/cli/ticketworker"
 	"zellij-with-codeagent/internal/ticketworker"
 	"zellij-with-codeagent/internal/transport"
@@ -23,7 +25,7 @@ func TestRunHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run() exit code = %d, want 0", code)
 	}
-	for _, want := range []string{"Usage: zellij-agent", "planner", "work", "chrome", "dashboard", "ticket-worker", "code-review", "debate-background"} {
+	for _, want := range []string{"Usage: zellij-agent", "planner", "work", "chrome", "dashboard", "agent", "ticket-worker", "code-review", "debate-background"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, missing %q", stdout.String(), want)
 		}
@@ -31,6 +33,57 @@ func TestRunHelp(t *testing.T) {
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
+}
+
+func TestRunDispatchesAgentHelp(t *testing.T) {
+	for _, args := range [][]string{{"agent", "--help"}, {"agent", "start", "--help"}} {
+		var stdout, stderr bytes.Buffer
+		code := run(args, strings.NewReader(""), &stdout, &stderr)
+		if code != 0 || !strings.Contains(stdout.String(), "Usage: zellij-agent agent") || stderr.Len() != 0 {
+			t.Fatalf("run(%#v): code=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestRunDispatchesAgentStart(t *testing.T) {
+	cwd := t.TempDir()
+	t.Setenv("ZELLIJ_SESSION_NAME", "session-a")
+	t.Setenv("ZELLIJ_PANE_ID", "terminal_2")
+	client := &fakeAgentClient{response: transport.StartAgentResponse{Agent: transport.AgentWithPane{
+		Agent: transport.Agent{ID: "agent-1", Kind: "codex", PaneID: "pane-1"},
+		Pane:  transport.Pane{ID: "pane-1"},
+	}}}
+	originalFactory := newAgentClient
+	newAgentClient = func(socketPath string, timeout time.Duration) agentcli.AgentClient {
+		client.socket, client.timeout = socketPath, timeout
+		return client
+	}
+	t.Cleanup(func() { newAgentClient = originalFactory })
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"agent", "start", "codex", "--cwd", cwd, "--", "--model", "gpt-5"}, strings.NewReader(""), &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, stderr=%q", code, stderr.String())
+	}
+	if client.request.Kind != "codex" || client.request.CWD != cwd || !reflect.DeepEqual(client.request.Args, []string{"--model", "gpt-5"}) {
+		t.Fatalf("StartAgent request = %#v", client.request)
+	}
+	if stdout.String() != "started agent=agent-1 kind=codex pane=pane-1\n" {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+}
+
+type fakeAgentClient struct {
+	request  transport.StartAgentRequest
+	response transport.StartAgentResponse
+	socket   string
+	timeout  time.Duration
+}
+
+func (c *fakeAgentClient) StartAgent(_ context.Context, request transport.StartAgentRequest) (transport.StartAgentResponse, error) {
+	c.request = request
+	return c.response, nil
 }
 
 func TestRunDispatchesTicketWorkerHelp(t *testing.T) {
