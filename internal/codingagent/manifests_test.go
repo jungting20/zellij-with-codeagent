@@ -40,6 +40,7 @@ func TestEmbeddedManifests(t *testing.T) {
 		{name: "codex live strong blocker", kind: KindCodex, fixture: "testdata/codex/blocked-live-strong.txt", inputField: "screen", wantState: StateBlocked, wantRule: "live_strong_blocker", wantPriority: 900, wantBlocker: true},
 		{name: "codex weak blocker", kind: KindCodex, fixture: "testdata/codex/blocked-weak-yes-no.txt", inputField: "screen", wantState: StateBlocked, wantRule: "weak_blocker", wantPriority: 600},
 		{name: "codex working footer", kind: KindCodex, fixture: "testdata/codex/working-screen-footer.txt", inputField: "screen", wantState: StateWorking, wantRule: "screen_working_fallback", wantPriority: 500, wantWorking: true},
+		{name: "codex interrupted conversation excludes working footer", kind: KindCodex, fixture: "testdata/codex/idle-conversation-interrupted.txt", inputField: "screen", wantState: StateIdle, wantFallback: true},
 		{name: "codex osc idle", kind: KindCodex, fixture: "testdata/codex/idle-osc-title.txt", inputField: "osc_title", wantState: StateIdle, wantRule: "osc_title_idle", wantPriority: 100, wantIdle: true},
 		{name: "codex unmatched fallback", kind: KindCodex, fixture: "testdata/codex/idle-unmatched.txt", inputField: "screen", wantState: StateIdle, wantFallback: true},
 
@@ -52,6 +53,7 @@ func TestEmbeddedManifests(t *testing.T) {
 		{name: "cursor stop hint", kind: KindCursor, fixture: "testdata/cursor/working-stop-hint.txt", inputField: "screen", wantState: StateWorking, wantRule: "stop_hint_working", wantPriority: 100, wantWorking: true},
 		{name: "cursor background task", kind: KindCursor, fixture: "testdata/cursor/working-background-task.txt", inputField: "screen", wantState: StateWorking, wantRule: "background_task_status_working", wantPriority: 95, wantWorking: true},
 		{name: "cursor spinner", kind: KindCursor, fixture: "testdata/cursor/working-spinner.txt", inputField: "screen", wantState: StateWorking, wantRule: "spinner_working", wantPriority: 90, wantWorking: true},
+		{name: "cursor non ascii spinner suffix is not working", kind: KindCursor, fixture: "testdata/cursor/idle-non-ascii-spinner.txt", inputField: "screen", wantState: StateIdle, wantFallback: true},
 		{name: "cursor unmatched fallback", kind: KindCursor, fixture: "testdata/cursor/idle-unmatched.txt", inputField: "screen", wantState: StateIdle, wantFallback: true},
 
 		{name: "claude osc spinner", kind: KindClaude, fixture: "testdata/claude/working-osc-spinner.txt", inputField: "osc_title", wantState: StateWorking, wantRule: "osc_title_working", wantPriority: 1100, wantWorking: true},
@@ -61,11 +63,15 @@ func TestEmbeddedManifests(t *testing.T) {
 		{name: "claude btw overlay", kind: KindClaude, fixture: "testdata/claude/working-btw-overlay.txt", inputField: "screen", wantState: StateWorking, wantRule: "btw_overlay_working", wantPriority: 975, wantWorking: true},
 		{name: "claude prompt box", kind: KindClaude, fixture: "testdata/claude/idle-prompt-box.txt", inputField: "screen", wantState: StateIdle, wantRule: "live_prompt_box", wantPriority: 950, wantIdle: true},
 		{name: "claude model picker", kind: KindClaude, fixture: "testdata/claude/skip-model-picker.txt", inputField: "screen", wantRule: "model_picker_menu", wantPriority: 900, wantSkipUpdate: true},
+		{name: "claude model picker excludes permission prompt", kind: KindClaude, fixture: "testdata/claude/blocked-model-picker-permission.txt", inputField: "screen", wantState: StateBlocked, wantRule: "bash_permission_prompt", wantPriority: 850, wantBlocker: true},
+		{name: "claude model picker excludes selection form", kind: KindClaude, fixture: "testdata/claude/idle-model-picker-selection.txt", inputField: "screen", wantState: StateIdle, wantFallback: true},
 		{name: "claude bash permission", kind: KindClaude, fixture: "testdata/claude/blocked-bash-permission.txt", inputField: "screen", wantState: StateBlocked, wantRule: "bash_permission_prompt", wantPriority: 850, wantBlocker: true},
 		{name: "claude generic permission", kind: KindClaude, fixture: "testdata/claude/blocked-generic-permission.txt", inputField: "screen", wantState: StateBlocked, wantRule: "generic_permission_prompt", wantPriority: 840, wantBlocker: true},
 		{name: "claude legacy blocker", kind: KindClaude, fixture: "testdata/claude/blocked-legacy.txt", inputField: "screen", wantState: StateBlocked, wantRule: "legacy_no_prompt_blocker", wantPriority: 300},
+		{name: "claude legacy blocker excludes empty prompt", kind: KindClaude, fixture: "testdata/claude/idle-legacy-empty-prompt.txt", inputField: "screen", wantState: StateIdle, wantFallback: true},
 		{name: "claude osc idle title wins equal priority", kind: KindClaude, fixture: "testdata/claude/idle-osc-title.txt", inputField: "osc_title", oscProgress: "4;0", wantState: StateIdle, wantRule: "osc_title_idle", wantPriority: 250, wantIdle: true},
 		{name: "claude osc progress idle", kind: KindClaude, fixture: "testdata/claude/idle-osc-progress.txt", inputField: "osc_progress", wantState: StateIdle, wantRule: "osc_progress_idle", wantPriority: 250},
+		{name: "claude unmatched fallback", kind: KindClaude, fixture: "testdata/claude/idle-unmatched.txt", inputField: "screen", wantState: StateIdle, wantFallback: true},
 	}
 
 	for _, tt := range tests {

@@ -53,5 +53,5 @@ rules:
     state: working
     region: {type: bottom_non_empty_lines, lines: 8}
     match:
-      line_regex: ['^[[:space:]]*(⬡|⬢|[\x{2800}-\x{28FF}]+)[[:space:]]+\p{L}+\w*ing\b']
+      line_regex: ['^[[:space:]]*(⬡|⬢|[\x{2800}-\x{28FF}]+)[[:space:]]+[A-Za-z]+\w*ing\b']
     visible_working: true
