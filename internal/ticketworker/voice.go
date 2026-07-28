@@ -24,10 +24,17 @@ type VoiceNotifier interface {
 type speechBackend struct {
 	path string
 	args func(string) []string
+	run  func(context.Context, string, []string) error
 }
 
 func (b speechBackend) speak(ctx context.Context, message string) error {
-	err := exec.CommandContext(ctx, b.path, b.args(message)...).Run()
+	run := b.run
+	if run == nil {
+		run = func(ctx context.Context, path string, args []string) error {
+			return exec.CommandContext(ctx, path, args...).Run()
+		}
+	}
+	err := run(ctx, b.path, b.args(message))
 	return normalizeSpeechError(ctx, err)
 }
 

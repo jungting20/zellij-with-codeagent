@@ -225,6 +225,47 @@ func TestNormalizeSpeechError(t *testing.T) {
 	}
 }
 
+func TestSpeechBackendSpeakNormalizesRunnerError(t *testing.T) {
+	processErr := errors.New("speech process failed")
+	tests := []struct {
+		name   string
+		cancel bool
+		want   error
+	}{
+		{name: "canceled context overrides runner error", cancel: true, want: context.Canceled},
+		{name: "live context preserves runner error", want: processErr},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			backend := speechBackend{
+				path: "/test/speaker",
+				args: func(message string) []string { return []string{"--", message} },
+				run: func(runCtx context.Context, path string, args []string) error {
+					if runCtx != ctx {
+						t.Fatal("runner received a different context")
+					}
+					if path != "/test/speaker" {
+						t.Fatalf("runner path = %q, want %q", path, "/test/speaker")
+					}
+					if want := []string{"--", "hello"}; !reflect.DeepEqual(args, want) {
+						t.Fatalf("runner args = %q, want %q", args, want)
+					}
+					if tt.cancel {
+						cancel()
+					}
+					return processErr
+				},
+			}
+
+			if got := backend.speak(ctx, "hello"); got != tt.want {
+				t.Fatalf("speak() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSerialVoiceNotifierCancellationIsNotLogged(t *testing.T) {
 	var log bytes.Buffer
 	started := make(chan struct{})
