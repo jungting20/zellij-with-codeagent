@@ -112,10 +112,12 @@ type CreatePaneRequest struct {
 	LayoutString  string
 	// ZellijTabID targets an existing tab. When NewTab is true, the created tab
 	// ID is returned on the Pane instead.
-	ZellijTabID     *ZellijTabID
-	SameTabAsPaneID PaneID
-	Command         []string
-	CWD             string
+	ZellijTabID           *ZellijTabID
+	SameTabAsPaneID       PaneID
+	Command               []string
+	CWD                   string
+	InitialInput          string
+	InitialInputReadyText string
 }
 
 type CreatePaneResponse struct {

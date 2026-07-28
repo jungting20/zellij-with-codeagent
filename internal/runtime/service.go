@@ -118,6 +118,9 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 		return CreatePaneResponse{}, err
 	}
 	response, createErr := s.createPaneOnce(ctx, req, id)
+	if createErr == nil {
+		createErr = s.initializeCreatedPane(ctx, response, req.InitialInput, req.InitialInputReadyText)
+	}
 	s.finishCreatePane(call, response, createErr)
 	return response, createErr
 }
