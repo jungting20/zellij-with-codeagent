@@ -113,8 +113,8 @@ func (s *Service) reconcileRecord(record registry.PaneRecord, liveByKey map[live
 
 	live, ok := liveByKey[livePaneKey{session: record.SessionID, paneID: record.ZellijPaneID}]
 	if !ok {
-		updated, err := s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusLost, "zellij pane missing during reconcile")
-		if err == nil {
+		updated, transitioned, err := s.registry.UpdateActivePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusLost, "zellij pane missing during reconcile")
+		if err == nil && transitioned {
 			s.notifyReconciledPaneClosed(updated)
 		}
 		return updated, err

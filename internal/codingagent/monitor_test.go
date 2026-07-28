@@ -248,6 +248,54 @@ func TestMonitorCancelsIdleCandidateOnWorkingOrBlockedScreen(t *testing.T) {
 	}
 }
 
+func TestMonitorStaleIdleCallbacksWaitingOnMutexCannotConsumeNewCandidate(t *testing.T) {
+	f := newMonitorFixture(t)
+	f.becomeWorking(t)
+	f.monitor.PaneOutput(f.pane, "quiet prompt")
+
+	f.monitor.mu.Lock()
+	entry := f.monitor.monitoring[f.record.ID]
+	staleConfirmation := entry.idleTimer.(*fakeMonitorTimer).fn
+	staleDeadline := entry.idleDeadline.(*fakeMonitorTimer).fn
+	confirmationStarted := make(chan struct{})
+	confirmationDone := make(chan struct{})
+	go func() {
+		close(confirmationStarted)
+		staleConfirmation()
+		close(confirmationDone)
+	}()
+	<-confirmationStarted
+	f.monitor.cancelIdleCandidateLocked(entry)
+	f.monitor.startIdleCandidateLocked(entry)
+	newConfirmation := entry.idleTimer
+	newDeadline := entry.idleDeadline
+	f.monitor.mu.Unlock()
+	<-confirmationDone
+
+	deadlineStarted := make(chan struct{})
+	deadlineDone := make(chan struct{})
+	f.monitor.mu.Lock()
+	go func() {
+		close(deadlineStarted)
+		staleDeadline()
+		close(deadlineDone)
+	}()
+	<-deadlineStarted
+	f.monitor.mu.Unlock()
+	<-deadlineDone
+
+	f.monitor.mu.Lock()
+	entry = f.monitor.monitoring[f.record.ID]
+	if entry.idleConfirmations != 0 || entry.idleTimer != newConfirmation || entry.idleDeadline != newDeadline {
+		f.monitor.mu.Unlock()
+		t.Fatalf("new idle candidate was consumed by stale callbacks: %#v", entry)
+	}
+	f.monitor.mu.Unlock()
+	if got := f.state(t).State; got != StateWorking {
+		t.Fatalf("state after stale callbacks = %q, want working", got)
+	}
+}
+
 func TestMonitorSkipStateUpdatePreservesCurrentState(t *testing.T) {
 	f := newMonitorFixture(t)
 	working := f.becomeWorking(t)
@@ -311,6 +359,31 @@ func TestMonitorPaneErrorSetsUnknownAndPublishesDiagnostic(t *testing.T) {
 		last.PreviousState != string(StateWorking) || last.AgentState != string(StateUnknown) ||
 		!strings.Contains(last.Reason, wantErr.Error()) {
 		t.Fatalf("agent state event = %#v", last)
+	}
+}
+
+func TestMonitorPaneErrorDuringGraceInvalidatesCachedScreenAndStaleCallback(t *testing.T) {
+	f := newMonitorFixture(t)
+	f.monitor.PaneOutput(f.pane, "WORK")
+
+	f.monitor.mu.Lock()
+	entry := f.monitor.monitoring[f.record.ID]
+	staleGraceCallback := entry.graceTimer.(*fakeMonitorTimer).fn
+	f.monitor.mu.Unlock()
+
+	wantErr := errors.New("startup subscription failed")
+	f.monitor.PaneError(f.pane, wantErr)
+	staleGraceCallback()
+
+	got := f.state(t)
+	if got.State != StateUnknown || !strings.Contains(got.StateReason, wantErr.Error()) {
+		t.Fatalf("record after stale grace callback = %#v, want diagnostic unknown", got)
+	}
+	f.monitor.mu.Lock()
+	defer f.monitor.mu.Unlock()
+	entry = f.monitor.monitoring[f.record.ID]
+	if entry.graceTimer != nil || entry.hasInput || entry.latestInput.Screen != "" {
+		t.Fatalf("entry after pane error = %#v, want grace and cached input invalidated", entry)
 	}
 }
 

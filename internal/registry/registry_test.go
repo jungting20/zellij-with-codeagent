@@ -160,6 +160,30 @@ func TestUpdatePaneStatusPreservesAssociations(t *testing.T) {
 	}
 }
 
+func TestUpdateActivePaneStatusGenerationOwnsOnlyNonTerminalTransition(t *testing.T) {
+	registry := newTestRegistry()
+	record, err := registry.RegisterPane(RegisterPaneRequest{ID: "pane-1", Status: PaneStatusRunning})
+	if err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+
+	lost, applied, err := registry.UpdateActivePaneStatusGeneration(record.ID, record.Generation, PaneStatusLost, "missing")
+	if err != nil {
+		t.Fatalf("UpdateActivePaneStatusGeneration(lost) error = %v", err)
+	}
+	if !applied || lost.Status != PaneStatusLost {
+		t.Fatalf("lost update = %#v, applied = %v; want applied lost", lost, applied)
+	}
+
+	terminal, applied, err := registry.UpdateActivePaneStatusGeneration(record.ID, record.Generation, PaneStatusError, "late error")
+	if err != nil {
+		t.Fatalf("UpdateActivePaneStatusGeneration(terminal) error = %v", err)
+	}
+	if applied || terminal.Status != PaneStatusLost || terminal.StatusMessage != "missing" {
+		t.Fatalf("terminal update = %#v, applied = %v; want unchanged lost", terminal, applied)
+	}
+}
+
 func TestUpdatePaneOutput(t *testing.T) {
 	registry := newTestRegistry()
 

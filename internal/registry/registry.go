@@ -179,6 +179,38 @@ func (r *Registry) UpdatePaneStatusGeneration(id PaneID, generation uint64, stat
 	return r.updatePaneStatusGeneration(id, generation, status, message)
 }
 
+// UpdateActivePaneStatusGeneration updates a generation only while its pane
+// lifecycle is non-terminal. The boolean reports whether the update was
+// applied, allowing callers to own one-shot transition side effects.
+func (r *Registry) UpdateActivePaneStatusGeneration(id PaneID, generation uint64, status PaneStatus, message string) (PaneRecord, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	loc, session, tab, pane, err := r.resolvePanePathLocked(id)
+	if err != nil {
+		return PaneRecord{}, false, err
+	}
+	if generation != 0 && pane.Generation != generation {
+		return PaneRecord{}, false, ErrStaleRecord
+	}
+	switch pane.Status {
+	case PaneStatusClosed, PaneStatusExited, PaneStatusLost:
+		return clonePaneRecord(pane), false, nil
+	}
+
+	now := r.now()
+	pane.Status = status
+	pane.StatusMessage = message
+	pane.UpdatedAt = now
+	tab.Panes[id] = pane
+	tab.UpdatedAt = now
+	session.Tabs[loc.TabID] = tab
+	session.UpdatedAt = now
+	r.sessions[loc.SessionID] = session
+
+	return clonePaneRecord(pane), true, nil
+}
+
 func (r *Registry) updatePaneStatusGeneration(id PaneID, generation uint64, status PaneStatus, message string) (PaneRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -49,6 +49,7 @@ type monitoredAgent struct {
 	graceTimer  Timer
 
 	idleConfirmations int
+	idleToken         uint64
 	idleTimer         Timer
 	idleDeadline      Timer
 }
@@ -184,7 +185,11 @@ func (m *Monitor) PaneError(pane registry.PaneRecord, cause error) {
 	if !sameMonitoredRecord(entry, record) {
 		return
 	}
-	m.cancelIdleCandidateLocked(entry)
+	m.stopTimersLocked(entry)
+	entry.latestInput = DetectionInput{}
+	entry.hasInput = false
+	m.nextToken++
+	entry.token = m.nextToken
 	m.updateStateLocked(entry, StateUpdate{State: StateUnknown, Reason: reason})
 }
 
@@ -228,21 +233,23 @@ func (m *Monitor) startIdleCandidateLocked(entry *monitoredAgent) {
 		return
 	}
 	entry.idleConfirmations = 0
+	entry.idleToken++
 	id := entry.record.ID
-	token := entry.token
+	lifecycleToken := entry.token
+	idleToken := entry.idleToken
 	entry.idleTimer = m.opts.AfterFunc(idleConfirmationDelay, func() {
-		m.confirmIdle(id, token)
+		m.confirmIdle(id, lifecycleToken, idleToken)
 	})
 	entry.idleDeadline = m.opts.AfterFunc(idleConfirmationLimit, func() {
-		m.finishIdleDeadline(id, token)
+		m.finishIdleDeadline(id, lifecycleToken, idleToken)
 	})
 }
 
-func (m *Monitor) confirmIdle(id ID, token uint64) {
+func (m *Monitor) confirmIdle(id ID, lifecycleToken, idleToken uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	entry := m.monitoring[id]
-	if entry == nil || entry.token != token || entry.idleTimer == nil {
+	if entry == nil || entry.token != lifecycleToken || entry.idleToken != idleToken || entry.idleTimer == nil {
 		return
 	}
 	entry.idleTimer = nil
@@ -263,15 +270,15 @@ func (m *Monitor) confirmIdle(id ID, token uint64) {
 		return
 	}
 	entry.idleTimer = m.opts.AfterFunc(idleConfirmationDelay, func() {
-		m.confirmIdle(id, token)
+		m.confirmIdle(id, lifecycleToken, idleToken)
 	})
 }
 
-func (m *Monitor) finishIdleDeadline(id ID, token uint64) {
+func (m *Monitor) finishIdleDeadline(id ID, lifecycleToken, idleToken uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	entry := m.monitoring[id]
-	if entry == nil || entry.token != token || entry.idleDeadline == nil {
+	if entry == nil || entry.token != lifecycleToken || entry.idleToken != idleToken || entry.idleDeadline == nil {
 		return
 	}
 	entry.idleDeadline = nil
@@ -315,6 +322,7 @@ func (m *Monitor) updateStateLocked(entry *monitoredAgent, update StateUpdate) {
 }
 
 func (m *Monitor) cancelIdleCandidateLocked(entry *monitoredAgent) {
+	entry.idleToken++
 	if entry.idleTimer != nil {
 		entry.idleTimer.Stop()
 		entry.idleTimer = nil

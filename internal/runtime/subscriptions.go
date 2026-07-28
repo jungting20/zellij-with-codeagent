@@ -341,7 +341,10 @@ func (m *SubscriptionManager) handlePaneClosed(record registry.PaneRecord) {
 	e := base
 	e.Type = eventbus.TypePaneClosed
 	e.Message = "pane_closed"
-	if m.opts.Observer != nil {
+	// A missing-pane reconciliation owns the close notification when it first
+	// transitions this generation to lost. A later subscribe close still removes
+	// the registry record, but must not notify the observer again.
+	if removed.Status != registry.PaneStatusLost && m.opts.Observer != nil {
 		m.opts.Observer.PaneClosed(removed)
 	}
 	if m.opts.Bus != nil {
@@ -403,10 +406,15 @@ func eventFromRecord(record registry.PaneRecord, now time.Time) eventbus.Event {
 }
 
 func (m *SubscriptionManager) publishSubscribeStartupFailure(record registry.PaneRecord, cause error) {
+	current := false
 	if m.opts.Registry != nil {
-		_, _ = m.opts.Registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusError, cause.Error())
+		updated, applied, err := m.opts.Registry.UpdateActivePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusError, cause.Error())
+		if err == nil && applied {
+			record = updated
+			current = true
+		}
 	}
-	if m.opts.Observer != nil {
+	if current && m.opts.Observer != nil {
 		m.opts.Observer.PaneError(record, cause)
 	}
 	if m.opts.Bus == nil {
@@ -425,8 +433,8 @@ func (m *SubscriptionManager) publishSubscribeStartupFailure(record registry.Pan
 }
 
 func (m *SubscriptionManager) publishSubscribeParseError(record registry.PaneRecord, cause error) {
-	if m.opts.Observer != nil {
-		m.opts.Observer.PaneError(record, cause)
+	if current, ok := m.currentPaneGeneration(record); ok && m.opts.Observer != nil {
+		m.opts.Observer.PaneError(current, cause)
 	}
 	if m.opts.Bus == nil {
 		return
@@ -439,8 +447,8 @@ func (m *SubscriptionManager) publishSubscribeParseError(record registry.PaneRec
 }
 
 func (m *SubscriptionManager) publishStreamError(record registry.PaneRecord, cause error) {
-	if m.opts.Observer != nil {
-		m.opts.Observer.PaneError(record, cause)
+	if current, ok := m.currentPaneGeneration(record); ok && m.opts.Observer != nil {
+		m.opts.Observer.PaneError(current, cause)
 	}
 	if m.opts.Bus == nil {
 		return
@@ -450,6 +458,17 @@ func (m *SubscriptionManager) publishStreamError(record registry.PaneRecord, cau
 	e.Type = eventbus.TypeSubscribeError
 	e.Message = cause.Error()
 	m.opts.Bus.Publish(e)
+}
+
+func (m *SubscriptionManager) currentPaneGeneration(record registry.PaneRecord) (registry.PaneRecord, bool) {
+	if m.opts.Registry == nil {
+		return registry.PaneRecord{}, false
+	}
+	current, err := m.opts.Registry.GetPane(record.ID)
+	if err != nil || current.Generation != record.Generation || isTerminalStatus(current.Status) {
+		return registry.PaneRecord{}, false
+	}
+	return current, true
 }
 
 func (m *SubscriptionManager) publishHealthForID(logicalID registry.PaneID, msg string) {
