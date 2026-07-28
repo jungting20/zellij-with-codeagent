@@ -347,6 +347,62 @@ func TestManagerUncertainCreateFailureRetriesSamePaneThenRequeues(t *testing.T) 
 	}
 }
 
+func TestManagerUncertainRecoveryInitializationFailureRequeuesWithoutClose(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(17)}}
+	client := newFakeManagerClient()
+	client.createErrors = []error{
+		errors.New("connection reset after request"),
+		&transport.ClientError{APIError: transport.APIError{
+			Code: transport.CodeInitializationFailed, Message: "prompt failed", Retryable: true,
+		}},
+	}
+	client.streams = []*fakeEventStream{newFakeEventStream()}
+	ticks := make(chan time.Time, 1)
+	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.created()) == 1 })
+	ticks <- time.Now()
+	waitFor(t, func() bool { return len(store.requeues()) == 1 })
+	if len(client.created()) != 2 {
+		t.Fatalf("creates = %d, want initial create and one recovery retry", len(client.created()))
+	}
+	if len(client.closed()) != 0 {
+		t.Fatalf("closed panes = %v, want none", client.closed())
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagerUncertainRecoveryCreateUsesStartupTimeout(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(18)}}
+	client := newFakeManagerClient()
+	client.createErrors = []error{errors.New("connection reset after request")}
+	client.streams = []*fakeEventStream{newFakeEventStream()}
+	ticks := make(chan time.Time, 1)
+	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.created()) == 1 })
+	ticks <- time.Now()
+	waitFor(t, func() bool { return len(client.created()) == 2 && len(store.requeues()) == 1 })
+	deadlines := client.createDeadlines()
+	if len(deadlines) != 2 || deadlines[1].IsZero() {
+		t.Fatalf("create deadlines = %v, want bounded recovery deadline", deadlines)
+	}
+	if latest := time.Now().Add(manager.startupTimeout); deadlines[1].After(latest) {
+		t.Fatalf("recovery deadline = %v, want no later than %v", deadlines[1], latest)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManagerUncertainCreateFailureCleansPaneCreatedBeforeResponseLoss(t *testing.T) {
 	store := &fakeManagerStore{ready: []Ticket{managerTicket(16)}}
 	client := newFakeManagerClient()

@@ -529,13 +529,19 @@ func (m *Manager) resolveUncertainCreation(ctx context.Context, slot *managerSlo
 			return true
 		}
 	}
-	if _, err := m.client.CreatePane(ctx, slot.createRequest); err == nil {
+	createCtx, cancel := context.WithTimeout(ctx, m.startupTimeout)
+	_, createErr := m.client.CreatePane(createCtx, slot.createRequest)
+	cancel()
+	if createErr == nil {
 		slot.creationUncertain = false
 		slot.paneCreated = true
 		return true
-	} else {
-		slot.lastError = err
 	}
+	if safeCreateFailure(createErr) {
+		slot.creationUncertain = false
+		return true
+	}
+	slot.lastError = createErr
 	response, err = m.client.InspectRuntime(ctx)
 	if err != nil {
 		slot.lastError = err
