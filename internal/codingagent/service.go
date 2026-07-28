@@ -231,21 +231,30 @@ func (s *Service) ListAgents(ctx context.Context) (ListAgentsResponse, error) {
 }
 
 func (s *Service) FocusAgent(ctx context.Context, request FocusAgentRequest) (FocusAgentResponse, error) {
+	sourceSession := strings.TrimSpace(request.SourceZellijSession)
+	sourcePaneID := runtime.ZellijPaneID(strings.TrimSpace(string(request.SourceZellijPaneID)))
+	if sourceSession == "" || sourcePaneID == "" {
+		return FocusAgentResponse{}, ErrAgentSourceRequired
+	}
+	s.sweepInactiveOwners()
 	record, err := s.store.Get(request.AgentID)
 	if err != nil {
 		return FocusAgentResponse{}, fmt.Errorf("get coding agent %q: %w", request.AgentID, err)
 	}
 	response, err := s.RuntimeService.FocusPane(ctx, runtime.FocusPaneRequest{
 		PaneID:              record.PaneID,
-		SourceZellijSession: request.SourceZellijSession,
-		SourceZellijPaneID:  request.SourceZellijPaneID,
+		SourceZellijSession: sourceSession,
+		SourceZellijPaneID:  sourcePaneID,
 	})
 	if err != nil {
-		if errors.Is(err, runtime.ErrPaneNotFound) || errors.Is(err, runtime.ErrInvalidPaneTarget) {
+		if errors.Is(err, runtime.ErrPaneNotFound) {
 			return FocusAgentResponse{}, errors.Join(
 				fmt.Errorf("%w: %q", ErrNotFound, request.AgentID),
 				fmt.Errorf("focus coding agent %q: %w", request.AgentID, err),
 			)
+		}
+		if errors.Is(err, runtime.ErrInvalidPaneTarget) {
+			return FocusAgentResponse{}, s.classifyInvalidFocusTarget(ctx, record, err)
 		}
 		return FocusAgentResponse{}, fmt.Errorf("focus coding agent %q: %w", request.AgentID, err)
 	}
@@ -258,6 +267,7 @@ func (s *Service) FocusAgent(ctx context.Context, request FocusAgentRequest) (Fo
 func (s *Service) registerStart(record Record) (Record, *agentOwnership, error) {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
+	s.sweepInactiveOwnersLocked(nil)
 
 	if existing := s.owners[record.ID]; existing != nil {
 		if existing.state == agentProvisioning || existing.state == agentCleaning {
@@ -294,11 +304,7 @@ func (s *Service) snapshotAgents() ([]agentSnapshot, error) {
 	for _, record := range records {
 		currentByID[record.ID] = record
 	}
-	for id, owner := range s.owners {
-		if current, ok := currentByID[id]; !ok || !sameRecordIdentity(owner.record, current) {
-			delete(s.owners, id)
-		}
-	}
+	s.sweepInactiveOwnersLocked(currentByID)
 	snapshots := make([]agentSnapshot, 0, len(records))
 	for _, record := range records {
 		snapshot := agentSnapshot{record: record}
@@ -411,6 +417,7 @@ func (s *Service) cleanupOwnedRecord(owner *agentOwnership, stopMonitor bool) (b
 }
 
 func (s *Service) recoverPartialCreate(ctx context.Context, owner *agentOwnership, createErr error) error {
+	s.markOwnerState(owner, agentCleaning)
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), partialCleanupTimeout)
 	defer cancel()
 	cleanupResponse, cleanupErr := s.RuntimeService.Cleanup(cleanupCtx, runtime.CleanupRequest{PaneIDs: []runtime.PaneID{owner.record.PaneID}})
@@ -440,6 +447,11 @@ func (s *Service) recoverPartialCreate(ctx context.Context, owner *agentOwnershi
 	} else if len(cleanupResponse.Failed) > 0 {
 		diagnostics = append(diagnostics, fmt.Errorf("%w: cleanup retry reported %d failure(s)", runtime.ErrCleanupPartial, len(cleanupResponse.Failed)))
 	}
+	for _, failure := range cleanupResponse.Failed {
+		if detail := strings.TrimSpace(failure.Error); detail != "" {
+			diagnostics = append(diagnostics, fmt.Errorf("runtime cleanup pane %q failed: %s", failure.Pane.ID, detail))
+		}
+	}
 	if confirmErr != nil {
 		diagnostics = append(diagnostics, fmt.Errorf("confirm runtime cleanup for pane %q: %w", owner.record.PaneID, confirmErr))
 	} else if paneRemains {
@@ -454,6 +466,65 @@ func (s *Service) markOwnerState(owner *agentOwnership, state agentLifecycle) {
 	if owner != nil && s.owners[owner.record.ID] == owner {
 		owner.state = state
 	}
+}
+
+func (s *Service) sweepInactiveOwners() {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.sweepInactiveOwnersLocked(nil)
+}
+
+func (s *Service) sweepInactiveOwnersLocked(currentByID map[ID]Record) {
+	for id, owner := range s.owners {
+		if owner.state == agentProvisioning || owner.state == agentCleaning {
+			continue
+		}
+		var (
+			current Record
+			ok      bool
+		)
+		if currentByID != nil {
+			current, ok = currentByID[id]
+		} else {
+			var err error
+			current, err = s.store.Get(id)
+			if err == nil {
+				ok = true
+			} else if !errors.Is(err, ErrNotFound) {
+				continue
+			}
+		}
+		if !ok || !sameRecordIdentity(owner.record, current) {
+			delete(s.owners, id)
+		}
+	}
+}
+
+func (s *Service) classifyInvalidFocusTarget(ctx context.Context, record Record, focusErr error) error {
+	wrappedFocusErr := fmt.Errorf("focus coding agent %q: %w", record.ID, focusErr)
+	response, err := s.RuntimeService.ListPanes(ctx)
+	if err != nil {
+		return errors.Join(
+			wrappedFocusErr,
+			fmt.Errorf("confirm coding agent %q focus target: %w", record.ID, err),
+		)
+	}
+	for _, pane := range response.Panes {
+		if pane.ID != record.PaneID {
+			continue
+		}
+		if terminalAgentPane(pane.Status) {
+			return errors.Join(
+				fmt.Errorf("%w: %q runtime pane is %s", ErrNotFound, record.ID, pane.Status),
+				wrappedFocusErr,
+			)
+		}
+		return wrappedFocusErr
+	}
+	return errors.Join(
+		fmt.Errorf("%w: %q runtime pane is absent", ErrNotFound, record.ID),
+		wrappedFocusErr,
+	)
 }
 
 func sameRecordIdentity(left, right Record) bool {

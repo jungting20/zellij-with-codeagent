@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -336,6 +337,79 @@ func TestServiceListAgentStaleSnapshotDoesNotDeleteReusedID(t *testing.T) {
 	}
 }
 
+func TestServicePartialRecoveryReservationPreventsSameIDReuseUntilCleanupReturns(t *testing.T) {
+	store := NewMemoryStore(nil)
+	monitor := &serviceFakeMonitor{}
+	createCause := errors.New("initialization failed")
+	cleanupEntered := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	var stateMu sync.Mutex
+	createCalls := 0
+	newPaneOpen := false
+	closedNewPane := false
+	runtimeService := &serviceFakeRuntime{
+		createFn: func(_ context.Context, request runtime.CreatePaneRequest) (runtime.CreatePaneResponse, error) {
+			stateMu.Lock()
+			defer stateMu.Unlock()
+			createCalls++
+			if createCalls == 1 {
+				return runtime.CreatePaneResponse{}, errors.Join(createCause, runtime.ErrCleanupPartial)
+			}
+			newPaneOpen = true
+			return runtime.CreatePaneResponse{Pane: runtime.Pane{ID: request.ID, Status: runtime.PaneStatusRunning}}, nil
+		},
+		cleanupFn: func(context.Context, runtime.CleanupRequest) (runtime.CleanupResponse, error) {
+			close(cleanupEntered)
+			<-releaseCleanup
+			stateMu.Lock()
+			if newPaneOpen {
+				closedNewPane = true
+				newPaneOpen = false
+			}
+			stateMu.Unlock()
+			return runtime.CleanupResponse{Closed: []runtime.Pane{{ID: "agent-1"}}}, nil
+		},
+	}
+	service := NewService(ServiceOptions{
+		RuntimeService:   runtimeService,
+		Store:            store,
+		LifecycleMonitor: monitor,
+		NewAgentID:       func() ID { return "agent-1" },
+	})
+	firstResult := make(chan error, 1)
+	firstRequest := validStartRequest(t, KindCodex)
+	go func() {
+		_, err := service.StartAgent(context.Background(), firstRequest)
+		firstResult <- err
+	}()
+	<-cleanupEntered
+
+	if err := store.Delete("agent-1"); err != nil {
+		t.Fatalf("simulate close observer delete: %v", err)
+	}
+	monitor.Stop("agent-1")
+	if _, err := service.ListAgents(context.Background()); err != nil {
+		t.Fatalf("concurrent ListAgents() error = %v", err)
+	}
+	if _, err := service.StartAgent(context.Background(), validStartRequest(t, KindClaude)); !errors.Is(err, ErrDuplicateID) {
+		t.Fatalf("same-ID StartAgent during cleanup error = %v, want %v", err, ErrDuplicateID)
+	}
+
+	close(releaseCleanup)
+	if err := <-firstResult; !errors.Is(err, createCause) {
+		t.Fatalf("first StartAgent() error = %v, want %v", err, createCause)
+	}
+	stateMu.Lock()
+	wasClosed := closedNewPane
+	stateMu.Unlock()
+	if wasClosed {
+		t.Fatal("old cleanup closed a newly reused logical pane ID")
+	}
+	if _, err := service.StartAgent(context.Background(), validStartRequest(t, KindGemini)); err != nil {
+		t.Fatalf("same-ID StartAgent after cleanup completion error = %v", err)
+	}
+}
+
 func TestServiceStartAgentPartialRuntimeCleanupPolicy(t *testing.T) {
 	createCause := errors.New("pane initialization failed")
 	createErr := errors.Join(createCause, runtime.ErrCleanupPartial)
@@ -348,6 +422,7 @@ func TestServiceStartAgentPartialRuntimeCleanupPolicy(t *testing.T) {
 		confirmErr    error
 		wantPreserved bool
 		wantDiag      error
+		wantDetail    string
 	}{
 		{
 			name:    "successful retry and absent confirmation removes record",
@@ -359,6 +434,7 @@ func TestServiceStartAgentPartialRuntimeCleanupPolicy(t *testing.T) {
 			cleanupErr:    runtime.ErrCleanupPartial,
 			wantPreserved: true,
 			wantDiag:      runtime.ErrCleanupPartial,
+			wantDetail:    "still open",
 		},
 		{
 			name:          "remaining pane after nominal retry preserves tracking",
@@ -414,6 +490,9 @@ func TestServiceStartAgentPartialRuntimeCleanupPolicy(t *testing.T) {
 			}
 			if test.wantDiag != nil && !strings.Contains(err.Error(), test.wantDiag.Error()) {
 				t.Fatalf("StartAgent() error = %v, want diagnostic %q", err, test.wantDiag)
+			}
+			if test.wantDetail != "" && !strings.Contains(err.Error(), test.wantDetail) {
+				t.Fatalf("StartAgent() error = %v, want cleanup detail %q", err, test.wantDetail)
 			}
 			if len(runtimeService.cleaned) != 1 {
 				t.Fatalf("Cleanup call count = %d, want 1", len(runtimeService.cleaned))
@@ -566,6 +645,89 @@ func TestServiceListAgentsReleasesOwnershipAfterCloseObserverRemovedRecord(t *te
 	}
 }
 
+func TestServiceDifferentIDStartsSweepClosedOwnersWithoutAccumulating(t *testing.T) {
+	store := NewMemoryStore(nil)
+	monitor := &serviceFakeMonitor{}
+	service := NewService(ServiceOptions{
+		RuntimeService:   &serviceFakeRuntime{},
+		Store:            store,
+		LifecycleMonitor: monitor,
+	})
+	for index := 0; index < 20; index++ {
+		response, err := service.StartAgent(context.Background(), validStartRequest(t, KindCodex))
+		if err != nil {
+			t.Fatalf("StartAgent(%d) error = %v", index, err)
+		}
+		if err := store.Delete(response.Agent.Agent.ID); err != nil {
+			t.Fatalf("simulate close observer delete %q: %v", response.Agent.Agent.ID, err)
+		}
+		monitor.Stop(response.Agent.Agent.ID)
+	}
+	if _, err := service.StartAgent(context.Background(), validStartRequest(t, KindClaude)); err != nil {
+		t.Fatalf("final StartAgent() error = %v", err)
+	}
+
+	service.lifecycleMu.Lock()
+	ownerCount := len(service.owners)
+	service.lifecycleMu.Unlock()
+	if ownerCount != 1 {
+		t.Fatalf("owner count = %d, want only current active owner", ownerCount)
+	}
+}
+
+func TestServiceFocusAgentSweepsUnrelatedClosedOwnerAndPreservesTrackedUncertainOwner(t *testing.T) {
+	store := NewMemoryStore(nil)
+	monitor := &serviceFakeMonitor{}
+	runtimeService := &serviceFakeRuntime{focusResponse: runtime.FocusPaneResponse{Pane: runtime.Pane{ID: "target-pane", Status: runtime.PaneStatusRunning}}}
+	ids := []ID{"closed-agent", "uncertain-agent"}
+	nextID := 0
+	service := NewService(ServiceOptions{
+		RuntimeService:   runtimeService,
+		Store:            store,
+		LifecycleMonitor: monitor,
+		NewAgentID: func() ID {
+			id := ids[nextID]
+			nextID++
+			return id
+		},
+	})
+	closed, err := service.StartAgent(context.Background(), validStartRequest(t, KindCodex))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete(closed.Agent.Agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	monitor.Stop(closed.Agent.Agent.ID)
+	uncertain, err := service.StartAgent(context.Background(), validStartRequest(t, KindClaude))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.lifecycleMu.Lock()
+	service.owners[uncertain.Agent.Agent.ID].state = agentCleanupUncertain
+	service.lifecycleMu.Unlock()
+	now := time.Now()
+	if _, err := store.Create(Record{ID: "target", Kind: KindGemini, PaneID: "target-pane", State: StateUnknown, CreatedAt: now, StateChangedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.FocusAgent(context.Background(), FocusAgentRequest{
+		AgentID: "target", SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1",
+	}); err != nil {
+		t.Fatalf("FocusAgent() error = %v", err)
+	}
+	service.lifecycleMu.Lock()
+	_, closedExists := service.owners["closed-agent"]
+	uncertainOwner := service.owners["uncertain-agent"]
+	service.lifecycleMu.Unlock()
+	if closedExists {
+		t.Fatal("FocusAgent retained unrelated closed owner")
+	}
+	if uncertainOwner == nil || uncertainOwner.state != agentCleanupUncertain {
+		t.Fatalf("tracked uncertain owner = %#v, want preserved", uncertainOwner)
+	}
+}
+
 func TestServiceFocusAgentForwardsLogicalPaneAndSourceContext(t *testing.T) {
 	store := NewMemoryStore(nil)
 	now := time.Now()
@@ -590,6 +752,78 @@ func TestServiceFocusAgentForwardsLogicalPaneAndSourceContext(t *testing.T) {
 	}
 	if !reflect.DeepEqual(response.Agent.Agent, record) || response.Agent.Pane.ZellijPaneID != "terminal_7" {
 		t.Fatalf("FocusAgent response = %#v", response)
+	}
+}
+
+func TestServiceFocusAgentRejectsBlankSourceBeforeRuntimeCall(t *testing.T) {
+	for _, request := range []FocusAgentRequest{
+		{AgentID: "agent-1", SourceZellijPaneID: "terminal_1"},
+		{AgentID: "agent-1", SourceZellijSession: "dashboard"},
+		{AgentID: "agent-1", SourceZellijSession: "   ", SourceZellijPaneID: "  "},
+	} {
+		store := NewMemoryStore(nil)
+		now := time.Now()
+		if _, err := store.Create(Record{ID: "agent-1", Kind: KindCodex, PaneID: "pane-1", State: StateUnknown, CreatedAt: now, StateChangedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+		runtimeService := &serviceFakeRuntime{}
+		service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
+
+		if _, err := service.FocusAgent(context.Background(), request); !errors.Is(err, ErrAgentSourceRequired) {
+			t.Fatalf("FocusAgent(%#v) error = %v, want %v", request, err, ErrAgentSourceRequired)
+		}
+		if len(runtimeService.focused) != 0 || runtimeService.listed != 0 {
+			t.Fatalf("blank source called runtime: focus=%d list=%d", len(runtimeService.focused), runtimeService.listed)
+		}
+	}
+}
+
+func TestServiceFocusAgentClassifiesInvalidTargetFromCurrentRuntimePane(t *testing.T) {
+	listFailure := errors.New("runtime list failed")
+	tests := []struct {
+		name         string
+		panes        []runtime.Pane
+		listErr      error
+		wantNotFound bool
+		wantListErr  bool
+	}{
+		{name: "absent target is stale", wantNotFound: true},
+		{name: "closed target is stale", panes: []runtime.Pane{{ID: "pane-1", Status: runtime.PaneStatusClosed}}, wantNotFound: true},
+		{name: "lost target is stale", panes: []runtime.Pane{{ID: "pane-1", Status: runtime.PaneStatusLost}}, wantNotFound: true},
+		{name: "active target preserves bad request", panes: []runtime.Pane{{ID: "pane-1", Status: runtime.PaneStatusRunning}}},
+		{name: "confirmation failure preserves bad request", listErr: listFailure, wantListErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewMemoryStore(nil)
+			now := time.Now()
+			if _, err := store.Create(Record{ID: "agent-1", Kind: KindGemini, PaneID: "pane-1", State: StateUnknown, CreatedAt: now, StateChangedAt: now}); err != nil {
+				t.Fatal(err)
+			}
+			runtimeService := &serviceFakeRuntime{
+				focusErr:     runtime.ErrInvalidPaneTarget,
+				listResponse: runtime.ListPanesResponse{Panes: test.panes},
+				listErr:      test.listErr,
+			}
+			service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
+
+			_, err := service.FocusAgent(context.Background(), FocusAgentRequest{
+				AgentID: "agent-1", SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1",
+			})
+			if !errors.Is(err, runtime.ErrInvalidPaneTarget) {
+				t.Fatalf("FocusAgent() error = %v, want %v", err, runtime.ErrInvalidPaneTarget)
+			}
+			if got := errors.Is(err, ErrNotFound); got != test.wantNotFound {
+				t.Fatalf("errors.Is(ErrNotFound) = %v, want %v; error=%v", got, test.wantNotFound, err)
+			}
+			if runtimeService.listed != 1 {
+				t.Fatalf("ListPanes call count = %d, want 1", runtimeService.listed)
+			}
+			if test.wantListErr && !errors.Is(err, listFailure) {
+				t.Fatalf("FocusAgent() error = %v, want list diagnostic %v", err, listFailure)
+			}
+		})
 	}
 }
 
@@ -681,6 +915,7 @@ type serviceFakeRuntime struct {
 	listFn        func(context.Context) (runtime.ListPanesResponse, error)
 	listResponse  runtime.ListPanesResponse
 	listErr       error
+	listed        int
 	focusResponse runtime.FocusPaneResponse
 	focusErr      error
 	focused       []runtime.FocusPaneRequest
@@ -706,6 +941,7 @@ func (f *serviceFakeRuntime) Cleanup(ctx context.Context, request runtime.Cleanu
 }
 
 func (f *serviceFakeRuntime) ListPanes(ctx context.Context) (runtime.ListPanesResponse, error) {
+	f.listed++
 	if f.listFn != nil {
 		return f.listFn(ctx)
 	}
