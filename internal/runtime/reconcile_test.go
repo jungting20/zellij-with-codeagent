@@ -17,6 +17,7 @@ type blockingPaneCloseObserver struct {
 	release chan struct{}
 }
 
+func (o *blockingPaneCloseObserver) PaneOpened(registry.PaneRecord)         {}
 func (o *blockingPaneCloseObserver) PaneOutput(registry.PaneRecord, string) {}
 func (o *blockingPaneCloseObserver) PaneError(registry.PaneRecord, error)   {}
 func (o *blockingPaneCloseObserver) PaneClosed(registry.PaneRecord) {
@@ -312,6 +313,129 @@ func TestPaneObserverCloseDeliveryConcurrentMissingReconcilesNotifyOnce(t *testi
 	defer observer.mu.Unlock()
 	if len(observer.closedRecords) != 1 || observer.closedRecords[0].Generation != record.Generation {
 		t.Fatalf("closed records = %#v, want generation %d exactly once", observer.closedRecords, record.Generation)
+	}
+}
+
+func TestPaneObserverCloseDeliveryDeduplicatesMissingThenExitedSnapshot(t *testing.T) {
+	reg := registry.New()
+	observer := &recordingPaneObserver{}
+	service := NewService(Options{Registry: reg, Backend: &fakeBackend{}, PaneObserver: observer})
+	record, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID: "pane-1", SessionID: "session-a", ZellijPaneID: "terminal_1", Role: "coding-agent",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+	if _, err := service.reconcileRecord(record, map[livePaneKey]zellij.Pane{}); err != nil {
+		t.Fatalf("reconcileRecord(missing) error = %v", err)
+	}
+	live := map[livePaneKey]zellij.Pane{
+		{session: record.SessionID, paneID: record.ZellijPaneID}: {ID: zellij.PaneID(record.ZellijPaneID), Exited: true},
+	}
+	if _, err := service.reconcileRecord(record, live); err != nil {
+		t.Fatalf("reconcileRecord(exited) error = %v", err)
+	}
+
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.closedRecords) != 1 {
+		t.Fatalf("closed records = %#v, want exactly one", observer.closedRecords)
+	}
+}
+
+func TestPaneObserverCloseDeliverySerializesConcurrentMissingAndExitedSnapshot(t *testing.T) {
+	reg := registry.New()
+	observer := &blockingPaneCloseObserver{entered: make(chan struct{}, 2), release: make(chan struct{})}
+	service := NewService(Options{Registry: reg, Backend: &fakeBackend{}, PaneObserver: observer})
+	record, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID: "pane-1", SessionID: "session-a", ZellijPaneID: "terminal_1", Role: "coding-agent",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+	missingDone := make(chan struct{})
+	go func() {
+		_, _ = service.reconcileRecord(record, map[livePaneKey]zellij.Pane{})
+		close(missingDone)
+	}()
+	select {
+	case <-observer.entered:
+	case <-time.After(time.Second):
+		t.Fatal("missing observer callback did not start")
+	}
+
+	live := map[livePaneKey]zellij.Pane{
+		{session: record.SessionID, paneID: record.ZellijPaneID}: {ID: zellij.PaneID(record.ZellijPaneID), Exited: true},
+	}
+	exitedDone := make(chan struct{})
+	go func() {
+		_, _ = service.reconcileRecord(record, live)
+		close(exitedDone)
+	}()
+	select {
+	case <-exitedDone:
+	case <-time.After(time.Second):
+		close(observer.release)
+		t.Fatal("exited reconcile blocked behind observer callback")
+	}
+	select {
+	case <-observer.entered:
+		close(observer.release)
+		t.Fatal("observer was called twice for missing/exited race")
+	default:
+	}
+	close(observer.release)
+	select {
+	case <-missingDone:
+	case <-time.After(time.Second):
+		t.Fatal("missing reconcile did not finish")
+	}
+}
+
+func TestReconcileInitiallyTerminalPaneClaimsObserverOwnershipOnce(t *testing.T) {
+	reg := registry.New()
+	observer := &recordingPaneObserver{}
+	service := NewService(Options{Registry: reg, Backend: &fakeBackend{}, PaneObserver: observer})
+	record, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID: "pane-1", Role: "coding-agent", Status: registry.PaneStatusLost,
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+	for range 2 {
+		if _, err := service.reconcileRecord(record, nil); err != nil {
+			t.Fatalf("reconcileRecord() error = %v", err)
+		}
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.closedRecords) != 1 {
+		t.Fatalf("closed records = %#v, want exactly one", observer.closedRecords)
+	}
+}
+
+func TestReconcileLiveSnapshotCannotResurrectConcurrentTerminalPane(t *testing.T) {
+	reg := registry.New()
+	record, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID: "pane-1", SessionID: "session-a", ZellijPaneID: "terminal_1",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+	service := NewService(Options{Registry: reg, Backend: &fakeBackend{}})
+	if _, _, err := reg.ClaimPaneClosureGeneration(record.ID, record.Generation, registry.PaneStatusLost, "missing"); err != nil {
+		t.Fatalf("ClaimPaneClosureGeneration() error = %v", err)
+	}
+	live := map[livePaneKey]zellij.Pane{
+		{session: record.SessionID, paneID: record.ZellijPaneID}: {ID: zellij.PaneID(record.ZellijPaneID)},
+	}
+
+	current, err := service.reconcileRecord(record, live)
+	if err != nil {
+		t.Fatalf("reconcileRecord() error = %v", err)
+	}
+	if current.Status != registry.PaneStatusLost {
+		t.Fatalf("status = %q, want lost", current.Status)
 	}
 }
 

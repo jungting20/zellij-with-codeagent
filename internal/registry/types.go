@@ -47,6 +47,8 @@ type PaneRecord struct {
 	StatusMessage string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+
+	closeNotificationClaimed bool
 }
 
 type TabRecord struct {

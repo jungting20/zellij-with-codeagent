@@ -862,6 +862,33 @@ func TestClosePaneMarksRecordClosed(t *testing.T) {
 	}
 }
 
+func TestCreateAndClosePaneNotifyObserverOnceForRuntimeGeneration(t *testing.T) {
+	backend := &fakeBackend{createID: "terminal_5"}
+	observer := &recordingPaneObserver{}
+	service := NewService(Options{Registry: registry.New(), Backend: backend, PaneObserver: observer})
+	created, err := service.CreatePane(context.Background(), CreatePaneRequest{
+		ID: "pane-1", ZellijSession: "test-session", Role: "coding-agent",
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+	if _, err := service.ClosePane(context.Background(), ClosePaneRequest{PaneID: created.Pane.ID}); err != nil {
+		t.Fatalf("ClosePane() error = %v", err)
+	}
+	if _, err := service.reconcileRecord(created.record, map[livePaneKey]zellij.Pane{}); err != nil {
+		t.Fatalf("reconcileRecord(closed) error = %v", err)
+	}
+
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.opened) != 1 || observer.opened[0].Generation != created.record.Generation {
+		t.Fatalf("opened = %#v, want generation %d once", observer.opened, created.record.Generation)
+	}
+	if len(observer.closedRecords) != 1 || observer.closedRecords[0].Generation != created.record.Generation {
+		t.Fatalf("closed = %#v, want generation %d once", observer.closedRecords, created.record.Generation)
+	}
+}
+
 func TestClosePaneFailureMarksRecordError(t *testing.T) {
 	backend := &fakeBackend{
 		createID: "terminal_5",

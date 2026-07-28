@@ -228,6 +228,9 @@ func (s *Service) createPaneOnce(ctx context.Context, req CreatePaneRequest, id 
 		return CreatePaneResponse{}, createPaneCleanupError(err, cleanup(ctx))
 	}
 
+	if s.observer != nil {
+		s.observer.PaneOpened(record)
+	}
 	if s.subs != nil {
 		s.subs.StartPane(registry.PaneID(id))
 	}
@@ -472,20 +475,23 @@ func (s *Service) ClosePane(ctx context.Context, req ClosePaneRequest) (ClosePan
 		PaneID:  zellij.PaneID(record.ZellijPaneID),
 	})
 	if err != nil {
-		updated, updateErr := s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusError, err.Error())
+		updated, _, updateErr := s.registry.UpdateActivePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusError, err.Error())
 		if updateErr != nil {
 			return ClosePaneResponse{}, errors.Join(err, updateErr)
 		}
 		return ClosePaneResponse{Pane: paneFromRecord(updated)}, err
 	}
 
-	updated, err := s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusClosed, "closed by runtime service")
+	updated, claimed, err := s.registry.ClaimPaneClosureGeneration(record.ID, record.Generation, registry.PaneStatusClosed, "closed by runtime service")
 	if err != nil {
 		return ClosePaneResponse{}, err
 	}
 
 	if s.subs != nil {
 		s.subs.StopPaneGeneration(record.ID, record.Generation)
+	}
+	if claimed && s.observer != nil {
+		s.observer.PaneClosed(updated)
 	}
 
 	return ClosePaneResponse{Pane: paneFromRecord(updated)}, nil

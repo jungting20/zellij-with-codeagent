@@ -201,6 +201,58 @@ func TestUpdatePaneOutput(t *testing.T) {
 	}
 }
 
+func TestActiveOutputDoesNotMutateTerminalPane(t *testing.T) {
+	registry := newTestRegistry()
+	record, err := registry.RegisterPane(RegisterPaneRequest{ID: "pane-1"})
+	if err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+	if _, _, err := registry.ClaimPaneClosureGeneration(record.ID, record.Generation, PaneStatusLost, "missing"); err != nil {
+		t.Fatalf("ClaimPaneClosureGeneration() error = %v", err)
+	}
+
+	terminal, applied, err := registry.UpdateActivePaneOutputGeneration(record.ID, record.Generation, "late output")
+	if err != nil {
+		t.Fatalf("UpdateActivePaneOutputGeneration() error = %v", err)
+	}
+	if applied || terminal.Status != PaneStatusLost || terminal.LastOutput != "" {
+		t.Fatalf("terminal output update = %#v, applied = %v; want unchanged lost pane", terminal, applied)
+	}
+}
+
+func TestPaneClosureClaimIsGenerationScopedAndIndependentOfInitialStatus(t *testing.T) {
+	registry := newTestRegistry()
+	record, err := registry.RegisterPane(RegisterPaneRequest{ID: "pane-1", Status: PaneStatusLost})
+	if err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+
+	_, firstClaim, err := registry.ClaimPaneClosureGeneration(record.ID, record.Generation, PaneStatusLost, "missing")
+	if err != nil {
+		t.Fatalf("ClaimPaneClosureGeneration(first) error = %v", err)
+	}
+	_, secondClaim, err := registry.ClaimPaneClosureGeneration(record.ID, record.Generation, PaneStatusClosed, "closed")
+	if err != nil {
+		t.Fatalf("ClaimPaneClosureGeneration(second) error = %v", err)
+	}
+	removed, removeClaim, err := registry.RemovePaneGenerationClaimingClosure(record.ID, record.Generation)
+	if err != nil {
+		t.Fatalf("RemovePaneGenerationClaimingClosure() error = %v", err)
+	}
+	if !firstClaim || secondClaim || removeClaim || removed.Status != PaneStatusLost {
+		t.Fatalf("claims = %v/%v/%v, removed = %#v; want one claim preserving lost", firstClaim, secondClaim, removeClaim, removed)
+	}
+
+	newRecord, err := registry.RegisterPane(RegisterPaneRequest{ID: "pane-1"})
+	if err != nil {
+		t.Fatalf("RegisterPane(reused) error = %v", err)
+	}
+	_, newClaim, err := registry.RemovePaneGenerationClaimingClosure(newRecord.ID, newRecord.Generation)
+	if err != nil || !newClaim {
+		t.Fatalf("new generation removal claim = %v, error = %v; want true", newClaim, err)
+	}
+}
+
 func TestRemoveUnknownPaneReturnsNotFound(t *testing.T) {
 	registry := newTestRegistry()
 

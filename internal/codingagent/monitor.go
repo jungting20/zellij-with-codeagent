@@ -41,8 +41,9 @@ type Monitor struct {
 }
 
 type monitoredAgent struct {
-	record Record
-	token  uint64
+	record         Record
+	token          uint64
+	paneGeneration uint64
 
 	latestInput DetectionInput
 	hasInput    bool
@@ -52,6 +53,26 @@ type monitoredAgent struct {
 	idleToken         uint64
 	idleTimer         Timer
 	idleDeadline      Timer
+}
+
+// PaneOpened binds a monitored agent to the runtime-issued pane generation
+// that is allowed to deliver observations.
+func (m *Monitor) PaneOpened(pane registry.PaneRecord) {
+	if m == nil || pane.Role != "coding-agent" || pane.Generation == 0 || m.opts.Store == nil {
+		return
+	}
+	record, err := m.opts.Store.GetByPane(runtime.PaneID(pane.ID))
+	if err != nil {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry := m.monitoring[record.ID]
+	if !sameMonitoredRecord(entry, record) || pane.Generation <= entry.paneGeneration {
+		return
+	}
+	entry.paneGeneration = pane.Generation
 }
 
 var _ runtime.PaneObserver = (*Monitor)(nil)
@@ -134,7 +155,7 @@ func (m *Monitor) PaneOutput(pane registry.PaneRecord, renderedText string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	entry := m.monitoring[record.ID]
-	if !sameMonitoredRecord(entry, record) {
+	if !sameMonitoredPane(entry, record, pane) {
 		return
 	}
 	entry.latestInput.Screen = renderedText
@@ -156,7 +177,7 @@ func (m *Monitor) PaneClosed(pane registry.PaneRecord) {
 
 	m.mu.Lock()
 	entry := m.monitoring[record.ID]
-	if !sameMonitoredRecord(entry, record) {
+	if !sameMonitoredPane(entry, record, pane) {
 		m.mu.Unlock()
 		return
 	}
@@ -182,7 +203,7 @@ func (m *Monitor) PaneError(pane registry.PaneRecord, cause error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	entry := m.monitoring[record.ID]
-	if !sameMonitoredRecord(entry, record) {
+	if !sameMonitoredPane(entry, record, pane) {
 		return
 	}
 	m.stopTimersLocked(entry)
@@ -195,6 +216,10 @@ func (m *Monitor) PaneError(pane registry.PaneRecord, cause error) {
 
 func sameMonitoredRecord(entry *monitoredAgent, record Record) bool {
 	return entry != nil && entry.record.ID == record.ID && entry.record.Kind == record.Kind && entry.record.PaneID == record.PaneID
+}
+
+func sameMonitoredPane(entry *monitoredAgent, record Record, pane registry.PaneRecord) bool {
+	return sameMonitoredRecord(entry, record) && entry.paneGeneration != 0 && entry.paneGeneration == pane.Generation
 }
 
 func (m *Monitor) finishGrace(id ID, token uint64) {

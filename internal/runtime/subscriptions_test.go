@@ -47,11 +47,18 @@ func (r *blockingStartSubscriptionRunner) Start(ctx context.Context, _ zellij.Co
 
 type recordingPaneObserver struct {
 	mu            sync.Mutex
+	opened        []registry.PaneRecord
 	outputs       []string
 	records       []registry.PaneRecord
 	closed        []registry.PaneID
 	closedRecords []registry.PaneRecord
 	errors        []error
+}
+
+func (o *recordingPaneObserver) PaneOpened(record registry.PaneRecord) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.opened = append(o.opened, record)
 }
 
 func (o *recordingPaneObserver) PaneOutput(record registry.PaneRecord, renderedText string) {
@@ -612,6 +619,34 @@ func TestSubscriptionManagerStaleGenerationCannotMutateReusedPane(t *testing.T) 
 	}
 	if events := bus.Recent(0); len(events) != 0 {
 		t.Fatalf("events = %#v, want stale generation ignored", events)
+	}
+}
+
+func TestSubscriptionManagerLateOutputCannotMutateOrNotifyTerminalPane(t *testing.T) {
+	reg := registry.New()
+	record, err := reg.RegisterPane(registry.RegisterPaneRequest{ID: "coder", Role: "coding-agent"})
+	if err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+	if _, _, err := reg.ClaimPaneClosureGeneration(record.ID, record.Generation, registry.PaneStatusLost, "missing"); err != nil {
+		t.Fatalf("ClaimPaneClosureGeneration() error = %v", err)
+	}
+	observer := &recordingPaneObserver{}
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{Registry: reg, Bus: eventbus.New(), Observer: observer})
+
+	mgr.handlePaneUpdate(record, "late output")
+
+	current, err := reg.GetPane(record.ID)
+	if err != nil {
+		t.Fatalf("GetPane() error = %v", err)
+	}
+	if current.Status != registry.PaneStatusLost || current.LastOutput != "" {
+		t.Fatalf("current = %#v, want unchanged lost pane", current)
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.outputs) != 0 {
+		t.Fatalf("observer outputs = %#v, want none", observer.outputs)
 	}
 }
 

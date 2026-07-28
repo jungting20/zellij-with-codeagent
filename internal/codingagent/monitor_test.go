@@ -1,6 +1,7 @@
 package codingagent
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -10,7 +11,30 @@ import (
 	"zellij-with-codeagent/internal/eventbus"
 	"zellij-with-codeagent/internal/registry"
 	"zellij-with-codeagent/internal/runtime"
+	"zellij-with-codeagent/internal/zellij"
 )
+
+type monitorRuntimeBackend struct{}
+
+func (monitorRuntimeBackend) Session() string { return "test-session" }
+func (monitorRuntimeBackend) CreateTab(context.Context, zellij.CreateTabRequest) (zellij.TabID, error) {
+	return 1, nil
+}
+func (monitorRuntimeBackend) CloseTab(context.Context, zellij.CloseTabRequest) error { return nil }
+func (monitorRuntimeBackend) CreatePane(context.Context, zellij.CreatePaneRequest) (zellij.PaneID, error) {
+	return "terminal_1", nil
+}
+func (monitorRuntimeBackend) ClosePane(context.Context, zellij.ClosePaneRequest) error { return nil }
+func (monitorRuntimeBackend) SendInput(context.Context, zellij.SendInputRequest) error { return nil }
+func (monitorRuntimeBackend) ListPanes(context.Context, zellij.ListPanesRequest) ([]zellij.Pane, error) {
+	return nil, nil
+}
+func (monitorRuntimeBackend) DumpScreen(context.Context, zellij.DumpScreenRequest) (string, error) {
+	return "", nil
+}
+func (monitorRuntimeBackend) SubscribeCommand(zellij.SubscribeRequest) (zellij.CommandSpec, error) {
+	return zellij.CommandSpec{}, nil
+}
 
 type fakeMonitorScheduler struct {
 	mu     sync.Mutex
@@ -155,17 +179,20 @@ rules:
 	if err := monitor.Start(record); err != nil {
 		t.Fatalf("Monitor.Start() error = %v", err)
 	}
-	return monitorFixture{
+	fixture := monitorFixture{
 		monitor:   monitor,
 		store:     store,
 		bus:       bus,
 		scheduler: scheduler,
 		record:    record,
 		pane: registry.PaneRecord{
-			ID:   registry.PaneID(record.PaneID),
-			Role: "coding-agent",
+			ID:         registry.PaneID(record.PaneID),
+			Generation: 1,
+			Role:       "coding-agent",
 		},
 	}
+	fixture.monitor.PaneOpened(fixture.pane)
+	return fixture
 }
 
 func (f monitorFixture) state(t *testing.T) Record {
@@ -200,6 +227,51 @@ func TestMonitorKeepsNewRecordUnknownDuringGraceAndEvaluatesCachedScreenAtExpiry
 	f.scheduler.Advance(time.Nanosecond)
 	if got := f.state(t).State; got != StateWorking {
 		t.Fatalf("state at grace expiry = %q, want working from cached screen", got)
+	}
+}
+
+func TestMonitorIgnoresObservationsUntilPaneGenerationIsOpened(t *testing.T) {
+	f := newMonitorFixture(t)
+	f.monitor.Stop(f.record.ID)
+	if err := f.monitor.Start(f.record); err != nil {
+		t.Fatalf("Monitor.Start() error = %v", err)
+	}
+	f.monitor.PaneOutput(f.pane, "WORK")
+	f.monitor.PaneError(f.pane, errors.New("unbound error"))
+	f.scheduler.Advance(startupGrace)
+
+	got := f.state(t)
+	if got.State != StateUnknown || got.StateReason != "" {
+		t.Fatalf("unbound observations changed record: %#v", got)
+	}
+}
+
+func TestMonitorRejectsLateOldGenerationOutputAndErrorAfterPaneReuse(t *testing.T) {
+	f := newMonitorFixture(t)
+	oldPane := f.pane
+	f.monitor.PaneOpened(oldPane)
+	f.monitor.PaneClosed(oldPane)
+
+	replacement := f.record
+	replacement.State = StateUnknown
+	replacement.StateReason = ""
+	if _, err := f.store.Create(replacement); err != nil {
+		t.Fatalf("Store.Create(replacement) error = %v", err)
+	}
+	if err := f.monitor.Start(replacement); err != nil {
+		t.Fatalf("Monitor.Start(replacement) error = %v", err)
+	}
+	newPane := oldPane
+	newPane.Generation++
+	f.monitor.PaneOpened(newPane)
+
+	f.monitor.PaneOutput(oldPane, "WORK")
+	f.monitor.PaneError(oldPane, errors.New("late old generation"))
+	f.scheduler.Advance(startupGrace)
+
+	got := f.state(t)
+	if got.State != StateUnknown || got.StateReason != "" {
+		t.Fatalf("late old generation changed replacement: %#v", got)
 	}
 }
 
@@ -393,6 +465,31 @@ func TestMonitorPaneCloseCancelsTimersAndDeletesRecord(t *testing.T) {
 
 	f.monitor.PaneClosed(f.pane)
 	f.scheduler.Advance(10 * time.Second)
+
+	if _, err := f.store.Get(f.record.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Store.Get(closed) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRuntimeServiceClosePaneDeletesMonitoredAgentRecord(t *testing.T) {
+	f := newMonitorFixture(t)
+	f.monitor.Stop(f.record.ID)
+	if err := f.monitor.Start(f.record); err != nil {
+		t.Fatalf("Monitor.Start() error = %v", err)
+	}
+	service := runtime.NewService(runtime.Options{
+		Registry:     registry.New(),
+		Backend:      monitorRuntimeBackend{},
+		PaneObserver: f.monitor,
+	})
+	if _, err := service.CreatePane(context.Background(), runtime.CreatePaneRequest{
+		ID: f.record.PaneID, ZellijSession: "test-session", Role: "coding-agent",
+	}); err != nil {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+	if _, err := service.ClosePane(context.Background(), runtime.ClosePaneRequest{PaneID: f.record.PaneID}); err != nil {
+		t.Fatalf("ClosePane() error = %v", err)
+	}
 
 	if _, err := f.store.Get(f.record.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Store.Get(closed) error = %v, want ErrNotFound", err)

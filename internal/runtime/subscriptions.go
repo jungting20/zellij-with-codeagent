@@ -28,6 +28,7 @@ type SubscriptionRunner interface {
 
 // PaneObserver receives daemon-owned pane observations after generation checks.
 type PaneObserver interface {
+	PaneOpened(registry.PaneRecord)
 	PaneOutput(registry.PaneRecord, string)
 	PaneClosed(registry.PaneRecord)
 	PaneError(registry.PaneRecord, error)
@@ -255,13 +256,15 @@ func (m *SubscriptionManager) run(record registry.PaneRecord, subscription *pane
 	}
 	defer stream.Stdout.Close()
 
-	if _, err := m.opts.Registry.UpdatePaneStatusGeneration(logicalID, record.Generation, registry.PaneStatusRunning, "subscribe active"); err != nil {
+	if _, applied, err := m.opts.Registry.UpdateActivePaneStatusGeneration(logicalID, record.Generation, registry.PaneStatusRunning, "subscribe active"); err != nil {
 		if errors.Is(err, registry.ErrNotFound) || errors.Is(err, registry.ErrStaleRecord) {
 			return
 		}
 		if m.subscriptionIsCurrent(record, subscription) {
 			m.publishSubscribeStartupFailure(record, err)
 		}
+		return
+	} else if !applied {
 		return
 	}
 
@@ -328,7 +331,7 @@ func (m *SubscriptionManager) handlePaneClosed(record registry.PaneRecord) {
 	if m.opts.Registry == nil {
 		return
 	}
-	removed, err := m.opts.Registry.RemovePaneGeneration(record.ID, record.Generation)
+	removed, claimed, err := m.opts.Registry.RemovePaneGenerationClaimingClosure(record.ID, record.Generation)
 	if errors.Is(err, registry.ErrNotFound) || errors.Is(err, registry.ErrStaleRecord) {
 		return
 	}
@@ -341,10 +344,7 @@ func (m *SubscriptionManager) handlePaneClosed(record registry.PaneRecord) {
 	e := base
 	e.Type = eventbus.TypePaneClosed
 	e.Message = "pane_closed"
-	// A missing-pane reconciliation owns the close notification when it first
-	// transitions this generation to lost. A later subscribe close still removes
-	// the registry record, but must not notify the observer again.
-	if removed.Status != registry.PaneStatusLost && m.opts.Observer != nil {
+	if claimed && m.opts.Observer != nil {
 		m.opts.Observer.PaneClosed(removed)
 	}
 	if m.opts.Bus != nil {
@@ -368,12 +368,15 @@ func (m *SubscriptionManager) handlePaneUpdate(record registry.PaneRecord, text 
 	m.lastRendered[key] = text
 	m.mu.Unlock()
 
-	updated, err := m.opts.Registry.UpdatePaneOutputGeneration(record.ID, record.Generation, text)
+	updated, applied, err := m.opts.Registry.UpdateActivePaneOutputGeneration(record.ID, record.Generation, text)
 	if errors.Is(err, registry.ErrNotFound) || errors.Is(err, registry.ErrStaleRecord) {
 		return
 	}
 	if err != nil {
 		m.publishStreamError(record, err)
+		return
+	}
+	if !applied {
 		return
 	}
 	if m.opts.Observer != nil {
