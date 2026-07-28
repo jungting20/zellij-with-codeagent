@@ -321,7 +321,7 @@ git commit -m "feat: 에이전트 상태 매니페스트 엔진 추가"
 - Create: `internal/codingagent/manifests_test.go`
 
 **Interfaces:**
-- Produces: `func LoadEmbeddedDetector() (*Detector, error)`
+- Produces: `func LoadEmbeddedDetector() (*Detector, map[Kind]error)`
 - Consumes the engine from Task 3.
 - Treats `docs/agent-status-detection.md` sections 2 through 5 as the rule source of truth.
 
@@ -363,7 +363,7 @@ claude: 1100 osc_title_working; 1000 transcript_viewer; 980 live_blocked_form;
         300 legacy_no_prompt_blocker; 250 osc_title_idle; 250 osc_progress_idle
 ```
 
-Copy the literal evidence strings, regex conditions, negative gates, regions, and visible flags from `docs/agent-status-detection.md`; preserve declaration order for equal priorities. Do not add undocumented heuristics. YAML load failure from any one embedded manifest makes `LoadEmbeddedDetector` fail with the filename in the error.
+Copy the literal evidence strings, regex conditions, negative gates, regions, and visible flags from `docs/agent-status-detection.md`; preserve declaration order for equal priorities. Do not add undocumented heuristics. Load each embedded manifest independently. Return one filename-qualified error per invalid kind while keeping valid kinds available in the detector.
 
 - [ ] **Step 4: Format, verify GREEN, and commit**
 
@@ -594,7 +594,7 @@ CWD=/workspace/project
 
 The store must contain an unknown AgentRecord before the fake runtime emits any observation, and `Monitor.Start` must be called once.
 
-Add cases for unknown kind, blank or inaccessible CWD, missing source context, duplicate generated ID, runtime creation failure, and monitor-start failure. The exact order is store create, monitor start, then runtime pane create. Monitor-start failure deletes the record without creating a pane. Runtime creation failure calls `Monitor.Stop`, deletes the record, and relies on the existing atomic `RuntimeService.CreatePane` cleanup contract for any partially created physical pane.
+Add cases for unknown kind, a kind whose manifest failed to load, blank or inaccessible CWD, missing source context, duplicate generated ID, runtime creation failure, and monitor-start failure. The exact order is store create, monitor start, then runtime pane create. Monitor-start failure deletes the record without creating a pane. Runtime creation failure calls `Monitor.Stop`, deletes the record, and relies on the existing atomic `RuntimeService.CreatePane` cleanup contract for any partially created physical pane.
 
 - [ ] **Step 2: Write failing list and focus tests**
 
@@ -713,7 +713,7 @@ Extend `transport.Event` with JSON fields `agent_kind`, `previous_state`, `agent
 
 - [ ] **Step 5: Write failing daemon assembly test**
 
-Replace the narrow `newRuntimeService` assertion with an assembly test that starts the returned service through a fake backend/subscription runner, calls both `InspectRuntime` and `ListAgents`, and proves they share the same runtime registry and event bus. Also assert embedded manifest load failure is surfaced by construction rather than silently disabling monitoring.
+Replace the narrow `newRuntimeService` assertion with an assembly test that starts the returned service through a fake backend/subscription runner, calls both `InspectRuntime` and `ListAgents`, and proves they share the same runtime registry and event bus. Also inject one invalid manifest and assert that its agent kind fails safely from `StartAgent` while valid kinds and the daemon remain available.
 
 - [ ] **Step 6: Assemble store, detector, monitor, runtime, and agent service**
 
@@ -722,9 +722,9 @@ Change daemon construction to return `(transport.ServerRuntime, error)` and buil
 ```go
 bus := eventbus.New()
 store := codingagent.NewMemoryStore(time.Now)
-detector, err := codingagent.LoadEmbeddedDetector()
+detector, manifestErrors := codingagent.LoadEmbeddedDetector()
 monitor := codingagent.NewMonitor(codingagent.MonitorOptions{
-	Store: store, Detector: detector, EventBus: bus,
+	Store: store, Detector: detector, DetectorErrors: manifestErrors, EventBus: bus,
 })
 backend := zellij.NewBackend(zellij.Options{})
 runtimeService := agentruntime.NewService(agentruntime.Options{
@@ -737,7 +737,7 @@ return codingagent.NewService(codingagent.ServiceOptions{
 }), nil
 ```
 
-`daemon serve` prints a construction error and exits before opening the socket. The no-argument compatibility path follows the same error handling.
+`daemon serve` stays available when one manifest is invalid. `Monitor.Start` returns the stored filename-qualified error only for that kind, and `StartAgent` fails before creating its runtime pane. A failure to create the shared store, event bus, backend, or monitor remains a daemon construction error.
 
 - [ ] **Step 7: Format, verify GREEN, and commit**
 
