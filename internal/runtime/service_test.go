@@ -528,6 +528,80 @@ func TestFocusPaneUsesBackendSessionSwitcherByDefault(t *testing.T) {
 	}
 }
 
+func TestFocusPaneFallsBackToBackendWhenExplicitSwitcherIsTypedNil(t *testing.T) {
+	var typedNil *fakeSessionSwitcher
+	fallback := &fakeSessionSwitcher{}
+	backend := &fakeSwitchingBackend{fakeBackend: &fakeBackend{}, fakeSessionSwitcher: fallback}
+	service := NewService(Options{
+		Registry:        registry.New(),
+		Backend:         backend,
+		SessionSwitcher: typedNil,
+	})
+	registerFocusablePane(t, service)
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("FocusPane() panicked with typed-nil explicit switcher: %v", recovered)
+		}
+	}()
+	_, err := service.FocusPane(context.Background(), FocusPaneRequest{
+		PaneID: "agent-1", SourceZellijSession: "dashboard-session", SourceZellijPaneID: "terminal_2",
+	})
+	if err != nil {
+		t.Fatalf("FocusPane() error = %v", err)
+	}
+	if len(fallback.requests) != 1 {
+		t.Fatalf("fallback switch requests = %#v, want one request", fallback.requests)
+	}
+}
+
+func TestFocusPaneRejectsTypedNilBackendSwitcherWithoutPanicking(t *testing.T) {
+	var backend *fakeSwitchingBackend
+	service := NewService(Options{Registry: registry.New(), Backend: backend})
+	registerFocusablePane(t, service)
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("FocusPane() panicked with typed-nil backend switcher: %v", recovered)
+		}
+	}()
+	_, err := service.FocusPane(context.Background(), FocusPaneRequest{
+		PaneID: "agent-1", SourceZellijSession: "dashboard-session", SourceZellijPaneID: "terminal_2",
+	})
+	if !errors.Is(err, ErrInvalidPaneTarget) {
+		t.Fatalf("FocusPane() error = %v, want %v", err, ErrInvalidPaneTarget)
+	}
+}
+
+func TestFocusPaneCallsNonNilValueSwitcher(t *testing.T) {
+	var requests []zellij.SwitchSessionRequest
+	service := NewService(Options{
+		Registry:        registry.New(),
+		Backend:         &fakeBackend{},
+		SessionSwitcher: valueSessionSwitcher{requests: &requests},
+	})
+	registerFocusablePane(t, service)
+
+	_, err := service.FocusPane(context.Background(), FocusPaneRequest{
+		PaneID: "agent-1", SourceZellijSession: "dashboard-session", SourceZellijPaneID: "terminal_2",
+	})
+	if err != nil {
+		t.Fatalf("FocusPane() error = %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("value switcher requests = %#v, want one request", requests)
+	}
+}
+
+func registerFocusablePane(t *testing.T, service *Service) {
+	t.Helper()
+	if _, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+		ID: "agent-1", SessionID: "target-session", ZellijPaneID: "terminal_12", Status: registry.PaneStatusRunning,
+	}); err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+}
+
 func TestFocusPaneRejectsMissingOrInactiveTarget(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1288,6 +1362,15 @@ type fakeSessionSwitcher struct {
 type fakeSwitchingBackend struct {
 	*fakeBackend
 	*fakeSessionSwitcher
+}
+
+type valueSessionSwitcher struct {
+	requests *[]zellij.SwitchSessionRequest
+}
+
+func (s valueSessionSwitcher) SwitchSession(_ context.Context, req zellij.SwitchSessionRequest) error {
+	*s.requests = append(*s.requests, req)
+	return nil
 }
 
 func (s *fakeSessionSwitcher) SwitchSession(_ context.Context, req zellij.SwitchSessionRequest) error {

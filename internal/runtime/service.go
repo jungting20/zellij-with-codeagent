@@ -59,8 +59,11 @@ func NewService(opts Options) *Service {
 		backend = zellij.NewBackend(zellij.Options{})
 	}
 	switcher := opts.SessionSwitcher
-	if switcher == nil {
-		switcher, _ = backend.(zellij.SessionSwitcher)
+	if isNilInterface(switcher) {
+		switcher = nil
+		if candidate, ok := backend.(zellij.SessionSwitcher); ok && !isNilInterface(candidate) {
+			switcher = candidate
+		}
 	}
 
 	newPaneID := opts.NewPaneID
@@ -93,6 +96,20 @@ func NewService(opts Options) *Service {
 		subs:      subs,
 		observer:  opts.PaneObserver,
 		creates:   make(map[PaneID]*createPaneCall),
+	}
+}
+
+func isNilInterface(value any) bool {
+	if value == nil {
+		return true
+	}
+
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice, reflect.UnsafePointer:
+		return reflected.IsNil()
+	default:
+		return false
 	}
 }
 
