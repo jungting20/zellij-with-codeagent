@@ -26,7 +26,7 @@ func TestRunDashboardPassesZellijContextAndOptions(t *testing.T) {
 	code := Run(
 		[]string{"dashboard", "--socket", "/tmp/dashboard.sock", "--timeout", "3s", "--refresh-interval", "4s"},
 		strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
-			Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": " session-a ", "ZELLIJ_PANE_ID": " terminal_7 "}),
+			Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": " session-a ", "ZELLIJ_PANE_ID": " 7 "}),
 			NewModel: func(_ context.Context, got agentdashboard.Client, opts agentdashboard.Options) tea.Model {
 				if got != client {
 					t.Fatal("dashboard received a different client")
@@ -76,7 +76,7 @@ func TestRunStartSendsValidatedRequest(t *testing.T) {
 		strings.NewReader(""), &stdout, &stderr, testFactory(client),
 		Config{
 			Getwd:  func() (string, error) { return "/unused", nil },
-			Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}),
+			Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "2"}),
 		},
 	)
 

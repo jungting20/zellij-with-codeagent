@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -92,7 +93,7 @@ func runDashboard(args []string, stdin io.Reader, stdout, stderr io.Writer, newC
 		return 1
 	}
 	session := strings.TrimSpace(cfg.Getenv("ZELLIJ_SESSION_NAME"))
-	paneID := strings.TrimSpace(cfg.Getenv("ZELLIJ_PANE_ID"))
+	paneID := normalizeZellijPaneID(cfg.Getenv("ZELLIJ_PANE_ID"))
 	if session == "" || paneID == "" {
 		fmt.Fprintln(stderr, "agent dashboard must run inside a Zellij pane (ZELLIJ_SESSION_NAME and ZELLIJ_PANE_ID are required)")
 		return 2
@@ -183,7 +184,7 @@ func runStart(args []string, stdout, stderr io.Writer, newClient ClientFactory, 
 		fmt.Fprintln(stderr, "ZELLIJ_SESSION_NAME is required; agent start must run inside Zellij")
 		return 2
 	}
-	paneID := strings.TrimSpace(cfg.Getenv("ZELLIJ_PANE_ID"))
+	paneID := normalizeZellijPaneID(cfg.Getenv("ZELLIJ_PANE_ID"))
 	if paneID == "" {
 		fmt.Fprintln(stderr, "ZELLIJ_PANE_ID is required; agent start must run inside a Zellij pane")
 		return 2
@@ -318,6 +319,14 @@ func supportedKind(kind string) bool {
 
 func isHelp(arg string) bool {
 	return arg == "-h" || arg == "--help" || arg == "help"
+}
+
+func normalizeZellijPaneID(value string) string {
+	id := strings.TrimSpace(value)
+	if numeric, err := strconv.ParseUint(id, 10, 64); err == nil {
+		return fmt.Sprintf("terminal_%d", numeric)
+	}
+	return id
 }
 
 func printUsage(w io.Writer) {
