@@ -8,6 +8,7 @@ import (
 )
 
 const completionMarkerPrefix = "ZELLIJ_AGENT_TICKET_DONE"
+const completionSummaryPrefix = "ZELLIJ_AGENT_TICKET_SUMMARY"
 
 func CompletionMarker(ticketID int64) (string, error) {
 	if ticketID <= 0 {
@@ -25,21 +26,36 @@ func RenderTicketPrompt(ticket Ticket) (string, string, error) {
 	if body == "" {
 		return "", "", ErrInvalidPrompt
 	}
-	if strings.Contains(body, completionMarkerPrefix) {
+	if done, _ := parseCompletionOutput(body, marker); done {
 		return "", "", ErrInvalidPrompt
 	}
-	instruction := fmt.Sprintf("작업을 모두 완료한 뒤 마지막 줄에 따옴표 없이 %q만 출력하세요.", marker)
+	instruction := fmt.Sprintf("작업을 모두 완료한 뒤 최종 출력의 마지막 두 줄을 다음 형식으로 작성하세요. 첫째 줄은 %q 다음에 실제 변경 사항을 한 줄로 간결하게 요약하고, 둘째 줄은 정확히 %q로 작성하세요. 여기의 따옴표는 설명용이며 실제 출력에는 따옴표를 포함하지 마세요.", completionSummaryPrefix, marker)
 	return body + "\n\n" + instruction, marker, nil
 }
 
 func containsExactLine(output, marker string) bool {
+	done, _ := parseCompletionOutput(output, marker)
+	return done
+}
+
+func parseCompletionOutput(output, marker string) (done bool, summary string) {
 	scanner := bufio.NewScanner(strings.NewReader(output))
+	previous := ""
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		line = strings.TrimSpace(strings.TrimPrefix(line, "• "))
+		line := normalizeCompletionLine(scanner.Text())
 		if line == marker {
-			return true
+			prefix := completionSummaryPrefix + " "
+			if strings.HasPrefix(previous, prefix) {
+				return true, strings.TrimSpace(strings.TrimPrefix(previous, prefix))
+			}
+			return true, ""
 		}
+		previous = line
 	}
-	return false
+	return false, ""
+}
+
+func normalizeCompletionLine(line string) string {
+	line = strings.TrimSpace(line)
+	return strings.TrimSpace(strings.TrimPrefix(line, "• "))
 }

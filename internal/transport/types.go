@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"encoding/json"
 	"sort"
 	"time"
@@ -8,6 +9,21 @@ import (
 	"zellij-with-codeagent/internal/eventbus"
 	rt "zellij-with-codeagent/internal/runtime"
 )
+
+type VoiceNotificationRequest struct {
+	RequestID string `json:"request_id"`
+	Prefix    string `json:"prefix"`
+	TicketID  int64  `json:"ticket_id"`
+	Summary   string `json:"summary,omitempty"`
+}
+
+type VoiceNotificationResponse struct {
+	Status string `json:"status"`
+}
+
+type VoiceNotificationService interface {
+	QueueVoiceNotification(context.Context, VoiceNotificationRequest) (VoiceNotificationResponse, error)
+}
 
 type CreatePaneRequest struct {
 	ID                    string   `json:"id,omitempty"`

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -232,6 +234,240 @@ func TestManagerIgnoresPromptEchoAndCompletesExactMarker(t *testing.T) {
 	}
 }
 
+func TestManagerIgnoresRenderedViewportPromptEcho(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(41)}}
+	client := newFakeManagerClient()
+	stream := newFakeEventStream()
+	client.streams = []*fakeEventStream{stream}
+	manager := newTestManager(t, store, client, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.created()) == 1 })
+
+	viewport := renderedPromptViewport(client.created()[0].InitialInput)
+	stream.events <- transport.Event{
+		Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-41", Message: viewport,
+	}
+	time.Sleep(20 * time.Millisecond)
+	if got := store.transitions(); len(got) != 0 {
+		t.Fatalf("rendered prompt echo completed ticket: %v", got)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagerPeriodicSnapshotIgnoresRenderedViewportPromptEcho(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(42)}}
+	client := newFakeManagerClient()
+	client.streams = []*fakeEventStream{newFakeEventStream()}
+	ticks := make(chan time.Time, 1)
+	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.created()) == 1 })
+
+	client.setSnapshot("ticket-coding-run-a-42", renderedPromptViewport(client.created()[0].InitialInput))
+	ticks <- time.Now()
+	time.Sleep(20 * time.Millisecond)
+	if got := store.transitions(); len(got) != 0 {
+		t.Fatalf("periodic rendered prompt snapshot completed ticket: %v", got)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagerCompletesPromptEchoFollowedByRealFinalOutput(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(43)}}
+	client := newFakeManagerClient()
+	stream := newFakeEventStream()
+	client.streams = []*fakeEventStream{stream}
+	manager := newTestManager(t, store, client, 1)
+	manager.config.VoiceNotifications = true
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.created()) == 1 })
+
+	output := renderedPromptViewport(client.created()[0].InitialInput) +
+		"\nZELLIJ_AGENT_TICKET_SUMMARY 실제 완료 변경\nZELLIJ_AGENT_TICKET_DONE 43"
+	stream.events <- transport.Event{
+		Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-43", Message: output,
+	}
+	waitFor(t, func() bool { return len(client.voiceRequests()) == 1 })
+	if got := client.voiceRequests()[0].Summary; got != "실제 완료 변경" {
+		t.Fatalf("voice summary = %q, want 실제 완료 변경", got)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagerCapturesSplitEventSummaryFromIdentityCheckedSnapshot(t *testing.T) {
+	store := &fakeManagerStore{}
+	client := newFakeManagerClient()
+	_, err := client.CreatePane(context.Background(), transport.CreatePaneRequest{
+		ID: "ticket-coding-run-a-42", TaskID: "tickets", ZellijSession: "physical-a", Role: "coding-agent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.setSnapshot("ticket-coding-run-a-42", "ZELLIJ_AGENT_TICKET_SUMMARY daemon owns speech\nZELLIJ_AGENT_TICKET_DONE 42\n")
+	client.setSnapshotPane("ticket-coding-run-a-42", transport.Pane{
+		ID: "ticket-coding-run-a-42", TaskID: "tickets", SessionID: "wrong-session", Role: "coding-agent", Status: "running",
+	})
+	manager := newTestManagerWithVoice(t, client, true, nil)
+	manager.store = store
+	manager.slots[0] = managerSlot{
+		state: managerSlotWorking, ticket: managerTicket(42), paneID: "ticket-coding-run-a-42",
+		marker: "ZELLIJ_AGENT_TICKET_DONE 42", paneCreated: true,
+	}
+	event := transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-42", Message: "ZELLIJ_AGENT_TICKET_DONE 42"}
+
+	manager.handleEvent(context.Background(), event)
+	if got := store.transitions(); len(got) != 0 {
+		t.Fatalf("wrong-identity snapshot completed ticket: %v", got)
+	}
+	client.setSnapshotPane("ticket-coding-run-a-42", transport.Pane{
+		ID: "ticket-coding-run-a-42", TaskID: "tickets", SessionID: "physical-a", Role: "coding-agent", Status: "running",
+	})
+	manager.handleEvent(context.Background(), event)
+
+	requests := client.voiceRequests()
+	if len(requests) != 1 || requests[0].Summary != "daemon owns speech" {
+		t.Fatalf("voice requests = %#v, want recovered snapshot summary", requests)
+	}
+	if requests[0].RequestID != "tickets:42:1782864000123456789" {
+		t.Fatalf("request ID = %q, want completed transition timestamp", requests[0].RequestID)
+	}
+}
+
+func TestManagerQueuesCompletionWithoutSummaryWhenSnapshotHasNone(t *testing.T) {
+	client := newFakeManagerClient()
+	_, err := client.CreatePane(context.Background(), transport.CreatePaneRequest{
+		ID: "ticket-coding-run-a-42", TaskID: "tickets", ZellijSession: "physical-a", Role: "coding-agent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.setSnapshot("ticket-coding-run-a-42", "work\nZELLIJ_AGENT_TICKET_DONE 42\n")
+	manager := newTestManagerWithVoice(t, client, true, nil)
+	manager.slots[0] = managerSlot{
+		state: managerSlotWorking, ticket: managerTicket(42), paneID: "ticket-coding-run-a-42",
+		marker: "ZELLIJ_AGENT_TICKET_DONE 42", paneCreated: true,
+	}
+
+	manager.handleEvent(context.Background(), transport.Event{
+		Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-42", Message: "ZELLIJ_AGENT_TICKET_DONE 42",
+	})
+
+	requests := client.voiceRequests()
+	if len(requests) != 1 || requests[0].Summary != "" {
+		t.Fatalf("voice requests = %#v, want empty summary fallback", requests)
+	}
+	if got := client.snapshotCount("ticket-coding-run-a-42"); got != 1 {
+		t.Fatalf("fallback snapshot calls = %d, want exactly 1", got)
+	}
+}
+
+func TestManagerDoesNotRecoverForeignSummaryAcrossTargetMarker(t *testing.T) {
+	client := newFakeManagerClient()
+	_, err := client.CreatePane(context.Background(), transport.CreatePaneRequest{
+		ID: "ticket-coding-run-a-42", TaskID: "tickets", ZellijSession: "physical-a", Role: "coding-agent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.setSnapshot("ticket-coding-run-a-42", strings.Join([]string{
+		"ZELLIJ_AGENT_TICKET_SUMMARY foreign ticket summary",
+		"ZELLIJ_AGENT_TICKET_DONE 41",
+		"ZELLIJ_AGENT_TICKET_DONE 42",
+	}, "\n"))
+	manager := newTestManagerWithVoice(t, client, true, nil)
+	manager.slots[0] = managerSlot{
+		state: managerSlotWorking, ticket: managerTicket(42), paneID: "ticket-coding-run-a-42",
+		marker: "ZELLIJ_AGENT_TICKET_DONE 42", paneCreated: true,
+	}
+
+	manager.handleEvent(context.Background(), transport.Event{
+		Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-42", Message: "ZELLIJ_AGENT_TICKET_DONE 42",
+	})
+
+	requests := client.voiceRequests()
+	if len(requests) != 1 || requests[0].Summary != "" {
+		t.Fatalf("voice requests = %#v, want target completion without foreign summary", requests)
+	}
+}
+
+func TestManagerMarkerEventSnapshotErrorFallsBackAfterWorkerIdentityCheck(t *testing.T) {
+	store := &fakeManagerStore{}
+	client := newFakeManagerClient()
+	_, err := client.CreatePane(context.Background(), transport.CreatePaneRequest{
+		ID: "ticket-coding-run-a-44", TaskID: "tickets", ZellijSession: "physical-a", Role: "coding-agent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.snapshotErrors["ticket-coding-run-a-44"] = errors.New("snapshot unavailable")
+	manager := newTestManager(t, store, client, 1)
+	var logs synchronizedBuffer
+	manager.log = &logs
+	manager.slots[0] = managerSlot{
+		state: managerSlotWorking, ticket: managerTicket(44), paneID: "ticket-coding-run-a-44",
+		marker: "ZELLIJ_AGENT_TICKET_DONE 44", paneCreated: true,
+	}
+
+	manager.handleEvent(context.Background(), transport.Event{
+		Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-44", Message: "ZELLIJ_AGENT_TICKET_DONE 44",
+	})
+
+	if got := store.transitions(); len(got) != 1 || got[0].id != 44 {
+		t.Fatalf("transitions = %v, want ticket 44 completion", got)
+	}
+	if got := client.voiceRequests(); len(got) != 0 {
+		t.Fatalf("voice requests = %#v, want none while disabled", got)
+	}
+	if !logs.Contains("completion snapshot") || !logs.Contains("snapshot unavailable") {
+		t.Fatalf("manager log = %q, want snapshot fallback failure", logs.String())
+	}
+	if got := client.snapshotCount("ticket-coding-run-a-44"); got != 1 {
+		t.Fatalf("fallback snapshot calls = %d, want exactly 1", got)
+	}
+	if got := client.inspections(); got != 1 {
+		t.Fatalf("runtime inspections = %d, want one independent identity check", got)
+	}
+}
+
+func TestManagerMarkerEventRejectsInactiveFallbackSnapshot(t *testing.T) {
+	store := &fakeManagerStore{}
+	client := newFakeManagerClient()
+	client.setSnapshotPane("ticket-coding-run-a-45", transport.Pane{
+		ID: "ticket-coding-run-a-45", TaskID: "tickets", SessionID: "physical-a", Role: "coding-agent", Status: "exited",
+	})
+	manager := newTestManager(t, store, client, 1)
+	manager.slots[0] = managerSlot{
+		state: managerSlotWorking, ticket: managerTicket(45), paneID: "ticket-coding-run-a-45",
+		marker: "ZELLIJ_AGENT_TICKET_DONE 45", paneCreated: true,
+	}
+
+	manager.handleEvent(context.Background(), transport.Event{
+		Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-45", Message: "ZELLIJ_AGENT_TICKET_DONE 45",
+	})
+
+	if got := store.transitions(); len(got) != 0 {
+		t.Fatalf("inactive snapshot completed ticket: %v", got)
+	}
+	if got := client.snapshotCount("ticket-coding-run-a-45"); got != 1 {
+		t.Fatalf("fallback snapshot calls = %d, want exactly 1", got)
+	}
+}
+
 func TestManagerRetriesDoneBeforeClosing(t *testing.T) {
 	store := &fakeManagerStore{ready: []Ticket{managerTicket(7)}, transitionErrors: []error{errors.New("database busy"), nil}}
 	client := newFakeManagerClient()
@@ -263,16 +499,18 @@ func TestManagerRetriesDoneBeforeClosing(t *testing.T) {
 }
 
 func TestManagerClosesPaneWhenTicketIsAlreadyDone(t *testing.T) {
+	completed := completedManagerTicket(25)
 	store := &fakeManagerStore{
 		ready:            []Ticket{managerTicket(25)},
 		transitionErrors: []error{ErrInvalidTransition},
-		tickets:          map[int64]Ticket{25: {ID: 25, Status: StatusDone}},
+		tickets:          map[int64]Ticket{25: completed},
 	}
 	client := newFakeManagerClient()
 	stream := newFakeEventStream()
 	client.streams = []*fakeEventStream{stream}
 	ticks := make(chan time.Time, 1)
 	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
+	manager.config.VoiceNotifications = true
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(client.created()) == 1 })
@@ -284,6 +522,10 @@ func TestManagerClosesPaneWhenTicketIsAlreadyDone(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if got := len(store.transitions()); got != 1 {
 		t.Fatalf("already-done ticket retried transition: %d calls", got)
+	}
+	requests := client.voiceRequests()
+	if len(requests) != 1 || requests[0].RequestID != "tickets:25:1782864000123456789" {
+		t.Fatalf("voice requests = %#v, want stored completed_at request ID", requests)
 	}
 
 	cancel()
@@ -519,44 +761,94 @@ func TestManagerCloseFailureRetainsCapacityUntilPaneAbsent(t *testing.T) {
 	}
 }
 
-func TestManagerVoiceNotificationAfterSuccessfulClose(t *testing.T) {
+func TestManagerQueuesCompletionVoiceAfterSuccessfulClose(t *testing.T) {
 	client := newFakeManagerClient()
-	notifier := &recordingVoiceNotifier{}
-	manager := newTestManagerWithVoiceNotifier(t, client, true, notifier)
-	manager.slots[0] = managerSlot{
-		state:       managerSlotClosing,
-		ticket:      managerTicket(42),
-		paneID:      "ticket-coding-run-a-42",
-		paneCreated: true,
-		done:        true,
+	client.beforeQueueVoice = func() {
+		if len(client.closed()) == 0 {
+			t.Error("voice notification queued before pane close")
+		}
 	}
+	manager := newTestManagerWithVoice(t, client, true, nil)
+	manager.slots[0] = completedManagerSlot(42, "tests passed")
 
 	manager.retryClose(context.Background(), &manager.slots[0])
 
-	if got := notifier.recordedMessages(); len(got) != 1 || got[0] != "ticket-manager 42 완료" {
-		t.Fatalf("notifications = %q, want [ticket-manager 42 완료]", got)
+	want := transport.VoiceNotificationRequest{
+		RequestID: "tickets:42:1782864000123456789",
+		Prefix:    "ticket-manager",
+		TicketID:  42,
+		Summary:   "tests passed",
+	}
+	if got := client.voiceRequests(); !reflect.DeepEqual(got, []transport.VoiceNotificationRequest{want}) {
+		t.Fatalf("voice requests = %#v, want %#v", got, []transport.VoiceNotificationRequest{want})
+	}
+	if deadlines := client.voiceDeadlines(); len(deadlines) != 1 || deadlines[0].IsZero() || time.Until(deadlines[0]) > time.Second {
+		t.Fatalf("voice deadlines = %v, want one deadline within one second", deadlines)
 	}
 	if manager.slots[0].state != managerSlotEmpty {
 		t.Fatalf("slot state = %v, want empty", manager.slots[0].state)
 	}
 }
 
-func TestManagerVoiceNotificationsDisabled(t *testing.T) {
-	client := newFakeManagerClient()
-	notifier := &recordingVoiceNotifier{}
-	manager := newTestManagerWithVoiceNotifier(t, client, false, notifier)
-	manager.slots[0] = managerSlot{
-		state:       managerSlotClosing,
-		ticket:      managerTicket(42),
-		paneID:      "ticket-coding-run-a-42",
-		paneCreated: true,
-		done:        true,
+func TestCompletionVoiceRequestIDChangesAfterReopenedTicketCompletesAgain(t *testing.T) {
+	first := completedManagerTicket(42)
+	second := completedManagerTicket(42)
+	reopenedCompletedAt := first.CompletedAt.Add(time.Second)
+	second.CompletedAt = &reopenedCompletedAt
+
+	firstID, err := completionVoiceRequestID("tickets", first)
+	if err != nil {
+		t.Fatal(err)
 	}
+	secondID, err := completionVoiceRequestID("tickets", second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstID == secondID {
+		t.Fatalf("request IDs = %q and %q, want reopened completion to differ", firstID, secondID)
+	}
+}
 
-	manager.retryClose(context.Background(), &manager.slots[0])
-
-	if got := notifier.recordedMessages(); len(got) != 0 {
-		t.Fatalf("notifications = %q, want none", got)
+func TestCompletionVoiceRequestIDPreservesRawFormatAndHashesOnlyWhenNeeded(t *testing.T) {
+	ticket := completedManagerTicket(42)
+	tests := []struct {
+		name   string
+		taskID string
+		want   string
+	}{
+		{
+			name:   "documented raw format",
+			taskID: "tickets",
+			want:   "tickets:42:1782864000123456789",
+		},
+		{
+			name:   "raw format at endpoint byte limit",
+			taskID: strings.Repeat("t", 233),
+			want:   strings.Repeat("t", 233) + ":42:1782864000123456789",
+		},
+		{
+			name:   "deterministic hash fallback above endpoint byte limit",
+			taskID: strings.Repeat("task/", 60),
+			want:   "sha256:4f1da0aa79b2921d3f4bd44add8eb746975fd7482b5a92fb013a987ab7e65383:42:1782864000123456789",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := completionVoiceRequestID(tt.taskID, ticket)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("completionVoiceRequestID() = %q, want %q", got, tt.want)
+			}
+			if len(got) > 256 {
+				t.Fatalf("request ID length = %d, want at most 256 bytes", len(got))
+			}
+			again, err := completionVoiceRequestID(tt.taskID, ticket)
+			if err != nil || again != got {
+				t.Fatalf("second completionVoiceRequestID() = (%q, %v), want deterministic %q", again, err, got)
+			}
+		})
 	}
 }
 
@@ -569,93 +861,204 @@ func TestManagerVoiceNotificationWaitsForSuccessfulCloseRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	notifier := &recordingVoiceNotifier{}
-	manager := newTestManagerWithVoiceNotifier(t, client, true, notifier)
-	manager.slots[0] = managerSlot{
-		state:       managerSlotClosing,
-		ticket:      managerTicket(42),
-		paneID:      "ticket-coding-run-a-42",
-		paneCreated: true,
-		done:        true,
-	}
+	manager := newTestManagerWithVoice(t, client, true, nil)
+	manager.slots[0] = completedManagerSlot(42, "tests passed")
 
 	manager.retryClose(context.Background(), &manager.slots[0])
-	if got := notifier.recordedMessages(); len(got) != 0 {
-		t.Fatalf("notifications after failed close = %q, want none", got)
+	if got := client.voiceRequests(); len(got) != 0 {
+		t.Fatalf("voice requests after failed close = %#v, want none", got)
 	}
 	if manager.slots[0].state != managerSlotClosing {
 		t.Fatalf("slot state after failed close = %v, want closing", manager.slots[0].state)
 	}
 
 	manager.retryClose(context.Background(), &manager.slots[0])
-	if got := notifier.recordedMessages(); len(got) != 1 || got[0] != "ticket-manager 42 완료" {
-		t.Fatalf("notifications after retry = %q, want one completion", got)
+	if got := client.voiceRequests(); len(got) != 1 {
+		t.Fatalf("voice requests after close retry = %#v, want one", got)
 	}
 	if manager.slots[0].state != managerSlotEmpty {
 		t.Fatalf("slot state after retry = %v, want empty", manager.slots[0].state)
 	}
 }
 
-func TestManagerNotifyErrorDoesNotRetainCompletedSlot(t *testing.T) {
+func TestManagerVoiceNotificationRetriesStableRequestWithExactBackoff(t *testing.T) {
 	client := newFakeManagerClient()
-	notifier := &recordingVoiceNotifier{notifyErr: errors.New("voice unavailable")}
-	manager := newTestManagerWithVoiceNotifier(t, client, true, notifier)
-	var logs synchronizedBuffer
-	manager.log = &logs
-	manager.slots[0] = managerSlot{
-		state:       managerSlotClosing,
-		ticket:      managerTicket(42),
-		paneID:      "ticket-coding-run-a-42",
-		paneCreated: true,
-		done:        true,
+	client.voiceErrors = []error{
+		errors.New("connection reset after request"),
+		&transport.ClientError{APIError: transport.APIError{Code: transport.CodeTimeout, Message: "busy", Retryable: true}},
+		nil,
 	}
+	client.voiceResponses = []transport.VoiceNotificationResponse{{}, {}, {Status: "duplicate"}}
+	var delays []time.Duration
+	manager := newTestManagerWithVoice(t, client, true, func(ctx context.Context, delay time.Duration) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		delays = append(delays, delay)
+		return nil
+	})
+	manager.slots[0] = completedManagerSlot(42, "tests passed")
 
 	manager.retryClose(context.Background(), &manager.slots[0])
 
+	requests := client.voiceRequests()
+	if len(requests) != 3 {
+		t.Fatalf("voice requests = %d, want 3", len(requests))
+	}
+	for i := 1; i < len(requests); i++ {
+		if requests[i].RequestID != requests[0].RequestID {
+			t.Fatalf("request IDs = %q, %q, want stable", requests[0].RequestID, requests[i].RequestID)
+		}
+	}
+	if !reflect.DeepEqual(delays, []time.Duration{100 * time.Millisecond, 200 * time.Millisecond}) {
+		t.Fatalf("backoff delays = %v, want [100ms 200ms]", delays)
+	}
+	for _, deadline := range client.voiceDeadlines() {
+		remaining := time.Until(deadline)
+		if deadline.IsZero() || remaining <= 900*time.Millisecond || remaining > time.Second {
+			t.Fatalf("voice deadline remaining = %v, want one-second per-attempt context", remaining)
+		}
+	}
 	if manager.slots[0].state != managerSlotEmpty {
 		t.Fatalf("slot state = %v, want empty", manager.slots[0].state)
 	}
-	if !logs.Contains("notify ticket=42") || !logs.Contains("failed: voice unavailable") {
-		t.Fatalf("manager log = %q, want notify failure", logs.String())
-	}
 }
 
-func TestManagerVoiceNotifierClosesOnceOnCancellation(t *testing.T) {
+func TestManagerVoiceNotificationDoesNotRetryNonRetryableHTTP400(t *testing.T) {
 	client := newFakeManagerClient()
-	client.streams = []*fakeEventStream{newFakeEventStream()}
-	notifier := &recordingVoiceNotifier{}
-	manager := newTestManagerWithVoiceNotifier(t, client, true, notifier)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := runManager(ctx, manager)
-	waitFor(t, func() bool { return client.streamCalls() == 1 })
+	client.voiceErrors = []error{&transport.ClientError{
+		StatusCode: http.StatusBadRequest,
+		APIError:   transport.APIError{Code: transport.CodeBadRequest, Message: "invalid request"},
+	}}
+	var backoffCalls int
+	manager := newTestManagerWithVoice(t, client, true, func(context.Context, time.Duration) error {
+		backoffCalls++
+		return nil
+	})
+	var logs synchronizedBuffer
+	manager.log = &logs
+	manager.slots[0] = completedManagerSlot(42, "tests passed")
 
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("Run() error = %v", err)
+	manager.retryClose(context.Background(), &manager.slots[0])
+
+	if got := len(client.voiceRequests()); got != 1 {
+		t.Fatalf("voice requests = %d, want 1", got)
 	}
-	if got := notifier.recordedCloseCalls(); got != 1 {
-		t.Fatalf("notifier Close calls = %d, want 1", got)
+	if backoffCalls != 0 {
+		t.Fatalf("backoff calls = %d, want 0", backoffCalls)
+	}
+	if manager.slots[0].state != managerSlotEmpty {
+		t.Fatalf("slot state = %v, want empty", manager.slots[0].state)
+	}
+	if !logs.Contains("notify ticket=42") || !logs.Contains("invalid request") {
+		t.Fatalf("manager log = %q, want final notification failure", logs.String())
 	}
 }
 
-func TestManagerShutdownNotifiesOnlyDoneClosingSlotBeforeNotifierClose(t *testing.T) {
+func TestManagerVoiceNotificationRetriesHTTP5xxWithoutRetryableFlag(t *testing.T) {
+	client := newFakeManagerClient()
+	client.voiceErrors = []error{
+		&transport.ClientError{
+			StatusCode: http.StatusInternalServerError,
+			APIError:   transport.APIError{Code: transport.CodeRuntimeError, Message: "daemon failed"},
+		},
+		nil,
+	}
+	var delays []time.Duration
+	manager := newTestManagerWithVoice(t, client, true, func(_ context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return nil
+	})
+	manager.slots[0] = completedManagerSlot(42, "tests passed")
+
+	manager.retryClose(context.Background(), &manager.slots[0])
+
+	if got := len(client.voiceRequests()); got != 2 {
+		t.Fatalf("voice requests = %d, want 2", got)
+	}
+	if !reflect.DeepEqual(delays, []time.Duration{100 * time.Millisecond}) {
+		t.Fatalf("backoff delays = %v, want [100ms]", delays)
+	}
+	if manager.slots[0].state != managerSlotEmpty {
+		t.Fatalf("slot state = %v, want empty", manager.slots[0].state)
+	}
+}
+
+func TestManagerVoiceNotificationExhaustionClearsSlot(t *testing.T) {
+	client := newFakeManagerClient()
+	client.voiceErrors = []error{errors.New("network 1"), errors.New("network 2"), errors.New("network 3")}
+	var delays []time.Duration
+	manager := newTestManagerWithVoice(t, client, true, func(_ context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return nil
+	})
+	var logs synchronizedBuffer
+	manager.log = &logs
+	manager.slots[0] = completedManagerSlot(42, "")
+
+	manager.retryClose(context.Background(), &manager.slots[0])
+
+	if got := len(client.voiceRequests()); got != 3 {
+		t.Fatalf("voice requests = %d, want 3", got)
+	}
+	if !reflect.DeepEqual(delays, []time.Duration{100 * time.Millisecond, 200 * time.Millisecond}) {
+		t.Fatalf("backoff delays = %v, want [100ms 200ms]", delays)
+	}
+	if manager.slots[0].state != managerSlotEmpty {
+		t.Fatalf("slot state = %v, want empty", manager.slots[0].state)
+	}
+	if !logs.Contains("network 3") {
+		t.Fatalf("manager log = %q, want final failure", logs.String())
+	}
+}
+
+func TestManagerVoiceNotificationDisabledAndMissingCompletedAtClearSlot(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		enabled bool
+		ticket  Ticket
+	}{
+		{name: "disabled", enabled: false, ticket: completedManagerTicket(42)},
+		{name: "missing completed at", enabled: true, ticket: managerTicket(42)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := newFakeManagerClient()
+			manager := newTestManagerWithVoice(t, client, test.enabled, nil)
+			var logs synchronizedBuffer
+			manager.log = &logs
+			manager.slots[0] = completedManagerSlot(42, "tests passed")
+			manager.slots[0].ticket = test.ticket
+
+			manager.retryClose(context.Background(), &manager.slots[0])
+
+			if got := client.voiceRequests(); len(got) != 0 {
+				t.Fatalf("voice requests = %#v, want none", got)
+			}
+			if manager.slots[0].state != managerSlotEmpty {
+				t.Fatalf("slot state = %v, want empty", manager.slots[0].state)
+			}
+			if test.enabled && !logs.Contains("completed ticket is missing completed_at") {
+				t.Fatalf("manager log = %q, want missing completed_at", logs.String())
+			}
+		})
+	}
+}
+
+func TestManagerShutdownUsesLiveContextForDoneNotification(t *testing.T) {
 	store := &fakeManagerStore{}
 	client := newFakeManagerClient()
 	client.streams = []*fakeEventStream{newFakeEventStream()}
-	notifier := &recordingVoiceNotifier{}
 	manager, err := NewManager(ManagerOptions{
 		Store: store, Client: client,
-		Config:        Config{Version: 1, MaxWorkers: 2, PollInterval: time.Hour, VoiceNotifications: true, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
-		VoiceNotifier: notifier,
-		Root:          "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
+		Config: Config{Version: 1, MaxWorkers: 2, PollInterval: time.Hour, VoiceNotifications: true, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
+		Root:   "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
 		StartupTimeout: 200 * time.Millisecond, ReadyPollInterval: time.Millisecond, Log: io.Discard, ManagerID: "run-a",
+		NotificationBackoff: func(context.Context, time.Duration) error { return nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.slots[0] = managerSlot{
-		state: managerSlotClosing, ticket: managerTicket(42), paneID: "ticket-coding-run-a-42", paneCreated: true, done: true,
-	}
+	manager.slots[0] = completedManagerSlot(42, "tests passed")
 	manager.slots[1] = managerSlot{
 		state: managerSlotWorking, ticket: managerTicket(43), paneID: "ticket-coding-run-a-43", paneCreated: true,
 	}
@@ -668,32 +1071,30 @@ func TestManagerShutdownNotifiesOnlyDoneClosingSlotBeforeNotifierClose(t *testin
 		t.Fatalf("Run() error = %v", err)
 	}
 
-	wantEvents := []string{"notify:ticket-manager 42 완료", "close"}
-	if got := notifier.recordedEvents(); !reflect.DeepEqual(got, wantEvents) {
-		t.Fatalf("notifier events = %q, want %q", got, wantEvents)
+	if got := len(client.voiceRequests()); got != 1 {
+		t.Fatalf("voice requests = %d, want 1", got)
+	}
+	if canceled := client.voiceContextErrors(); len(canceled) != 1 || canceled[0] != nil {
+		t.Fatalf("voice context errors = %v, want live cleanup context", canceled)
+	}
+	deadlines := client.voiceDeadlines()
+	if len(deadlines) != 1 || deadlines[0].IsZero() {
+		t.Fatalf("voice deadlines = %v, want one cleanup deadline", deadlines)
+	}
+	remaining := time.Until(deadlines[0])
+	if remaining <= 0 || remaining > manager.startupTimeout {
+		t.Fatalf("cleanup deadline remaining = %v, want positive and bounded by %v", remaining, manager.startupTimeout)
 	}
 	if got := store.requeues(); !reflect.DeepEqual(got, []int64{43}) {
 		t.Fatalf("requeued tickets = %v, want [43]", got)
 	}
 }
 
-func TestNewManagerRequiresVoiceNotifierWhenEnabled(t *testing.T) {
-	_, err := NewManager(ManagerOptions{
-		Store: &fakeManagerStore{}, Client: newFakeManagerClient(),
-		Config: Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour, VoiceNotifications: true, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
-		Root:   "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
-	})
-	if err == nil || err.Error() != "ticket manager voice notifier is required" {
-		t.Fatalf("NewManager() error = %v, want ticket manager voice notifier is required", err)
-	}
-}
-
 func TestNewManagerTrimsVoiceNotificationPrefix(t *testing.T) {
 	manager, err := NewManager(ManagerOptions{
 		Store: &fakeManagerStore{}, Client: newFakeManagerClient(),
-		Config:        Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour, VoiceNotifications: true, VoiceNotificationPrefix: " project-a "},
-		VoiceNotifier: &recordingVoiceNotifier{},
-		Root:          "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
+		Config: Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour, VoiceNotifications: true, VoiceNotificationPrefix: " project-a "},
+		Root:   "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -784,14 +1185,19 @@ func TestManagerRecoversDroppedMarkerEventFromPeriodicSnapshot(t *testing.T) {
 	client.streams = []*fakeEventStream{newFakeEventStream()}
 	ticks := make(chan time.Time, 1)
 	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
+	manager.config.VoiceNotifications = true
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(client.created()) == 1 })
-	client.setSnapshot("ticket-coding-run-a-12", "work\nZELLIJ_AGENT_TICKET_DONE 12\n")
+	client.setSnapshot("ticket-coding-run-a-12", "work\nZELLIJ_AGENT_TICKET_SUMMARY periodic recovery\nZELLIJ_AGENT_TICKET_DONE 12\n")
 	ticks <- time.Now()
 	waitFor(t, func() bool { return len(store.transitions()) == 1 && len(client.closed()) == 1 })
 	if client.streamCalls() != 1 {
 		t.Fatalf("stream calls = %d, want existing stream retained", client.streamCalls())
+	}
+	requests := client.voiceRequests()
+	if len(requests) != 1 || requests[0].Summary != "periodic recovery" {
+		t.Fatalf("voice requests = %#v, want periodic snapshot summary", requests)
 	}
 	cancel()
 	if err := <-done; err != nil {
@@ -911,14 +1317,14 @@ func newTestManagerWithTicks(t *testing.T, store *fakeManagerStore, client *fake
 	return manager
 }
 
-func newTestManagerWithVoiceNotifier(t *testing.T, client *fakeManagerClient, enabled bool, notifier VoiceNotifier) *Manager {
+func newTestManagerWithVoice(t *testing.T, client *fakeManagerClient, enabled bool, backoff NotificationBackoff) *Manager {
 	t.Helper()
 	manager, err := NewManager(ManagerOptions{
 		Store: &fakeManagerStore{}, Client: client,
-		Config:        Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour, VoiceNotifications: enabled, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
-		VoiceNotifier: notifier,
-		Root:          "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
+		Config: Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour, VoiceNotifications: enabled, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
+		Root:   "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
 		StartupTimeout: 200 * time.Millisecond, ReadyPollInterval: time.Millisecond, Log: io.Discard, ManagerID: "run-a",
+		NotificationBackoff: backoff,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -936,6 +1342,29 @@ func managerTicket(id int64) Ticket {
 	return Ticket{ID: id, Title: "Ticket", Summary: "Summary", SpecPath: "docs/superpowers/specs/t-design.md", PlanPath: "docs/superpowers/plans/t.md", Prompt: "Implement ticket.", Status: StatusInProgress}
 }
 
+func completedManagerTicket(id int64) Ticket {
+	ticket := managerTicket(id)
+	completedAt := time.Date(2026, time.July, 1, 0, 0, 0, 123456789, time.UTC)
+	ticket.Status = StatusDone
+	ticket.CompletedAt = &completedAt
+	return ticket
+}
+
+func completedManagerSlot(id int64, summary string) managerSlot {
+	return managerSlot{
+		state:       managerSlotClosing,
+		ticket:      completedManagerTicket(id),
+		paneID:      "ticket-coding-run-a-" + strconv.FormatInt(id, 10),
+		paneCreated: true,
+		done:        true,
+		summary:     summary,
+	}
+}
+
+func renderedPromptViewport(prompt string) string {
+	return "terminal header\n• " + strings.ReplaceAll(strings.TrimSpace(prompt), "\n", "\n• ") + "\n›"
+}
+
 func waitFor(t *testing.T, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
@@ -951,49 +1380,6 @@ func waitFor(t *testing.T, condition func() bool) {
 type synchronizedBuffer struct {
 	mu      sync.Mutex
 	builder strings.Builder
-}
-
-type recordingVoiceNotifier struct {
-	mu         sync.Mutex
-	messages   []string
-	events     []string
-	notifyErr  error
-	closeCalls int
-	closeErr   error
-}
-
-func (n *recordingVoiceNotifier) Notify(message string) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.messages = append(n.messages, message)
-	n.events = append(n.events, "notify:"+message)
-	return n.notifyErr
-}
-
-func (n *recordingVoiceNotifier) Close() error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.closeCalls++
-	n.events = append(n.events, "close")
-	return n.closeErr
-}
-
-func (n *recordingVoiceNotifier) recordedMessages() []string {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return append([]string(nil), n.messages...)
-}
-
-func (n *recordingVoiceNotifier) recordedCloseCalls() int {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return n.closeCalls
-}
-
-func (n *recordingVoiceNotifier) recordedEvents() []string {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return append([]string(nil), n.events...)
 }
 
 func (b *synchronizedBuffer) Write(p []byte) (int, error) {
@@ -1064,7 +1450,7 @@ func (f *fakeManagerStore) Transition(_ context.Context, id int64, action Action
 			return Ticket{}, err
 		}
 	}
-	return Ticket{ID: id, Status: StatusDone}, nil
+	return completedManagerTicket(id), nil
 }
 
 func (f *fakeManagerStore) Requeue(_ context.Context, id int64) (Ticket, error) {
@@ -1123,15 +1509,22 @@ type fakeManagerClient struct {
 	snapshots         map[string]string
 	snapshotPanes     map[string]transport.Pane
 	snapshotErrors    map[string]error
+	snapshotCalls     map[string]int
 	closeRequests     []string
 	closeErrors       []error
 	beforeClose       func()
 	absentPanes       map[string]bool
 	paneStatuses      map[string]string
+	voiceRequestsLog  []transport.VoiceNotificationRequest
+	voiceResponses    []transport.VoiceNotificationResponse
+	voiceErrors       []error
+	voiceDeadlineLog  []time.Time
+	voiceCtxErrors    []error
+	beforeQueueVoice  func()
 }
 
 func newFakeManagerClient() *fakeManagerClient {
-	return &fakeManagerClient{anchorReady: true, anchorTaskID: "tickets", anchorSessionID: "physical-a", successfulCreates: map[string]bool{}, snapshots: map[string]string{}, snapshotPanes: map[string]transport.Pane{}, snapshotErrors: map[string]error{}, absentPanes: map[string]bool{}, paneStatuses: map[string]string{}}
+	return &fakeManagerClient{anchorReady: true, anchorTaskID: "tickets", anchorSessionID: "physical-a", successfulCreates: map[string]bool{}, snapshots: map[string]string{}, snapshotPanes: map[string]transport.Pane{}, snapshotErrors: map[string]error{}, snapshotCalls: map[string]int{}, absentPanes: map[string]bool{}, paneStatuses: map[string]string{}}
 }
 
 func (f *fakeManagerClient) CreatePane(ctx context.Context, req transport.CreatePaneRequest) (transport.CreatePaneResponse, error) {
@@ -1157,6 +1550,7 @@ func (f *fakeManagerClient) CreatePane(ctx context.Context, req transport.Create
 func (f *fakeManagerClient) SnapshotOutput(_ context.Context, paneID string, _ transport.SnapshotOutputRequest) (transport.SnapshotOutputResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.snapshotCalls[paneID]++
 	if err := f.snapshotErrors[paneID]; err != nil {
 		return transport.SnapshotOutputResponse{}, err
 	}
@@ -1186,6 +1580,33 @@ func (f *fakeManagerClient) ClosePane(_ context.Context, paneID string) (transpo
 		}
 	}
 	return transport.ClosePaneResponse{Pane: transport.Pane{ID: paneID}}, nil
+}
+
+func (f *fakeManagerClient) QueueVoiceNotification(ctx context.Context, req transport.VoiceNotificationRequest) (transport.VoiceNotificationResponse, error) {
+	if f.beforeQueueVoice != nil {
+		f.beforeQueueVoice()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.voiceRequestsLog = append(f.voiceRequestsLog, req)
+	deadline, _ := ctx.Deadline()
+	f.voiceDeadlineLog = append(f.voiceDeadlineLog, deadline)
+	f.voiceCtxErrors = append(f.voiceCtxErrors, ctx.Err())
+	var response transport.VoiceNotificationResponse
+	if len(f.voiceResponses) > 0 {
+		response = f.voiceResponses[0]
+		f.voiceResponses = f.voiceResponses[1:]
+	} else {
+		response.Status = "queued"
+	}
+	if len(f.voiceErrors) > 0 {
+		err := f.voiceErrors[0]
+		f.voiceErrors = f.voiceErrors[1:]
+		if err != nil {
+			return transport.VoiceNotificationResponse{}, err
+		}
+	}
+	return response, nil
 }
 
 func (f *fakeManagerClient) InspectRuntime(context.Context) (transport.InspectRuntimeResponse, error) {
@@ -1274,4 +1695,24 @@ func (f *fakeManagerClient) closed() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.closeRequests...)
+}
+func (f *fakeManagerClient) voiceRequests() []transport.VoiceNotificationRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]transport.VoiceNotificationRequest(nil), f.voiceRequestsLog...)
+}
+func (f *fakeManagerClient) voiceDeadlines() []time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]time.Time(nil), f.voiceDeadlineLog...)
+}
+func (f *fakeManagerClient) voiceContextErrors() []error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]error(nil), f.voiceCtxErrors...)
+}
+func (f *fakeManagerClient) snapshotCount(paneID string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.snapshotCalls[paneID]
 }

@@ -32,9 +32,8 @@ type managerRunner interface {
 }
 
 type dependencies struct {
-	newClient        func(transport.ClientOptions) ticketworker.ManagerClient
-	newVoiceNotifier func(io.Writer) ticketworker.VoiceNotifier
-	newManager       func(ticketworker.ManagerOptions) (managerRunner, error)
+	newClient  func(transport.ClientOptions) ticketworker.ManagerClient
+	newManager func(ticketworker.ManagerOptions) (managerRunner, error)
 }
 
 func defaultDependencies() dependencies {
@@ -42,7 +41,6 @@ func defaultDependencies() dependencies {
 		newClient: func(opts transport.ClientOptions) ticketworker.ManagerClient {
 			return transport.NewClient(opts)
 		},
-		newVoiceNotifier: ticketworker.NewNativeVoiceNotifier,
 		newManager: func(opts ticketworker.ManagerOptions) (managerRunner, error) {
 			return ticketworker.NewManager(opts)
 		},
@@ -82,22 +80,13 @@ func runWithDependencies(ctx context.Context, args []string, stdout, stderr io.W
 	defer store.Close()
 
 	client := deps.newClient(transport.ClientOptions{SocketPath: opts.SocketPath, Timeout: transport.DefaultRequestTimeout})
-	var voiceNotifier ticketworker.VoiceNotifier
-	if cfg.VoiceNotifications {
-		voiceNotifier = deps.newVoiceNotifier(stdout)
-	}
 	manager, err := deps.newManager(ticketworker.ManagerOptions{
-		Store: store, Client: client, Config: cfg, VoiceNotifier: voiceNotifier,
+		Store: store, Client: client, Config: cfg,
 		Root: root, TaskID: opts.TaskID, AnchorPaneID: opts.AnchorPaneID,
 		ZellijSession: opts.ZellijSession, RoleBin: opts.RoleBin,
 		StartupTimeout: opts.StartupTimeout, Log: stdout,
 	})
 	if err != nil {
-		if voiceNotifier != nil {
-			if closeErr := voiceNotifier.Close(); closeErr != nil {
-				fmt.Fprintf(stderr, "Error: close ticket-manager voice notifier: %v\n", closeErr)
-			}
-		}
 		fmt.Fprintf(stderr, "Error: configure ticket-manager: %v\n", err)
 		return 1
 	}

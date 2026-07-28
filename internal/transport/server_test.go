@@ -75,8 +75,9 @@ func TestServerShutdownStopsListeningAndRemovesSocket(t *testing.T) {
 	socketPath := fmt.Sprintf("/tmp/agentd-shutdown-test-%d.sock", time.Now().UnixNano())
 	defer os.Remove(socketPath)
 	server, err := NewServer(ServerOptions{
-		Service:    newFakeRuntimeService(),
-		SocketPath: socketPath,
+		Service:            newFakeRuntimeService(),
+		VoiceNotifications: noopVoiceNotificationService{},
+		SocketPath:         socketPath,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -239,9 +240,10 @@ func TestServerWaitForOutputMarkerBypassesRequestTimeoutAndPropagatesCancellatio
 	service.markerResponse = rt.WaitForOutputMarkerResponse{PaneID: "worker-1", Marker: "DONE", MatchedAt: time.Unix(3, 0)}
 	service.markerBlock = make(chan struct{})
 	server, err := NewServer(ServerOptions{
-		Service:        service,
-		SocketPath:     "unused.sock",
-		RequestTimeout: 10 * time.Millisecond,
+		Service:            service,
+		VoiceNotifications: noopVoiceNotificationService{},
+		SocketPath:         "unused.sock",
+		RequestTimeout:     10 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -487,10 +489,11 @@ func TestPrepareSocketRefusesActiveSocket(t *testing.T) {
 func newTestServer(t *testing.T, service *fakeRuntimeService) *Server {
 	t.Helper()
 	server, err := NewServer(ServerOptions{
-		Service:        service,
-		SocketPath:     "unused.sock",
-		RequestTimeout: time.Second,
-		Version:        "test",
+		Service:            service,
+		VoiceNotifications: noopVoiceNotificationService{},
+		SocketPath:         "unused.sock",
+		RequestTimeout:     time.Second,
+		Version:            "test",
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)

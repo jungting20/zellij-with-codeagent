@@ -100,6 +100,12 @@ func (c *Client) Shutdown(ctx context.Context) (ShutdownResponse, error) {
 	return response, err
 }
 
+func (c *Client) QueueVoiceNotification(ctx context.Context, req VoiceNotificationRequest) (VoiceNotificationResponse, error) {
+	var response VoiceNotificationResponse
+	err := c.do(ctx, http.MethodPost, "/v1/voice-notifications", req, &response)
+	return response, err
+}
+
 func (c *Client) CreatePane(ctx context.Context, req CreatePaneRequest) (CreatePaneResponse, error) {
 	var response CreatePaneResponse
 	err := c.do(ctx, http.MethodPost, "/v1/panes", req, &response)
