@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -73,23 +74,31 @@ func runStart(args []string, stdout, stderr io.Writer, newClient ClientFactory, 
 		fmt.Fprintln(stderr, "--timeout must be greater than 0")
 		return 2
 	}
+	if cfg.Getwd == nil {
+		fmt.Fprintln(stderr, "agent start configuration error: Getwd is required")
+		return 1
+	}
+	if cfg.Getenv == nil {
+		fmt.Fprintln(stderr, "agent start configuration error: Getenv is required")
+		return 1
+	}
 
 	cwd, err := resolveCWD(opts.cwd, cfg.Getwd)
 	if err != nil {
+		if opts.cwd == "" {
+			fmt.Fprintf(stderr, "determine working directory: %v\n", err)
+			return 1
+		}
 		fmt.Fprintf(stderr, "resolve cwd: %v\n", err)
 		return 2
 	}
 
-	getenv := cfg.Getenv
-	if getenv == nil {
-		getenv = os.Getenv
-	}
-	session := strings.TrimSpace(getenv("ZELLIJ_SESSION_NAME"))
+	session := strings.TrimSpace(cfg.Getenv("ZELLIJ_SESSION_NAME"))
 	if session == "" {
 		fmt.Fprintln(stderr, "ZELLIJ_SESSION_NAME is required; agent start must run inside Zellij")
 		return 2
 	}
-	paneID := strings.TrimSpace(getenv("ZELLIJ_PANE_ID"))
+	paneID := strings.TrimSpace(cfg.Getenv("ZELLIJ_PANE_ID"))
 	if paneID == "" {
 		fmt.Fprintln(stderr, "ZELLIJ_PANE_ID is required; agent start must run inside a Zellij pane")
 		return 2
@@ -98,10 +107,15 @@ func runStart(args []string, stdout, stderr io.Writer, newClient ClientFactory, 
 		fmt.Fprintln(stderr, "agent start client is not configured")
 		return 1
 	}
+	client := newClient(opts.socket, opts.timeout)
+	if isNilAgentClient(client) {
+		fmt.Fprintln(stderr, "agent start client is not configured")
+		return 1
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
-	response, err := newClient(opts.socket, opts.timeout).StartAgent(ctx, transport.StartAgentRequest{
+	response, err := client.StartAgent(ctx, transport.StartAgentRequest{
 		Kind:               kind,
 		CWD:                cwd,
 		Args:               append([]string(nil), extra...),
@@ -175,9 +189,6 @@ func splitPassthrough(args []string) (before, extra []string) {
 func resolveCWD(value string, getwd func() (string, error)) (string, error) {
 	cwd := strings.TrimSpace(value)
 	if cwd == "" {
-		if getwd == nil {
-			getwd = os.Getwd
-		}
 		var err error
 		cwd, err = getwd()
 		if err != nil {
@@ -196,6 +207,19 @@ func resolveCWD(value string, getwd func() (string, error)) (string, error) {
 		return "", fmt.Errorf("%s is not a directory", abs)
 	}
 	return abs, nil
+}
+
+func isNilAgentClient(client AgentClient) bool {
+	if client == nil {
+		return true
+	}
+	value := reflect.ValueOf(client)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func supportedKind(kind string) bool {

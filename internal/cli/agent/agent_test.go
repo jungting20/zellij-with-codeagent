@@ -67,6 +67,156 @@ func TestRunStartDefaultsCWDFromConfig(t *testing.T) {
 	}
 }
 
+func TestRunStartRequiresInjectedRuntimeDependencies(t *testing.T) {
+	cwd := t.TempDir()
+	tests := []struct {
+		name      string
+		args      []string
+		cfg       Config
+		wantCode  int
+		wantError string
+	}{
+		{
+			name: "missing getwd",
+			args: []string{"start", "codex"},
+			cfg: Config{Getenv: func(string) string {
+				t.Fatal("Getenv must not be called when Getwd is missing")
+				return ""
+			}},
+			wantCode:  1,
+			wantError: "agent start configuration error: Getwd is required",
+		},
+		{
+			name:      "missing getenv",
+			args:      []string{"start", "codex"},
+			cfg:       Config{Getwd: func() (string, error) { return cwd, nil }},
+			wantCode:  1,
+			wantError: "agent start configuration error: Getenv is required",
+		},
+		{
+			name: "getwd failure",
+			args: []string{"start", "codex"},
+			cfg: Config{
+				Getwd: func() (string, error) { return "", errors.New("working directory unavailable") },
+				Getenv: func(string) string {
+					t.Fatal("Getenv must not be called when Getwd fails")
+					return ""
+				},
+			},
+			wantCode:  1,
+			wantError: "determine working directory: working directory unavailable",
+		},
+		{
+			name: "explicit invalid cwd is usage error",
+			args: []string{"start", "codex", "--cwd", filepath.Join(cwd, "missing")},
+			cfg: Config{
+				Getwd:  func() (string, error) { return cwd, nil },
+				Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}),
+			},
+			wantCode:  2,
+			wantError: "resolve cwd:",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &testClient{response: started("agent-1", "codex", "pane-1")}
+			var stdout, stderr bytes.Buffer
+			code := Run(tt.args, strings.NewReader(""), &stdout, &stderr, testFactory(client), tt.cfg)
+			if code != tt.wantCode || !strings.Contains(stderr.String(), tt.wantError) {
+				t.Fatalf("code=%d stderr=%q, want code=%d and %q", code, stderr.String(), tt.wantCode, tt.wantError)
+			}
+			if stdout.Len() != 0 || client.calls != 0 {
+				t.Fatalf("stdout=%q calls=%d, want empty and zero", stdout.String(), client.calls)
+			}
+		})
+	}
+}
+
+func TestRunStartRejectsMissingClientWithoutPanic(t *testing.T) {
+	cfg := Config{
+		Getwd:  func() (string, error) { return t.TempDir(), nil },
+		Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}),
+	}
+	tests := []struct {
+		name    string
+		factory ClientFactory
+	}{
+		{name: "nil factory"},
+		{name: "nil client", factory: func(string, time.Duration) AgentClient { return nil }},
+		{name: "typed nil client", factory: func(string, time.Duration) AgentClient {
+			var client *testClient
+			return client
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := Run([]string{"start", "codex"}, strings.NewReader(""), &stdout, &stderr, tt.factory, cfg)
+			if code != 1 || !strings.Contains(stderr.String(), "agent start client is not configured") || stdout.Len() != 0 {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunStartAcceptsOnlyExactKinds(t *testing.T) {
+	cwd := t.TempDir()
+	cfg := Config{
+		Getwd:  func() (string, error) { return cwd, nil },
+		Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": " session-a ", "ZELLIJ_PANE_ID": " terminal_2 "}),
+	}
+	for _, kind := range []string{"codex", "claude", "gemini", "cursor"} {
+		t.Run(kind, func(t *testing.T) {
+			client := &testClient{response: started("agent-1", kind, "pane-1")}
+			var stdout, stderr bytes.Buffer
+			code := Run([]string{"start", kind}, strings.NewReader(""), &stdout, &stderr, testFactory(client), cfg)
+			if code != 0 || client.request.Kind != kind || client.request.SourceSession != "session-a" || client.request.SourceZellijPaneID != "terminal_2" {
+				t.Fatalf("code=%d request=%#v stderr=%q", code, client.request, stderr.String())
+			}
+		})
+	}
+	for _, invalid := range []string{"Codex", "CLAUDE", "GEMINI", "Cursor", "agy", "agent", "claude-code"} {
+		t.Run("reject "+invalid, func(t *testing.T) {
+			client := &testClient{}
+			var stdout, stderr bytes.Buffer
+			code := Run([]string{"start", invalid}, strings.NewReader(""), &stdout, &stderr, testFactory(client), cfg)
+			if code != 2 || !strings.Contains(stderr.String(), "unsupported agent kind") || stdout.Len() != 0 || client.calls != 0 {
+				t.Fatalf("code=%d stdout=%q stderr=%q calls=%d", code, stdout.String(), stderr.String(), client.calls)
+			}
+		})
+	}
+}
+
+func TestRunStartParsesStrictOptionsAndPassthrough(t *testing.T) {
+	cwd := t.TempDir()
+	link := filepath.Join(t.TempDir(), "project")
+	if err := os.Symlink(cwd, link); err != nil {
+		t.Fatal(err)
+	}
+	client := &testClient{response: started("agent-1", "gemini", "pane-1")}
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"start", "gemini", "--timeout=1s", "--socket=/first.sock", "--cwd", link,
+		"--socket", "/last.sock", "--timeout", "2s", "--", "--model", "gemini-3", "--", "--unsafe",
+	}, strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
+		Getwd:  func() (string, error) { return "/unused", nil },
+		Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}),
+	})
+
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if client.socket != "/last.sock" || client.timeout != 2*time.Second || client.request.CWD != link {
+		t.Fatalf("options socket=%q timeout=%s cwd=%q", client.socket, client.timeout, client.request.CWD)
+	}
+	if !reflect.DeepEqual(client.request.Args, []string{"--model", "gemini-3", "--", "--unsafe"}) {
+		t.Fatalf("passthrough=%#v", client.request.Args)
+	}
+	if !client.hasDeadline || time.Until(client.deadline) <= 0 || time.Until(client.deadline) > 2*time.Second {
+		t.Fatalf("deadline=%s hasDeadline=%t", client.deadline, client.hasDeadline)
+	}
+}
+
 func TestRunStartRejectsInvalidInputBeforeCallingClient(t *testing.T) {
 	cwd := t.TempDir()
 	file := filepath.Join(cwd, "not-a-directory")
@@ -106,8 +256,8 @@ func TestRunStartRejectsInvalidInputBeforeCallingClient(t *testing.T) {
 			if !strings.Contains(stderr.String(), tt.want) {
 				t.Fatalf("stderr = %q, want %q", stderr.String(), tt.want)
 			}
-			if client.calls != 0 {
-				t.Fatalf("StartAgent calls = %d, want 0", client.calls)
+			if client.calls != 0 || stdout.Len() != 0 {
+				t.Fatalf("StartAgent calls = %d stdout=%q, want zero and empty", client.calls, stdout.String())
 			}
 		})
 	}
@@ -122,8 +272,8 @@ func TestRunStartReportsClientError(t *testing.T) {
 		Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}),
 	})
 
-	if code != 1 || !strings.Contains(stderr.String(), "agent start failed via socket") || !strings.Contains(stderr.String(), "daemon unavailable") {
-		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	if code != 1 || !strings.Contains(stderr.String(), "agent start failed via socket") || !strings.Contains(stderr.String(), "daemon unavailable") || stdout.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 
@@ -134,26 +284,34 @@ func TestRunHelpDocumentsStartContract(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("Run(%#v) exit code = %d, stderr=%q", args, code, stderr.String())
 		}
-		for _, want := range []string{"codex", "claude", "gemini", "cursor", "default: current working directory", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-skip-permissions", "--yolo --trust", "-- passthrough"} {
+		for _, want := range []string{"codex", "claude", "gemini", "cursor", "agy", "default: current working directory", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-skip-permissions", "agent --yolo --trust", "-- passthrough"} {
 			if !strings.Contains(stdout.String(), want) {
 				t.Fatalf("Run(%#v) help = %q, missing %q", args, stdout.String(), want)
+			}
+		}
+		for _, unwanted := range []string{"list", "stop"} {
+			if strings.Contains(stdout.String(), unwanted) {
+				t.Fatalf("Run(%#v) help = %q, unexpectedly contains %q", args, stdout.String(), unwanted)
 			}
 		}
 	}
 }
 
 type testClient struct {
-	request  transport.StartAgentRequest
-	response transport.StartAgentResponse
-	err      error
-	calls    int
-	socket   string
-	timeout  time.Duration
+	request     transport.StartAgentRequest
+	response    transport.StartAgentResponse
+	err         error
+	calls       int
+	socket      string
+	timeout     time.Duration
+	deadline    time.Time
+	hasDeadline bool
 }
 
-func (c *testClient) StartAgent(_ context.Context, request transport.StartAgentRequest) (transport.StartAgentResponse, error) {
+func (c *testClient) StartAgent(ctx context.Context, request transport.StartAgentRequest) (transport.StartAgentResponse, error) {
 	c.calls++
 	c.request = request
+	c.deadline, c.hasDeadline = ctx.Deadline()
 	return c.response, c.err
 }
 
