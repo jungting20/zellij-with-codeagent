@@ -9,14 +9,11 @@ import (
 	"time"
 
 	"zellij-with-codeagent/internal/registry"
-	"zellij-with-codeagent/internal/zellij"
 )
 
 var (
 	ErrInvalidExecutionPlan = errors.New("runtime: invalid execution plan")
 )
-
-const executionPlanInitialInputPollInterval = 50 * time.Millisecond
 
 type ExecutionPlanPaneSpec struct {
 	ID                    PaneID
@@ -85,30 +82,28 @@ func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlan
 
 		firstSpec := tabSpec.Panes[0]
 		response, err := s.CreatePane(ctx, CreatePaneRequest{
-			ID:            firstSpec.ID,
-			TaskID:        taskID,
-			AgentID:       firstSpec.AgentID,
-			Role:          firstSpec.Role,
-			Name:          string(firstSpec.ID),
-			ZellijSession: req.ZellijSession,
-			NewTab:        true,
-			TabName:       tabName,
-			LayoutString:  tabSpec.LayoutString,
-			CWD:           firstSpec.CWD,
-			Command:       executionPlanCommand(firstSpec),
+			ID:                    firstSpec.ID,
+			TaskID:                taskID,
+			AgentID:               firstSpec.AgentID,
+			Role:                  firstSpec.Role,
+			Name:                  string(firstSpec.ID),
+			ZellijSession:         req.ZellijSession,
+			NewTab:                true,
+			TabName:               tabName,
+			LayoutString:          tabSpec.LayoutString,
+			CWD:                   firstSpec.CWD,
+			Command:               executionPlanCommand(firstSpec),
+			InitialInput:          firstSpec.InitialInput,
+			InitialInputReadyText: firstSpec.InitialInputReadyText,
 		})
 		if err != nil {
 			_ = s.rollbackExecutionPlan(ctx, createdAll)
-			return ApplyExecutionPlanResponse{}, err
+			return ApplyExecutionPlanResponse{}, fmt.Errorf("initialize pane %q: %w", firstSpec.ID, err)
 		}
 		tabID = response.Pane.ZellijTabID
 		createdFirst := createdExecutionPlanPane{pane: response.Pane, record: response.record}
 		createdTabPanes = append(createdTabPanes, response.Pane)
 		createdAll = append(createdAll, createdFirst)
-		if err := s.sendExecutionPlanInitialInput(ctx, createdFirst, firstSpec.InitialInput, firstSpec.InitialInputReadyText); err != nil {
-			_ = s.rollbackExecutionPlan(ctx, createdAll)
-			return ApplyExecutionPlanResponse{}, err
-		}
 
 		if len(tabSpec.Panes) > 1 {
 			if tabID == nil {
@@ -156,28 +151,25 @@ func (s *Service) createRemainingExecutionPlanTabPanes(ctx context.Context, zell
 		go func() {
 			defer wg.Done()
 			response, err := s.CreatePane(ctx, CreatePaneRequest{
-				ID:            spec.ID,
-				TaskID:        taskID,
-				AgentID:       spec.AgentID,
-				Role:          spec.Role,
-				Name:          string(spec.ID),
-				ZellijSession: zellijSession,
-				TabName:       tabName,
-				ZellijTabID:   &tabID,
-				CWD:           spec.CWD,
-				Command:       executionPlanCommand(spec),
+				ID:                    spec.ID,
+				TaskID:                taskID,
+				AgentID:               spec.AgentID,
+				Role:                  spec.Role,
+				Name:                  string(spec.ID),
+				ZellijSession:         zellijSession,
+				TabName:               tabName,
+				ZellijTabID:           &tabID,
+				CWD:                   spec.CWD,
+				Command:               executionPlanCommand(spec),
+				InitialInput:          spec.InitialInput,
+				InitialInputReadyText: spec.InitialInputReadyText,
 			})
 			if err != nil {
 				cancel()
-				results <- executionPlanPaneResult{index: i, err: err}
+				results <- executionPlanPaneResult{index: i, err: fmt.Errorf("initialize pane %q: %w", spec.ID, err)}
 				return
 			}
 			created := createdExecutionPlanPane{pane: response.Pane, record: response.record}
-			if err := s.sendExecutionPlanInitialInput(ctx, created, spec.InitialInput, spec.InitialInputReadyText); err != nil {
-				cancel()
-				results <- executionPlanPaneResult{index: i, created: created, err: err}
-				return
-			}
 			results <- executionPlanPaneResult{index: i, created: created}
 		}()
 	}
@@ -201,63 +193,6 @@ func (s *Service) createRemainingExecutionPlanTabPanes(ctx context.Context, zell
 		return created, firstErr
 	}
 	return panes, nil
-}
-
-func (s *Service) sendExecutionPlanInitialInput(ctx context.Context, created createdExecutionPlanPane, initialInput, readyText string) error {
-	if initialInput == "" {
-		return nil
-	}
-	if err := s.waitForExecutionPlanInitialInputReady(ctx, created, readyText); err != nil {
-		return err
-	}
-	current, err := s.registry.GetPane(created.record.ID)
-	if err != nil {
-		return fmt.Errorf("send initial input to pane %q: %w", created.pane.ID, err)
-	}
-	if current.Generation != created.record.Generation {
-		return fmt.Errorf("send initial input to pane %q: %w", created.pane.ID, registry.ErrStaleRecord)
-	}
-	if err := s.backend.SendInput(ctx, zellij.SendInputRequest{
-		Session: string(created.record.SessionID),
-		PaneID:  zellij.PaneID(created.record.ZellijPaneID),
-		Text:    initialInput,
-	}); err != nil {
-		_, _ = s.registry.UpdatePaneStatusGeneration(created.record.ID, created.record.Generation, registry.PaneStatusError, err.Error())
-		return fmt.Errorf("send initial input to pane %q: %w", created.pane.ID, err)
-	}
-	return nil
-}
-
-func (s *Service) waitForExecutionPlanInitialInputReady(ctx context.Context, created createdExecutionPlanPane, readyText string) error {
-	if readyText == "" {
-		return nil
-	}
-	ticker := time.NewTicker(executionPlanInitialInputPollInterval)
-	defer ticker.Stop()
-
-	var lastErr error
-	for {
-		output, err := s.backend.DumpScreen(ctx, zellij.DumpScreenRequest{
-			Session: string(created.record.SessionID),
-			PaneID:  zellij.PaneID(created.record.ZellijPaneID),
-		})
-		if err == nil && strings.Contains(output, readyText) {
-			return nil
-		}
-		if err != nil {
-			lastErr = err
-		}
-
-		select {
-		case <-ctx.Done():
-			cause := ctx.Err()
-			if lastErr != nil {
-				cause = errors.Join(cause, lastErr)
-			}
-			return fmt.Errorf("wait for initial input readiness in pane %q: %w", created.pane.ID, cause)
-		case <-ticker.C:
-		}
-	}
 }
 
 func validateExecutionPlan(req ApplyExecutionPlanRequest) error {
@@ -310,15 +245,7 @@ func (s *Service) rollbackExecutionPlan(ctx context.Context, created []createdEx
 
 	var rollbackErr error
 	for _, createdPane := range created {
-		if err := s.backend.ClosePane(rollbackCtx, zellij.ClosePaneRequest{Session: string(createdPane.record.SessionID), PaneID: zellij.PaneID(createdPane.record.ZellijPaneID)}); err != nil {
-			rollbackErr = errors.Join(rollbackErr, err)
-		}
-		if s.subs != nil {
-			s.subs.StopPaneGeneration(createdPane.record.ID, createdPane.record.Generation)
-		}
-		if _, err := s.registry.RemovePaneGeneration(createdPane.record.ID, createdPane.record.Generation); err != nil && !errors.Is(err, registry.ErrNotFound) && !errors.Is(err, registry.ErrStaleRecord) {
-			rollbackErr = errors.Join(rollbackErr, err)
-		}
+		rollbackErr = errors.Join(rollbackErr, s.cleanupCreatedPane(rollbackCtx, createdPane.record))
 	}
 	return rollbackErr
 }

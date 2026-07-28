@@ -422,7 +422,7 @@ func TestApplyExecutionPlanRollsBackOnInitialInputFailure(t *testing.T) {
 			}},
 		}},
 	})
-	if err == nil || !strings.Contains(err.Error(), `send initial input to pane "coder"`) {
+	if err == nil || !strings.Contains(err.Error(), `initialize pane "coder"`) {
 		t.Fatalf("ApplyExecutionPlan() error = %v, want pane-specific error", err)
 	}
 
@@ -464,7 +464,7 @@ func TestApplyExecutionPlanRollsBackAllPanesOnRemainingInitialInputFailure(t *te
 			},
 		}},
 	})
-	if err == nil || !strings.Contains(err.Error(), `send initial input to pane "review"`) {
+	if err == nil || !strings.Contains(err.Error(), `initialize pane "review"`) {
 		t.Fatalf("ApplyExecutionPlan() error = %v, want remaining pane input error", err)
 	}
 
@@ -641,39 +641,5 @@ func TestRollbackExecutionPlanDoesNotCloseOrRemoveReusedPane(t *testing.T) {
 	}
 	if current.Generation != newRecord.Generation || current.ZellijPaneID != "terminal_new" {
 		t.Fatalf("current pane = %#v, want untouched replacement", current)
-	}
-}
-
-func TestExecutionPlanInitialInputDoesNotReachReusedPane(t *testing.T) {
-	backend := &fakeBackend{}
-	service := newTestService(backend)
-	oldRecord, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
-		ID:           "coder",
-		TaskID:       "old-task",
-		ZellijPaneID: "terminal_old",
-	})
-	if err != nil {
-		t.Fatalf("RegisterPane(old) error = %v", err)
-	}
-	if _, err := service.registry.RemovePane("coder"); err != nil {
-		t.Fatalf("RemovePane(old) error = %v", err)
-	}
-	if _, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
-		ID:           "coder",
-		TaskID:       "new-task",
-		ZellijPaneID: "terminal_new",
-	}); err != nil {
-		t.Fatalf("RegisterPane(new) error = %v", err)
-	}
-
-	err = service.sendExecutionPlanInitialInput(context.Background(), createdExecutionPlanPane{
-		pane:   paneFromRecord(oldRecord),
-		record: oldRecord,
-	}, "old goal", "")
-	if !errors.Is(err, registry.ErrStaleRecord) {
-		t.Fatalf("sendExecutionPlanInitialInput(old) error = %v, want %v", err, registry.ErrStaleRecord)
-	}
-	if len(backend.sendRequests) != 0 {
-		t.Fatalf("SendInput requests = %#v, want no old input sent", backend.sendRequests)
 	}
 }
