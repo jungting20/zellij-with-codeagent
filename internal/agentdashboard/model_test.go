@@ -148,9 +148,13 @@ func TestModelFocusFailureKeepsDashboardAlive(t *testing.T) {
 	m = applyRefresh(t, m, []transport.AgentWithPane{record("agent-1", "codex", "idle", time.Unix(1, 0))})
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = concreteModel(t, next)
-	m = update(t, m, cmd())
+	next, refresh := m.Update(cmd())
+	m = concreteModel(t, next)
 	if m.statusText != "focus failed: target pane disappeared" || m.quitting {
 		t.Fatalf("status=%q quitting=%t", m.statusText, m.quitting)
+	}
+	if refresh == nil || !m.refreshing {
+		t.Fatalf("focus failure refresh=%v refreshing=%t, want immediate refresh", refresh, m.refreshing)
 	}
 }
 
@@ -198,6 +202,23 @@ func TestModelListAndStreamFailuresDegradeWithoutDiscardingRows(t *testing.T) {
 	m = update(t, m, streamClosedMsg{err: errors.New("EOF")})
 	if m.connection != "degraded" || len(m.rows) != 1 || closed != 1 || !strings.Contains(m.statusText, "EOF") {
 		t.Fatalf("after close connection=%q rows=%#v closed=%d status=%q", m.connection, rowIDs(m.rows), closed, m.statusText)
+	}
+}
+
+func TestModelDegradedConnectionIsNotMaskedByHealthyHalf(t *testing.T) {
+	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m = applyRefresh(t, m, []transport.AgentWithPane{record("agent-1", "codex", "idle", time.Unix(1, 0))})
+	m = update(t, m, streamClosedMsg{err: errors.New("EOF")})
+	m = applyRefresh(t, m, []transport.AgentWithPane{record("agent-1", "codex", "idle", time.Unix(1, 0))})
+	if m.connection != "degraded" {
+		t.Fatalf("successful poll masked dropped stream: connection=%q", m.connection)
+	}
+
+	m = update(t, m, refreshResultMsg{err: errors.New("list failed")})
+	next, _ := m.Update(streamReadyMsg{stream: &transport.EventStream{Events: make(chan transport.Event), Errors: make(chan error)}})
+	m = concreteModel(t, next)
+	if m.connection != "degraded" {
+		t.Fatalf("connected stream masked failed list: connection=%q", m.connection)
 	}
 }
 

@@ -66,6 +66,34 @@ func TestViewShowsDegradedConnectionAndLastStatus(t *testing.T) {
 	}
 }
 
+func TestViewHonorsWindowWidthAndHeightWhileKeepingSelectionVisible(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m.width, m.height, m.connection, m.loaded, m.lastRefresh = 80, 8, "live", true, now
+	for index := 0; index < 10; index++ {
+		project := strings.Repeat("project-", 15)
+		if index == 9 {
+			project = "selected-project"
+		}
+		m.rows = append(m.rows, viewRecord("agent", "codex", "working", "/repo/"+project, now.Add(-time.Minute)))
+	}
+	m.selected, m.selectedID = 9, "agent"
+
+	plain := ansi.Strip(m.View())
+	lines := strings.Split(plain, "\n")
+	if len(lines) > m.height {
+		t.Fatalf("view lines=%d, want <=%d:\n%s", len(lines), m.height, plain)
+	}
+	for _, line := range lines {
+		if ansi.StringWidth(line) > m.width {
+			t.Fatalf("line width=%d, want <=%d: %q", ansi.StringWidth(line), m.width, line)
+		}
+	}
+	if !strings.Contains(plain, "> ") || !strings.Contains(plain, "selected-project") {
+		t.Fatalf("selected row is outside viewport:\n%s", plain)
+	}
+}
+
 func viewRecord(id, kind, state, cwd string, changed time.Time) transport.AgentWithPane {
 	return transport.AgentWithPane{
 		Agent: transport.Agent{ID: id, Kind: kind, State: state, CreatedAt: changed.Add(-time.Hour), StateChangedAt: changed},

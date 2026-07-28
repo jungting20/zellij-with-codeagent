@@ -5,60 +5,122 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+
+	"zellij-with-codeagent/internal/codingagent"
+	"zellij-with-codeagent/internal/transport"
+)
+
+var (
+	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
+	workingStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	blockedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	idleStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	unknownStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	selectedStyle = lipgloss.NewStyle().Reverse(true)
+	mutedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 )
 
 func (m Model) View() string {
 	if m.quitting {
 		return ""
 	}
-	var b strings.Builder
-	connection := strings.ToUpper(m.connection)
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+	lines := []string{m.headerView(), "STATE  AGENT  PROJECT  SINCE"}
+	if !m.loaded {
+		lines = append(lines, "Loading agents...")
+	} else if len(m.rows) == 0 {
+		lines = append(lines, "No managed coding agents")
+	} else {
+		visible := len(m.rows)
+		if m.height > 0 {
+			visible = minInt(visible, maxInt(1, m.height-4))
+		}
+		start := viewportStart(m.selected, len(m.rows), visible)
+		for index := start; index < len(m.rows) && index < start+visible; index++ {
+			lines = append(lines, m.rowView(m.rows[index], index == m.selected, width))
+		}
+	}
+	if m.statusText != "" {
+		style := mutedStyle
+		if m.connection == "degraded" || strings.Contains(m.statusText, "failed") {
+			style = errorStyle
+		}
+		lines = append(lines, style.Render(m.statusText))
+	}
+	lines = append(lines, "j/k move  Enter focus  R refresh  q quit")
+	for index := range lines {
+		lines[index] = ansi.Truncate(lines[index], width, "…")
+	}
+	if m.height > 0 && len(lines) > m.height {
+		lines = append(lines[:m.height-1], lines[len(lines)-1])
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) headerView() string {
+	marker, connection := "~", strings.ToUpper(m.connection)
+	style := unknownStyle
+	switch m.connection {
+	case "live":
+		marker, style = "*", workingStyle
+	case "degraded":
+		marker, style = "!", errorStyle
+	}
 	if connection == "" {
 		connection = "CONNECTING"
 	}
-	fmt.Fprintf(&b, "AGENT DASHBOARD  [%s]\n\n", connection)
-	b.WriteString("  STATE  AGENT  PROJECT  SINCE\n")
-	if !m.loaded {
-		b.WriteString("  loading...\n")
-	} else if len(m.rows) == 0 {
-		b.WriteString("  no managed coding agents\n")
-	} else {
-		for index, row := range m.rows {
-			cursor := "  "
-			if index == m.selected {
-				cursor = "> "
-			}
-			state := row.Agent.State
-			fmt.Fprintf(&b, "%s%s %-8s %-7s %-24s %s\n",
-				cursor, stateSymbol(state), state, agentName(row.Agent.Kind), projectName(row.Pane.CWD), elapsed(m.lastRefresh, row.Agent.StateChangedAt))
-		}
-	}
-	b.WriteString("\n")
-	b.WriteString(m.statusText)
-	b.WriteString("\n\n")
-	b.WriteString("j/k move  Enter focus  R refresh  q quit")
-	return b.String()
+	return fmt.Sprintf("%s  %s  %d agents",
+		titleStyle.Render("AGENT DASHBOARD"),
+		style.Render(marker+" "+connection),
+		len(m.rows),
+	)
 }
 
-func stateSymbol(state string) string {
-	switch state {
+func (m Model) rowView(record transport.AgentWithPane, selected bool, width int) string {
+	now := m.lastRefresh
+	if now.IsZero() {
+		now = time.Now()
+	}
+	projectWidth := maxInt(8, width-35)
+	line := "  " + padCell(stateView(record.Agent.State), 10) +
+		"  " + padCell(agentName(record.Agent.Kind), 12) +
+		"  " + padCell(projectName(record.Pane.CWD), projectWidth) +
+		"  " + elapsed(now, record.Agent.StateChangedAt)
+	if selected {
+		line = "> " + strings.TrimPrefix(line, "  ")
+		return selectedStyle.Render(line)
+	}
+	return line
+}
+
+func stateView(state string) string {
+	switch strings.ToLower(strings.TrimSpace(state)) {
 	case "working":
-		return "●"
+		return workingStyle.Render("● working")
 	case "blocked":
-		return "!"
+		return blockedStyle.Render("! blocked")
 	case "idle":
-		return "○"
+		return idleStyle.Render("○ idle")
 	default:
-		return "?"
+		return unknownStyle.Render("? unknown")
 	}
 }
 
 func agentName(kind string) string {
-	if kind == "" {
+	if profile, ok := codingagent.LookupProfile(codingagent.Kind(kind)); ok {
+		return profile.DisplayName
+	}
+	if strings.TrimSpace(kind) == "" {
 		return "Unknown"
 	}
-	runes := []rune(kind)
-	return strings.ToUpper(string(runes[0])) + string(runes[1:])
+	return kind
 }
 
 func projectName(cwd string) string {
@@ -70,14 +132,49 @@ func projectName(cwd string) string {
 }
 
 func elapsed(now, changed time.Time) string {
-	if now.IsZero() {
-		now = time.Now()
+	if changed.IsZero() {
+		return "--:--"
 	}
-	if changed.IsZero() || now.Before(changed) {
-		return "00:00"
+	duration := now.Sub(changed)
+	if duration < 0 {
+		duration = 0
 	}
-	duration := now.Sub(changed).Round(time.Second)
-	minutes := int(duration / time.Minute)
-	seconds := int(duration/time.Second) % 60
-	return fmt.Sprintf("%02d:%02d", minutes, seconds)
+	duration = duration.Truncate(time.Second)
+	if duration < time.Hour {
+		return fmt.Sprintf("%02d:%02d", int(duration/time.Minute), int(duration/time.Second)%60)
+	}
+	return fmt.Sprintf("%02d:%02d", int(duration/time.Hour), int(duration/time.Minute)%60)
+}
+
+func padCell(value string, width int) string {
+	value = ansi.Truncate(value, width, "…")
+	return value + strings.Repeat(" ", maxInt(0, width-ansi.StringWidth(value)))
+}
+
+func viewportStart(selected, count, visible int) int {
+	if count <= visible || visible <= 0 {
+		return 0
+	}
+	start := selected - visible + 1
+	if start < 0 {
+		return 0
+	}
+	if start > count-visible {
+		return count - visible
+	}
+	return start
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

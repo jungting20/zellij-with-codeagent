@@ -56,6 +56,10 @@ type Model struct {
 	selectedID    string
 	loaded        bool
 	lastRefresh   time.Time
+	listKnown     bool
+	listHealthy   bool
+	streamKnown   bool
+	streamHealthy bool
 
 	refreshing   bool
 	refreshDirty bool
@@ -100,18 +104,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.focusing = false
 		if msg.err != nil {
 			m.statusText = "focus failed: " + msg.err.Error()
-		} else {
-			m.statusText = "focused " + msg.agentID
+			return m, m.requestRefresh()
 		}
+		m.statusText = "focused " + msg.agentID
 		return m, nil
 	case streamReadyMsg:
+		m.streamKnown = true
 		if msg.err != nil || msg.stream == nil {
-			m.connection = "degraded"
+			m.streamHealthy = false
+			m.updateConnection()
 			m.statusText = "event stream failed: " + errorText(msg.err, "unavailable")
 			return m, nil
 		}
 		m.stream = msg.stream
-		m.connection = "live"
+		m.streamHealthy = true
+		m.updateConnection()
 		m.statusText = "event stream connected"
 		return m, m.waitStreamCmd()
 	case streamEventMsg:
@@ -121,7 +128,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, wait
 	case streamClosedMsg:
-		m.connection = "degraded"
+		m.streamKnown = true
+		m.streamHealthy = false
+		m.updateConnection()
 		m.statusText = "event stream closed: " + errorText(msg.err, "closed")
 		m.closeStream()
 		return m, nil
@@ -170,10 +179,13 @@ func (m *Model) requestRefresh() tea.Cmd {
 
 func (m Model) handleRefresh(msg refreshResultMsg) (tea.Model, tea.Cmd) {
 	m.refreshing = false
+	m.listKnown = true
 	if msg.err != nil {
-		m.connection = "degraded"
+		m.listHealthy = false
+		m.updateConnection()
 		m.statusText = "refresh failed: " + msg.err.Error()
 	} else {
+		m.listHealthy = true
 		rows := append([]transport.AgentWithPane(nil), msg.agents.Agents...)
 		sort.SliceStable(rows, func(i, j int) bool {
 			return rows[i].Agent.CreatedAt.Before(rows[j].Agent.CreatedAt)
@@ -182,9 +194,7 @@ func (m Model) handleRefresh(msg refreshResultMsg) (tea.Model, tea.Cmd) {
 		m.loaded = true
 		m.lastRefresh = msg.at
 		m.restoreSelection()
-		if m.connection != "live" {
-			m.connection = "polling"
-		}
+		m.updateConnection()
 		m.statusText = fmt.Sprintf("%d agents", len(rows))
 	}
 	if m.refreshDirty {
@@ -251,7 +261,12 @@ func (m Model) waitStreamCmd() tea.Cmd {
 		select {
 		case event, ok := <-stream.Events:
 			if !ok {
-				return streamClosedMsg{}
+				var err error
+				select {
+				case err = <-stream.Errors:
+				default:
+				}
+				return streamClosedMsg{err: err}
 			}
 			return streamEventMsg{event: event}
 		case err, ok := <-stream.Errors:
@@ -270,6 +285,18 @@ func (m *Model) closeStream() {
 		_ = m.stream.Close()
 	}
 	m.stream = nil
+}
+
+func (m *Model) updateConnection() {
+	if (m.listKnown && !m.listHealthy) || (m.streamKnown && !m.streamHealthy) {
+		m.connection = "degraded"
+		return
+	}
+	if m.listKnown && m.listHealthy && m.streamKnown && m.streamHealthy {
+		m.connection = "live"
+		return
+	}
+	m.connection = "connecting"
 }
 
 func errorText(err error, fallback string) string {
