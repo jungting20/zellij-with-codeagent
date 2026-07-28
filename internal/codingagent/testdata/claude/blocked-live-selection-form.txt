@@ -1,0 +1,5 @@
+Run a dynamic workflow? esc to cancel
+────────────────────────
+Enter to select an option
+❯ 1. Yes
+Esc to cancel · ↑/↓ to navigate

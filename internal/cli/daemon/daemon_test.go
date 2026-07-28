@@ -13,8 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"zellij-with-codeagent/internal/codingagent"
+	"zellij-with-codeagent/internal/eventbus"
+	"zellij-with-codeagent/internal/registry"
+	agentruntime "zellij-with-codeagent/internal/runtime"
 	"zellij-with-codeagent/internal/transport"
 	"zellij-with-codeagent/internal/voice"
+	"zellij-with-codeagent/internal/zellij"
 )
 
 func TestVoiceQueueAdapterConvertsNotificationAndStatuses(t *testing.T) {
@@ -199,6 +204,583 @@ func (f *fakeDaemonVoiceService) socketErrorWhenClosed() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.closeSocketErr
+}
+
+func TestNewRuntimeServiceAssemblesSharedRuntimeAgentStoreAndEventBus(t *testing.T) {
+	backend := newDaemonFakeBackend()
+	store := codingagent.NewMemoryStore(time.Now)
+	bus := eventbus.New()
+	detector, detectorErrors := codingagent.LoadEmbeddedDetector()
+	detectorErrors[codingagent.KindClaude] = errors.New("claude.yaml: invalid test manifest")
+	restoreDaemonFactories(t)
+	newDaemonEventBus = func() *eventbus.Bus { return bus }
+	newDaemonStore = func(func() time.Time) codingagent.Store { return store }
+	loadDaemonDetector = func() (*codingagent.Detector, map[codingagent.Kind]error) { return detector, detectorErrors }
+	newDaemonBackend = func() daemonBackend { return backend }
+	newDaemonSubscriptionRunner = func() agentruntime.SubscriptionRunner { return daemonFakeSubscriptionRunner{} }
+
+	service, err := newRuntimeService()
+	if err != nil {
+		t.Fatalf("newRuntimeService() error = %v", err)
+	}
+	started, err := service.StartAgent(context.Background(), codingagent.StartAgentRequest{
+		Kind: codingagent.KindCodex, CWD: t.TempDir(), SourceZellijSession: "physical-a", SourceZellijPaneID: "source-pane",
+	})
+	if err != nil {
+		t.Fatalf("StartAgent(valid) error = %v", err)
+	}
+	runtimeStatus, err := service.InspectRuntime(context.Background(), agentruntime.InspectRuntimeRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agents, err := service.ListAgents(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runtimeStatus.Panes) != 1 || len(agents.Agents) != 1 || runtimeStatus.Panes[0].ID != started.Agent.Pane.ID || agents.Agents[0].Pane.ID != started.Agent.Pane.ID {
+		t.Fatalf("runtime=%#v agents=%#v, want one shared pane", runtimeStatus.Panes, agents.Agents)
+	}
+	bus.Publish(eventbus.Event{Type: eventbus.TypeHealthChanged, Message: "shared-bus", Time: time.Unix(1, 0)})
+	recent, err := service.RecentEvents(context.Background(), agentruntime.RecentEventsRequest{})
+	if err != nil || len(recent.Events) == 0 || recent.Events[len(recent.Events)-1].Message != "shared-bus" {
+		t.Fatalf("RecentEvents() = %#v, %v; want shared bus event", recent, err)
+	}
+
+	_, err = service.StartAgent(context.Background(), codingagent.StartAgentRequest{
+		Kind: codingagent.KindClaude, CWD: t.TempDir(), SourceZellijSession: "physical-a", SourceZellijPaneID: "source-pane",
+	})
+	if err == nil || !strings.Contains(err.Error(), "claude.yaml") {
+		t.Fatalf("StartAgent(invalid manifest) error = %v, want filename-qualified error", err)
+	}
+	if backend.createCount() != 1 {
+		t.Fatalf("backend create calls = %d, want invalid kind rejected before pane creation", backend.createCount())
+	}
+	if _, err := service.InspectRuntime(context.Background(), agentruntime.InspectRuntimeRequest{}); err != nil {
+		t.Fatalf("daemon runtime unavailable after invalid manifest: %v", err)
+	}
+}
+
+func TestNewRuntimeServiceTreatsNilAgentServiceAsConstructionError(t *testing.T) {
+	restoreDaemonFactories(t)
+	newDaemonAgentService = func(codingagent.ServiceOptions) *codingagent.Service { return nil }
+	service, err := newRuntimeService()
+	if err == nil || service != nil {
+		t.Fatalf("newRuntimeService() = %#v, %v; want construction error", service, err)
+	}
+}
+
+func TestNewRuntimeServiceRejectsMissingSharedDependencies(t *testing.T) {
+	tests := []struct {
+		name   string
+		inject func()
+	}{
+		{name: "event bus", inject: func() { newDaemonEventBus = func() *eventbus.Bus { return nil } }},
+		{name: "store", inject: func() { newDaemonStore = func(func() time.Time) codingagent.Store { return nil } }},
+		{name: "detector", inject: func() {
+			loadDaemonDetector = func() (*codingagent.Detector, map[codingagent.Kind]error) { return nil, nil }
+		}},
+		{name: "monitor", inject: func() {
+			newDaemonMonitor = func(codingagent.MonitorOptions) *codingagent.Monitor { return nil }
+		}},
+		{name: "backend", inject: func() { newDaemonBackend = func() daemonBackend { return nil } }},
+		{name: "subscription runner", inject: func() {
+			newDaemonSubscriptionRunner = func() agentruntime.SubscriptionRunner { return nil }
+		}},
+		{name: "runtime service", inject: func() {
+			newDaemonRuntimeService = func(agentruntime.Options) *agentruntime.Service { return nil }
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			restoreDaemonFactories(t)
+			tt.inject()
+			service, err := newRuntimeService()
+			if err == nil || service != nil {
+				t.Fatalf("newRuntimeService() = %#v, %v; want missing %s error", service, err, tt.name)
+			}
+		})
+	}
+}
+
+func TestReconcileLoopTicksContinuesAfterErrorAndStopsTicker(t *testing.T) {
+	ticker := newDaemonFakeTicker()
+	service := &daemonFakeReconciler{errors: []error{errors.New("temporary failure"), nil}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runReconcileLoop(ctx, service, 2*time.Second, func(interval time.Duration) reconcileTicker {
+			if interval != 2*time.Second {
+				t.Errorf("interval = %s, want 2s", interval)
+			}
+			return ticker
+		}, func(error) {})
+	}()
+
+	ticker.tick()
+	service.waitCalls(t, 1)
+	ticker.tick()
+	service.waitCalls(t, 2)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("reconcile loop did not stop after cancellation")
+	}
+	select {
+	case <-ticker.stopped:
+	default:
+		t.Fatal("reconcile ticker was not stopped")
+	}
+}
+
+func TestReconcileLoopDoesNotOverlapCalls(t *testing.T) {
+	ticker := newDaemonFakeTicker()
+	service := &daemonBlockingReconciler{started: make(chan struct{}, 2), release: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runReconcileLoop(ctx, service, defaultReconcileInterval, func(time.Duration) reconcileTicker { return ticker }, nil)
+	}()
+	ticker.tick()
+	select {
+	case <-service.started:
+	case <-time.After(time.Second):
+		t.Fatal("first reconcile did not start")
+	}
+	ticker.tick()
+	select {
+	case <-service.started:
+		t.Fatal("second reconcile overlapped the first")
+	case <-time.After(20 * time.Millisecond):
+	}
+	service.release <- struct{}{}
+	select {
+	case <-service.started:
+	case <-time.After(time.Second):
+		t.Fatal("queued second reconcile did not start")
+	}
+	cancel()
+	close(service.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("reconcile loop did not exit")
+	}
+}
+
+func TestRunContextServeStartsAndJoinsReconcileLoop(t *testing.T) {
+	restoreDaemonServeSeams(t)
+	ticker := newDaemonFakeTicker()
+	server := &daemonFakeServeServer{started: make(chan struct{}), canceled: make(chan struct{})}
+	reconciler := &daemonCancelableReconciler{started: make(chan struct{}), finished: make(chan struct{})}
+	newDaemonTransportServer = func(opts transport.ServerOptions) (daemonServeServer, error) {
+		if opts.Service == nil || opts.SocketPath == "" {
+			t.Fatalf("server options = %#v, want assembled service and socket", opts)
+		}
+		return server, nil
+	}
+	newDaemonReconcileTicker = func(interval time.Duration) reconcileTicker {
+		if interval != defaultReconcileInterval {
+			t.Errorf("ticker interval = %s, want %s", interval, defaultReconcileInterval)
+		}
+		return ticker
+	}
+	reconcileServiceForDaemon = func(transport.ServerRuntime) agentruntime.ReconciliationService { return reconciler }
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan int, 1)
+	socketPath := filepath.Join(t.TempDir(), "agentd.sock")
+	go func() {
+		result <- RunContext(ctx, []string{"serve", "--socket", socketPath}, io.Discard, io.Discard)
+	}()
+	select {
+	case <-server.started:
+	case <-time.After(time.Second):
+		t.Fatal("server ListenAndServe was not called")
+	}
+	ticker.tick()
+	select {
+	case <-reconciler.started:
+	case <-time.After(time.Second):
+		t.Fatal("serve wiring did not run reconciliation")
+	}
+	cancel()
+	select {
+	case code := <-result:
+		if code != 0 {
+			t.Fatalf("RunContext() code = %d, want 0 for context cancellation", code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunContext() did not return after cancellation")
+	}
+	for name, channel := range map[string]<-chan struct{}{
+		"server cancellation":  server.canceled,
+		"reconcile completion": reconciler.finished,
+		"ticker stop":          ticker.stopped,
+	} {
+		select {
+		case <-channel:
+		default:
+			t.Fatalf("RunContext returned before %s", name)
+		}
+	}
+}
+
+func TestRunContextServeStartupFailureStopsAndJoinsReconcileLoop(t *testing.T) {
+	restoreDaemonServeSeams(t)
+	ticker := newDaemonFakeTicker()
+	tickerCreated := make(chan struct{})
+	server := &daemonFakeServeServer{started: make(chan struct{}), waitFor: tickerCreated, serveErr: errors.New("listen failed")}
+	newDaemonTransportServer = func(transport.ServerOptions) (daemonServeServer, error) { return server, nil }
+	newDaemonReconcileTicker = func(time.Duration) reconcileTicker {
+		close(tickerCreated)
+		return ticker
+	}
+
+	code := RunContext(context.Background(), []string{"serve", "--socket", filepath.Join(t.TempDir(), "agentd.sock")}, io.Discard, io.Discard)
+	if code != 1 {
+		t.Fatalf("RunContext() code = %d, want 1", code)
+	}
+	select {
+	case <-ticker.stopped:
+	default:
+		t.Fatal("RunContext returned before startup-failure ticker stop")
+	}
+}
+
+func restoreDaemonServeSeams(t *testing.T) {
+	t.Helper()
+	serverFactory := newDaemonTransportServer
+	tickerFactory := newDaemonReconcileTicker
+	reconcilerFactory := reconcileServiceForDaemon
+	t.Cleanup(func() {
+		newDaemonTransportServer = serverFactory
+		newDaemonReconcileTicker = tickerFactory
+		reconcileServiceForDaemon = reconcilerFactory
+	})
+}
+
+type daemonFakeServeServer struct {
+	started  chan struct{}
+	canceled chan struct{}
+	waitFor  <-chan struct{}
+	serveErr error
+	once     sync.Once
+}
+
+func (s *daemonFakeServeServer) ListenAndServe(ctx context.Context) error {
+	s.once.Do(func() { close(s.started) })
+	if s.waitFor != nil {
+		select {
+		case <-s.waitFor:
+			return s.serveErr
+		case <-ctx.Done():
+			if s.canceled != nil {
+				close(s.canceled)
+			}
+			return ctx.Err()
+		}
+	}
+	<-ctx.Done()
+	if s.canceled != nil {
+		close(s.canceled)
+	}
+	return ctx.Err()
+}
+
+type daemonCancelableReconciler struct {
+	started  chan struct{}
+	finished chan struct{}
+	once     sync.Once
+}
+
+func (r *daemonCancelableReconciler) Reconcile(ctx context.Context, _ agentruntime.ReconcileRequest) (agentruntime.ReconcileResponse, error) {
+	r.once.Do(func() { close(r.started) })
+	<-ctx.Done()
+	close(r.finished)
+	return agentruntime.ReconcileResponse{}, ctx.Err()
+}
+
+func TestDaemonReconcileRemovesOnlyMissingManagedAgentThroughObserver(t *testing.T) {
+	backend := newDaemonFakeBackend()
+	store := codingagent.NewMemoryStore(time.Now)
+	var runtimeRegistry *registry.Registry
+	restoreDaemonFactories(t)
+	newDaemonStore = func(func() time.Time) codingagent.Store { return store }
+	newDaemonBackend = func() daemonBackend { return backend }
+	newDaemonSubscriptionRunner = func() agentruntime.SubscriptionRunner { return daemonFakeSubscriptionRunner{} }
+	newDaemonRuntimeService = func(opts agentruntime.Options) *agentruntime.Service {
+		runtimeRegistry = opts.Registry
+		return agentruntime.NewService(opts)
+	}
+	service, err := newRuntimeService()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd := t.TempDir()
+	first, err := service.StartAgent(context.Background(), codingagent.StartAgentRequest{Kind: codingagent.KindCodex, CWD: cwd, SourceZellijSession: "physical-a", SourceZellijPaneID: "source-pane"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.StartAgent(context.Background(), codingagent.StartAgentRequest{Kind: codingagent.KindGemini, CWD: cwd, SourceZellijSession: "physical-a", SourceZellijPaneID: "source-pane"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tabID := registry.ZellijTabID(7)
+	if _, err := runtimeRegistry.RegisterPane(registry.RegisterPaneRequest{
+		ID: "agent-3", SessionID: "physical-a", TabID: "7", AgentID: "agent-3",
+		ZellijPaneID: "uncertain-pane", ZellijTabID: &tabID, Role: "coding-agent",
+	}); err != nil {
+		t.Fatalf("register cleanup-uncertain runtime placeholder: %v", err)
+	}
+	backend.addPane(zellij.Pane{ID: "uncertain-pane", TabID: 7, TabName: "main", CWD: cwd})
+	backend.setCloseError(errors.New("close confirmation unavailable"))
+	_, uncertainErr := service.StartAgent(context.Background(), codingagent.StartAgentRequest{Kind: codingagent.KindClaude, CWD: cwd, SourceZellijSession: "physical-a", SourceZellijPaneID: "source-pane"})
+	if !errors.Is(uncertainErr, agentruntime.ErrCleanupPartial) {
+		t.Fatalf("cleanup-uncertain StartAgent() error = %v, want cleanup partial", uncertainErr)
+	}
+	backend.setCloseError(nil)
+
+	provisionStarted, releaseProvision := backend.blockNextCreate()
+	provisionResult := make(chan error, 1)
+	go func() {
+		_, err := service.StartAgent(context.Background(), codingagent.StartAgentRequest{Kind: codingagent.KindCursor, CWD: cwd, SourceZellijSession: "physical-a", SourceZellijPaneID: "source-pane"})
+		provisionResult <- err
+	}()
+	select {
+	case <-provisionStarted:
+	case <-time.After(time.Second):
+		t.Fatal("provisioning agent did not reach backend creation")
+	}
+
+	backend.removePane(zellij.PaneID(first.Agent.Pane.ZellijPaneID))
+	if _, err := service.Reconcile(context.Background(), agentruntime.ReconcileRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get(first.Agent.Agent.ID); !errors.Is(err, codingagent.ErrNotFound) {
+		t.Fatalf("missing agent store Get() error = %v, want not found", err)
+	}
+	for name, id := range map[string]codingagent.ID{
+		"unrelated live":    second.Agent.Agent.ID,
+		"cleanup uncertain": "agent-3",
+		"provisioning":      "agent-4",
+	} {
+		if _, err := store.Get(id); err != nil {
+			t.Fatalf("%s agent %q removed: %v", name, id, err)
+		}
+	}
+	close(releaseProvision)
+	select {
+	case err := <-provisionResult:
+		if err != nil {
+			t.Fatalf("provisioning StartAgent() after release error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("provisioning StartAgent did not finish after release")
+	}
+}
+
+func restoreDaemonFactories(t *testing.T) {
+	t.Helper()
+	busFactory := newDaemonEventBus
+	storeFactory := newDaemonStore
+	detectorLoader := loadDaemonDetector
+	monitorFactory := newDaemonMonitor
+	backendFactory := newDaemonBackend
+	runnerFactory := newDaemonSubscriptionRunner
+	runtimeFactory := newDaemonRuntimeService
+	agentFactory := newDaemonAgentService
+	t.Cleanup(func() {
+		newDaemonEventBus = busFactory
+		newDaemonStore = storeFactory
+		loadDaemonDetector = detectorLoader
+		newDaemonMonitor = monitorFactory
+		newDaemonBackend = backendFactory
+		newDaemonSubscriptionRunner = runnerFactory
+		newDaemonRuntimeService = runtimeFactory
+		newDaemonAgentService = agentFactory
+	})
+}
+
+type daemonFakeBackend struct {
+	mu            sync.Mutex
+	panes         []zellij.Pane
+	created       int
+	closeErr      error
+	createBlock   <-chan struct{}
+	createStarted chan struct{}
+}
+
+func newDaemonFakeBackend() *daemonFakeBackend {
+	return &daemonFakeBackend{panes: []zellij.Pane{{ID: "source-pane", TabID: 7, TabName: "main"}}}
+}
+
+func (b *daemonFakeBackend) Session() string { return "physical-a" }
+func (b *daemonFakeBackend) CreateTab(context.Context, zellij.CreateTabRequest) (zellij.TabID, error) {
+	return 7, nil
+}
+func (b *daemonFakeBackend) CloseTab(context.Context, zellij.CloseTabRequest) error { return nil }
+func (b *daemonFakeBackend) CreatePane(_ context.Context, req zellij.CreatePaneRequest) (zellij.PaneID, error) {
+	b.mu.Lock()
+	block := b.createBlock
+	started := b.createStarted
+	b.createBlock = nil
+	b.createStarted = nil
+	b.mu.Unlock()
+	if started != nil {
+		close(started)
+	}
+	if block != nil {
+		<-block
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.created++
+	id := zellij.PaneID(fmt.Sprintf("agent-pane-%d", b.created))
+	tabID := 7
+	if req.TabID != nil {
+		tabID = int(*req.TabID)
+	}
+	b.panes = append(b.panes, zellij.Pane{ID: id, TabID: tabID, TabName: "main", CWD: req.CWD})
+	return id, nil
+}
+func (b *daemonFakeBackend) ClosePane(_ context.Context, req zellij.ClosePaneRequest) error {
+	b.mu.Lock()
+	err := b.closeErr
+	b.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	b.removePane(req.PaneID)
+	return nil
+}
+func (b *daemonFakeBackend) SendInput(context.Context, zellij.SendInputRequest) error { return nil }
+func (b *daemonFakeBackend) ListPanes(context.Context, zellij.ListPanesRequest) ([]zellij.Pane, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]zellij.Pane(nil), b.panes...), nil
+}
+func (b *daemonFakeBackend) DumpScreen(context.Context, zellij.DumpScreenRequest) (string, error) {
+	return "", nil
+}
+func (b *daemonFakeBackend) SubscribeCommand(zellij.SubscribeRequest) (zellij.CommandSpec, error) {
+	return zellij.CommandSpec{Name: "fake-subscribe"}, nil
+}
+func (b *daemonFakeBackend) SwitchSession(context.Context, zellij.SwitchSessionRequest) error {
+	return nil
+}
+func (b *daemonFakeBackend) createCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.created
+}
+func (b *daemonFakeBackend) removePane(id zellij.PaneID) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i, pane := range b.panes {
+		if pane.ID == id {
+			b.panes = append(b.panes[:i], b.panes[i+1:]...)
+			return
+		}
+	}
+}
+
+func (b *daemonFakeBackend) addPane(pane zellij.Pane) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.panes = append(b.panes, pane)
+}
+
+func (b *daemonFakeBackend) setCloseError(err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closeErr = err
+}
+
+func (b *daemonFakeBackend) blockNextCreate() (<-chan struct{}, chan struct{}) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	b.createStarted = started
+	b.createBlock = release
+	return started, release
+}
+
+type daemonFakeSubscriptionRunner struct{}
+
+func (daemonFakeSubscriptionRunner) Start(context.Context, zellij.CommandSpec) (*agentruntime.SubscriptionStream, error) {
+	return &agentruntime.SubscriptionStream{Stdout: io.NopCloser(strings.NewReader("")), Wait: func() error { return nil }}, nil
+}
+
+type daemonFakeTicker struct {
+	ticks   chan time.Time
+	stopped chan struct{}
+	once    sync.Once
+}
+
+func newDaemonFakeTicker() *daemonFakeTicker {
+	return &daemonFakeTicker{ticks: make(chan time.Time, 4), stopped: make(chan struct{})}
+}
+func (t *daemonFakeTicker) C() <-chan time.Time { return t.ticks }
+func (t *daemonFakeTicker) Stop()               { t.once.Do(func() { close(t.stopped) }) }
+func (t *daemonFakeTicker) tick()               { t.ticks <- time.Now() }
+
+type daemonFakeReconciler struct {
+	mu     sync.Mutex
+	calls  int
+	errors []error
+	called chan struct{}
+}
+
+type daemonBlockingReconciler struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (f *daemonBlockingReconciler) Reconcile(ctx context.Context, _ agentruntime.ReconcileRequest) (agentruntime.ReconcileResponse, error) {
+	f.started <- struct{}{}
+	select {
+	case <-ctx.Done():
+		return agentruntime.ReconcileResponse{}, ctx.Err()
+	case <-f.release:
+		return agentruntime.ReconcileResponse{}, nil
+	}
+}
+
+func (f *daemonFakeReconciler) Reconcile(context.Context, agentruntime.ReconcileRequest) (agentruntime.ReconcileResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.called == nil {
+		f.called = make(chan struct{}, 8)
+	}
+	select {
+	case f.called <- struct{}{}:
+	default:
+	}
+	if f.calls <= len(f.errors) {
+		return agentruntime.ReconcileResponse{}, f.errors[f.calls-1]
+	}
+	return agentruntime.ReconcileResponse{}, nil
+}
+
+func (f *daemonFakeReconciler) waitCalls(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		f.mu.Lock()
+		got := f.calls
+		f.mu.Unlock()
+		if got >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("reconcile calls = %d, want %d", got, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func TestRunStopFallsBackForDaemonWithoutShutdownRoute(t *testing.T) {

@@ -321,7 +321,7 @@ git commit -m "feat: 에이전트 상태 매니페스트 엔진 추가"
 - Create: `internal/codingagent/manifests_test.go`
 
 **Interfaces:**
-- Produces: `func LoadEmbeddedDetector() (*Detector, error)`
+- Produces: `func LoadEmbeddedDetector() (*Detector, map[Kind]error)`
 - Consumes the engine from Task 3.
 - Treats `docs/agent-status-detection.md` sections 2 through 5 as the rule source of truth.
 
@@ -363,7 +363,7 @@ claude: 1100 osc_title_working; 1000 transcript_viewer; 980 live_blocked_form;
         300 legacy_no_prompt_blocker; 250 osc_title_idle; 250 osc_progress_idle
 ```
 
-Copy the literal evidence strings, regex conditions, negative gates, regions, and visible flags from `docs/agent-status-detection.md`; preserve declaration order for equal priorities. Do not add undocumented heuristics. YAML load failure from any one embedded manifest makes `LoadEmbeddedDetector` fail with the filename in the error.
+Copy the literal evidence strings, regex conditions, negative gates, regions, and visible flags from `docs/agent-status-detection.md`; preserve declaration order for equal priorities. Do not add undocumented heuristics. Load each embedded manifest independently. Return one filename-qualified error per invalid kind while keeping valid kinds available in the detector.
 
 - [ ] **Step 4: Format, verify GREEN, and commit**
 
@@ -381,6 +381,8 @@ git commit -m "feat: 네 가지 코딩 에이전트 감지 규칙 추가"
 - Create: `internal/codingagent/monitor_test.go`
 - Modify: `internal/eventbus/types.go`
 - Modify: `internal/runtime/service.go`
+- Modify: `internal/runtime/reconcile.go`
+- Modify: `internal/runtime/reconcile_test.go`
 - Modify: `internal/runtime/subscriptions.go`
 - Modify: `internal/runtime/subscriptions_test.go`
 
@@ -405,6 +407,8 @@ type recordingPaneObserver struct {
 ```
 
 Assert that a parsed pane update calls `PaneOutput(record, renderedText)` after registry output is updated; a pane-closed event calls `PaneClosed(removedRecord)` once; subscribe startup, parse, and stream failures call `PaneError(record, err)` without suppressing existing runtime events; and stale generations never reach the observer.
+
+Also assert that runtime reconciliation calls `PaneClosed(record)` when a managed pane is confirmed missing or exited, after the generation check and subscription teardown. Keep the existing runtime `lost` lifecycle semantics for a missing pane; only the coding-agent observer treats confirmed absence as closure. Stale generations and unrelated live panes must not notify the observer.
 
 - [ ] **Step 2: Write failing monitor state-machine tests**
 
@@ -444,6 +448,8 @@ type PaneObserver interface {
 
 Call it only after the existing generation checks. The monitor indexes records through `Store.GetByPane`, caches the latest detection input per agent, and uses generation tokens so canceled grace/idle callbacks cannot mutate a restarted record.
 
+Deliver the same `PaneClosed` observation from the runtime reconciliation path when `ListPanes` confirms the physical pane is missing or exited. This is the safety net for a missed subscription close event; Task 8 supplies the periodic daemon scheduler.
+
 Extend `eventbus.Event` with:
 
 ```go
@@ -459,9 +465,9 @@ Publish `TypeAgentStateChanged` only after `Store.UpdateState` returns `Changed=
 - [ ] **Step 5: Format, verify GREEN, and commit**
 
 ```bash
-gofmt -w internal/codingagent/monitor.go internal/codingagent/monitor_test.go internal/eventbus/types.go internal/runtime/service.go internal/runtime/subscriptions.go internal/runtime/subscriptions_test.go
+gofmt -w internal/codingagent/monitor.go internal/codingagent/monitor_test.go internal/eventbus/types.go internal/runtime/service.go internal/runtime/reconcile.go internal/runtime/reconcile_test.go internal/runtime/subscriptions.go internal/runtime/subscriptions_test.go
 go test ./internal/codingagent ./internal/runtime -count=1
-git add internal/codingagent/monitor.go internal/codingagent/monitor_test.go internal/eventbus/types.go internal/runtime/service.go internal/runtime/subscriptions.go internal/runtime/subscriptions_test.go
+git add internal/codingagent/monitor.go internal/codingagent/monitor_test.go internal/eventbus/types.go internal/runtime/service.go internal/runtime/reconcile.go internal/runtime/reconcile_test.go internal/runtime/subscriptions.go internal/runtime/subscriptions_test.go
 git commit -m "feat: 데몬 에이전트 상태 감시 추가"
 ```
 
@@ -594,7 +600,7 @@ CWD=/workspace/project
 
 The store must contain an unknown AgentRecord before the fake runtime emits any observation, and `Monitor.Start` must be called once.
 
-Add cases for unknown kind, blank or inaccessible CWD, missing source context, duplicate generated ID, runtime creation failure, and monitor-start failure. The exact order is store create, monitor start, then runtime pane create. Monitor-start failure deletes the record without creating a pane. Runtime creation failure calls `Monitor.Stop`, deletes the record, and relies on the existing atomic `RuntimeService.CreatePane` cleanup contract for any partially created physical pane.
+Add cases for unknown kind, a kind whose manifest failed to load, blank or inaccessible CWD, missing source context, duplicate generated ID, runtime creation failure, and monitor-start failure. The exact order is store create, monitor start, then runtime pane create. Monitor-start failure deletes the record without creating a pane. Runtime creation failure calls `Monitor.Stop`, deletes the record, and relies on the existing atomic `RuntimeService.CreatePane` cleanup contract for any partially created physical pane.
 
 - [ ] **Step 2: Write failing list and focus tests**
 
@@ -668,6 +674,7 @@ git commit -m "feat: 코딩 에이전트 관리 서비스 추가"
 - Adds client methods: `StartAgent`, `ListAgents`, `FocusAgent`
 - Adds routes: `POST /v1/agents`, `GET /v1/agents`, `POST /v1/agents/{id}/focus`
 - Extends event DTO conversion with the fields introduced in Task 5.
+- Starts a daemon-owned runtime reconciliation loop with a two-second default interval.
 
 - [ ] **Step 1: Write failing DTO and client tests**
 
@@ -713,7 +720,9 @@ Extend `transport.Event` with JSON fields `agent_kind`, `previous_state`, `agent
 
 - [ ] **Step 5: Write failing daemon assembly test**
 
-Replace the narrow `newRuntimeService` assertion with an assembly test that starts the returned service through a fake backend/subscription runner, calls both `InspectRuntime` and `ListAgents`, and proves they share the same runtime registry and event bus. Also assert embedded manifest load failure is surfaced by construction rather than silently disabling monitoring.
+Replace the narrow `newRuntimeService` assertion with an assembly test that starts the returned service through a fake backend/subscription runner, calls both `InspectRuntime` and `ListAgents`, and proves they share the same runtime registry and event bus. Also inject one invalid manifest and assert that its agent kind fails safely from `StartAgent` while valid kinds and the daemon remain available.
+
+Inject a fake ticker into the daemon reconciliation loop. Assert each tick calls `RuntimeService.Reconcile`, an individual reconciliation error does not stop the daemon or later ticks, context cancellation stops and releases the ticker, and a managed coding-agent record whose physical Zellij pane disappears is removed from `AgentStore` through the Task 5 observer path. Unrelated live records must remain.
 
 - [ ] **Step 6: Assemble store, detector, monitor, runtime, and agent service**
 
@@ -722,9 +731,9 @@ Change daemon construction to return `(transport.ServerRuntime, error)` and buil
 ```go
 bus := eventbus.New()
 store := codingagent.NewMemoryStore(time.Now)
-detector, err := codingagent.LoadEmbeddedDetector()
+detector, manifestErrors := codingagent.LoadEmbeddedDetector()
 monitor := codingagent.NewMonitor(codingagent.MonitorOptions{
-	Store: store, Detector: detector, EventBus: bus,
+	Store: store, Detector: detector, DetectorErrors: manifestErrors, EventBus: bus,
 })
 backend := zellij.NewBackend(zellij.Options{})
 runtimeService := agentruntime.NewService(agentruntime.Options{
@@ -737,7 +746,9 @@ return codingagent.NewService(codingagent.ServiceOptions{
 }), nil
 ```
 
-`daemon serve` prints a construction error and exits before opening the socket. The no-argument compatibility path follows the same error handling.
+`daemon serve` stays available when one manifest is invalid. `Monitor.Start` returns the stored filename-qualified error only for that kind, and `StartAgent` fails before creating its runtime pane. A failure to create the shared store, event bus, backend, or monitor remains a daemon construction error.
+
+Start a daemon-owned reconciliation goroutine next to `ListenAndServe`. It calls the assembled service's `Reconcile` every two seconds, uses the serve context for cancellation, stops its ticker on exit, and treats individual reconciliation failures as health/diagnostic events rather than daemon-fatal errors. Together with Task 5's reconciliation observer, this removes stale coding-agent records even when the pane-close subscription event was missed. Do not make the dashboard own this cleanup.
 
 - [ ] **Step 7: Format, verify GREEN, and commit**
 

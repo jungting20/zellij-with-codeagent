@@ -45,6 +45,317 @@ func (r *blockingStartSubscriptionRunner) Start(ctx context.Context, _ zellij.Co
 	return nil, ctx.Err()
 }
 
+type recordingPaneObserver struct {
+	mu            sync.Mutex
+	opened        []registry.PaneRecord
+	outputs       []string
+	records       []registry.PaneRecord
+	closed        []registry.PaneID
+	closedRecords []registry.PaneRecord
+	errors        []error
+}
+
+func (o *recordingPaneObserver) PaneOpened(record registry.PaneRecord) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.opened = append(o.opened, record)
+}
+
+func (o *recordingPaneObserver) PaneOutput(record registry.PaneRecord, renderedText string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.records = append(o.records, record)
+	o.outputs = append(o.outputs, renderedText)
+}
+
+func (o *recordingPaneObserver) PaneClosed(record registry.PaneRecord) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.closed = append(o.closed, record.ID)
+	o.closedRecords = append(o.closedRecords, record)
+}
+
+func (o *recordingPaneObserver) PaneError(_ registry.PaneRecord, err error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.errors = append(o.errors, err)
+}
+
+func TestSubscriptionManagerObserverReceivesUpdatedOutput(t *testing.T) {
+	reg := registry.New()
+	record, err := reg.RegisterPane(registry.RegisterPaneRequest{ID: "pane-1", Role: "coding-agent"})
+	if err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+	observer := &recordingPaneObserver{}
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{
+		Registry: reg,
+		Bus:      eventbus.New(),
+		Observer: observer,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	subscription := &paneSubscription{
+		cancel: cancel,
+		ctx:    ctx,
+		done:   make(chan struct{}),
+		key:    subscriptionKey{paneID: record.ID, generation: record.Generation},
+	}
+	mgr.cancelByPaneID[record.ID] = subscription
+
+	mgr.handleLine(record, subscription, `{"name":"pane_update","viewport":[" rendered output "]}`)
+
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.outputs) != 1 || observer.outputs[0] != "rendered output" {
+		t.Fatalf("observer outputs = %#v, want [rendered output]", observer.outputs)
+	}
+	if got := observer.records[0].LastOutput; got != "rendered output" {
+		t.Fatalf("observed record LastOutput = %q, want registry-updated output", got)
+	}
+}
+
+func TestSubscriptionManagerObserverReceivesRemovedPaneOnce(t *testing.T) {
+	reg := registry.New()
+	record, err := reg.RegisterPane(registry.RegisterPaneRequest{ID: "pane-1", Role: "coding-agent"})
+	if err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+	observer := &recordingPaneObserver{}
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{
+		Registry: reg,
+		Bus:      eventbus.New(),
+		Observer: observer,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	subscription := &paneSubscription{
+		cancel: cancel,
+		ctx:    ctx,
+		done:   make(chan struct{}),
+		key:    subscriptionKey{paneID: record.ID, generation: record.Generation},
+	}
+	mgr.cancelByPaneID[record.ID] = subscription
+
+	mgr.handleLine(record, subscription, `{"name":"pane_closed"}`)
+	mgr.handleLine(record, subscription, `{"name":"pane_closed"}`)
+
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.closed) != 1 || observer.closed[0] != record.ID {
+		t.Fatalf("observer closed = %#v, want [%q]", observer.closed, record.ID)
+	}
+}
+
+func TestSubscriptionManagerObserverReceivesFailuresWithoutSuppressingEvents(t *testing.T) {
+	tests := []struct {
+		name      string
+		publish   func(*SubscriptionManager, registry.PaneRecord, error)
+		wantTypes []eventbus.EventType
+	}{
+		{
+			name: "startup",
+			publish: func(m *SubscriptionManager, record registry.PaneRecord, err error) {
+				m.publishSubscribeStartupFailure(record, err)
+			},
+			wantTypes: []eventbus.EventType{eventbus.TypeSubscribeError, eventbus.TypeHealthChanged},
+		},
+		{
+			name: "parse",
+			publish: func(m *SubscriptionManager, record registry.PaneRecord, err error) {
+				m.publishSubscribeParseError(record, err)
+			},
+			wantTypes: []eventbus.EventType{eventbus.TypeSubscribeError},
+		},
+		{
+			name: "stream",
+			publish: func(m *SubscriptionManager, record registry.PaneRecord, err error) {
+				m.publishStreamError(record, err)
+			},
+			wantTypes: []eventbus.EventType{eventbus.TypeSubscribeError},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := registry.New()
+			record, err := reg.RegisterPane(registry.RegisterPaneRequest{ID: "pane-1", Role: "coding-agent"})
+			if err != nil {
+				t.Fatalf("RegisterPane() error = %v", err)
+			}
+			bus := eventbus.New()
+			observer := &recordingPaneObserver{}
+			mgr := NewSubscriptionManager(SubscriptionManagerOptions{Registry: reg, Bus: bus, Observer: observer})
+			wantErr := errors.New(tt.name + " failure")
+
+			tt.publish(mgr, record, wantErr)
+
+			observer.mu.Lock()
+			if len(observer.errors) != 1 || !errors.Is(observer.errors[0], wantErr) {
+				t.Fatalf("observer errors = %#v, want %v", observer.errors, wantErr)
+			}
+			observer.mu.Unlock()
+			events := bus.Recent(0)
+			if len(events) != len(tt.wantTypes) {
+				t.Fatalf("events = %#v, want types %#v", events, tt.wantTypes)
+			}
+			for i, want := range tt.wantTypes {
+				if events[i].Type != want {
+					t.Fatalf("events[%d].Type = %q, want %q", i, events[i].Type, want)
+				}
+			}
+		})
+	}
+}
+
+func TestSubscriptionManagerObserverErrorHelpersRecheckGenerationAfterPaneReuse(t *testing.T) {
+	tests := []struct {
+		name    string
+		publish func(*SubscriptionManager, registry.PaneRecord, error)
+	}{
+		{
+			name: "startup",
+			publish: func(m *SubscriptionManager, record registry.PaneRecord, err error) {
+				m.publishSubscribeStartupFailure(record, err)
+			},
+		},
+		{
+			name: "parse",
+			publish: func(m *SubscriptionManager, record registry.PaneRecord, err error) {
+				m.publishSubscribeParseError(record, err)
+			},
+		},
+		{
+			name: "stream",
+			publish: func(m *SubscriptionManager, record registry.PaneRecord, err error) {
+				m.publishStreamError(record, err)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := registry.New()
+			oldRecord, err := reg.RegisterPane(registry.RegisterPaneRequest{
+				ID: "pane-1", TaskID: "old-task", Role: "coding-agent",
+			})
+			if err != nil {
+				t.Fatalf("RegisterPane(old) error = %v", err)
+			}
+			observer := &recordingPaneObserver{}
+			mgr := NewSubscriptionManager(SubscriptionManagerOptions{
+				Registry: reg,
+				Bus:      eventbus.New(),
+				Observer: observer,
+			})
+			if _, err := reg.RemovePane(oldRecord.ID); err != nil {
+				t.Fatalf("RemovePane(old) error = %v", err)
+			}
+			newRecord, err := reg.RegisterPane(registry.RegisterPaneRequest{
+				ID: "pane-1", TaskID: "new-task", Role: "coding-agent",
+			})
+			if err != nil {
+				t.Fatalf("RegisterPane(new) error = %v", err)
+			}
+
+			tt.publish(mgr, oldRecord, errors.New("old generation failure"))
+
+			observer.mu.Lock()
+			if len(observer.errors) != 0 {
+				t.Fatalf("observer errors = %#v, want stale generation ignored", observer.errors)
+			}
+			observer.mu.Unlock()
+			current, err := reg.GetPane(newRecord.ID)
+			if err != nil {
+				t.Fatalf("GetPane(new) error = %v", err)
+			}
+			if current.Generation != newRecord.Generation || current.TaskID != "new-task" || current.Status == registry.PaneStatusError {
+				t.Fatalf("new generation was changed by stale error: %#v", current)
+			}
+		})
+	}
+}
+
+func TestSubscriptionManagerObserverErrorHelpersIgnoreTerminalGeneration(t *testing.T) {
+	tests := []struct {
+		name    string
+		publish func(*SubscriptionManager, registry.PaneRecord, error)
+	}{
+		{name: "startup", publish: func(m *SubscriptionManager, record registry.PaneRecord, err error) {
+			m.publishSubscribeStartupFailure(record, err)
+		}},
+		{name: "parse", publish: func(m *SubscriptionManager, record registry.PaneRecord, err error) {
+			m.publishSubscribeParseError(record, err)
+		}},
+		{name: "stream", publish: func(m *SubscriptionManager, record registry.PaneRecord, err error) {
+			m.publishStreamError(record, err)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := registry.New()
+			record, err := reg.RegisterPane(registry.RegisterPaneRequest{
+				ID: "pane-1", Role: "coding-agent", Status: registry.PaneStatusLost,
+			})
+			if err != nil {
+				t.Fatalf("RegisterPane() error = %v", err)
+			}
+			observer := &recordingPaneObserver{}
+			mgr := NewSubscriptionManager(SubscriptionManagerOptions{Registry: reg, Bus: eventbus.New(), Observer: observer})
+
+			tt.publish(mgr, record, errors.New("late failure"))
+
+			observer.mu.Lock()
+			if len(observer.errors) != 0 {
+				t.Fatalf("observer errors = %#v, want terminal generation ignored", observer.errors)
+			}
+			observer.mu.Unlock()
+			current, err := reg.GetPane(record.ID)
+			if err != nil || current.Status != registry.PaneStatusLost {
+				t.Fatalf("terminal pane = %#v, error = %v; want lost preserved", current, err)
+			}
+		})
+	}
+}
+
+func TestSubscriptionManagerObserverIgnoresStaleGeneration(t *testing.T) {
+	reg := registry.New()
+	oldRecord, err := reg.RegisterPane(registry.RegisterPaneRequest{ID: "pane-1", Role: "coding-agent"})
+	if err != nil {
+		t.Fatalf("RegisterPane(old) error = %v", err)
+	}
+	if _, err := reg.RemovePane(oldRecord.ID); err != nil {
+		t.Fatalf("RemovePane(old) error = %v", err)
+	}
+	if _, err := reg.RegisterPane(registry.RegisterPaneRequest{ID: "pane-1", Role: "coding-agent"}); err != nil {
+		t.Fatalf("RegisterPane(new) error = %v", err)
+	}
+	observer := &recordingPaneObserver{}
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{Registry: reg, Bus: eventbus.New(), Observer: observer})
+
+	mgr.handlePaneUpdate(oldRecord, "stale")
+	mgr.handlePaneClosed(oldRecord)
+
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.outputs) != 0 || len(observer.closed) != 0 || len(observer.errors) != 0 {
+		t.Fatalf("stale observer calls = outputs:%#v closed:%#v errors:%#v", observer.outputs, observer.closed, observer.errors)
+	}
+}
+
+func TestSubscriptionManagerObserverIsWiredFromServiceOptions(t *testing.T) {
+	observer := &recordingPaneObserver{}
+	service := NewService(Options{
+		Backend:            &fakeBackend{},
+		SubscriptionRunner: &scriptedSubscriptionRunner{},
+		PaneObserver:       observer,
+	})
+
+	if service.subs == nil || service.subs.opts.Observer != observer {
+		t.Fatalf("subscription observer = %#v, want configured observer", service.subs)
+	}
+}
+
 func TestSubscriptionManagerPublishesRawOutputAndUpdatesRegistry(t *testing.T) {
 	reg := registry.New()
 	bus := eventbus.New()
@@ -311,6 +622,34 @@ func TestSubscriptionManagerStaleGenerationCannotMutateReusedPane(t *testing.T) 
 	}
 }
 
+func TestSubscriptionManagerLateOutputCannotMutateOrNotifyTerminalPane(t *testing.T) {
+	reg := registry.New()
+	record, err := reg.RegisterPane(registry.RegisterPaneRequest{ID: "coder", Role: "coding-agent"})
+	if err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+	if _, _, err := reg.ClaimPaneClosureGeneration(record.ID, record.Generation, registry.PaneStatusLost, "missing"); err != nil {
+		t.Fatalf("ClaimPaneClosureGeneration() error = %v", err)
+	}
+	observer := &recordingPaneObserver{}
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{Registry: reg, Bus: eventbus.New(), Observer: observer})
+
+	mgr.handlePaneUpdate(record, "late output")
+
+	current, err := reg.GetPane(record.ID)
+	if err != nil {
+		t.Fatalf("GetPane() error = %v", err)
+	}
+	if current.Status != registry.PaneStatusLost || current.LastOutput != "" {
+		t.Fatalf("current = %#v, want unchanged lost pane", current)
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.outputs) != 0 {
+		t.Fatalf("observer outputs = %#v, want none", observer.outputs)
+	}
+}
+
 func TestSubscriptionManagerOldRunDoesNotClearReusedPaneSubscription(t *testing.T) {
 	reg := registry.New()
 	if _, err := reg.RegisterPane(registry.RegisterPaneRequest{
@@ -380,7 +719,7 @@ func TestSubscriptionManagerOldRunDoesNotClearReusedPaneSubscription(t *testing.
 	mgr.StopPane("coder")
 }
 
-func TestSubscriptionManagerCanceledOldStartDoesNotPublishErrorsForReusedPane(t *testing.T) {
+func TestSubscriptionManagerObserverCanceledOldStartDoesNotPublishErrorsForReusedPane(t *testing.T) {
 	reg := registry.New()
 	if _, err := reg.RegisterPane(registry.RegisterPaneRequest{
 		ID:           "coder",
@@ -391,12 +730,14 @@ func TestSubscriptionManagerCanceledOldStartDoesNotPublishErrorsForReusedPane(t 
 	}
 
 	bus := eventbus.New()
+	observer := &recordingPaneObserver{}
 	runner := &blockingStartSubscriptionRunner{started: make(chan struct{})}
 	mgr := NewSubscriptionManager(SubscriptionManagerOptions{
 		Registry: reg,
 		Backend:  zellij.NewBackend(zellij.Options{}),
 		Bus:      bus,
 		Runner:   runner,
+		Observer: observer,
 	})
 
 	mgr.StartPane("coder")
@@ -427,6 +768,11 @@ func TestSubscriptionManagerCanceledOldStartDoesNotPublishErrorsForReusedPane(t 
 
 	if events := bus.Recent(0); len(events) != 0 {
 		t.Fatalf("events = %#v, want canceled old subscription to stay silent", events)
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.errors) != 0 {
+		t.Fatalf("observer errors = %#v, want canceled old subscription to stay silent", observer.errors)
 	}
 }
 

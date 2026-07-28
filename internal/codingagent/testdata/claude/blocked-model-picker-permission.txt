@@ -1,0 +1,6 @@
+Select model
+Enter to set as default
+Esc to cancel
+Do you want to proceed?
+Bash command
+1. Yes

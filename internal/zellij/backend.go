@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -155,6 +157,29 @@ func (b *CLIBackend) SubscribeCommand(req SubscribeRequest) (CommandSpec, error)
 	return subscribeCommand(b.binary, b.requestSession(req.Session), req), nil
 }
 
+func (b *CLIBackend) SwitchSession(ctx context.Context, req SwitchSessionRequest) error {
+	req.SourceSession = strings.TrimSpace(req.SourceSession)
+	req.SourcePaneID = PaneID(strings.TrimSpace(string(req.SourcePaneID)))
+	req.TargetSession = strings.TrimSpace(req.TargetSession)
+	req.TargetPaneID = PaneID(strings.TrimSpace(string(req.TargetPaneID)))
+
+	if req.SourceSession == "" {
+		return fmt.Errorf("source: %w", ErrMissingSession)
+	}
+	if req.SourcePaneID == "" {
+		return fmt.Errorf("source: %w", ErrMissingPane)
+	}
+	if req.TargetSession == "" {
+		return fmt.Errorf("target: %w", ErrMissingSession)
+	}
+	if req.TargetPaneID == "" {
+		return fmt.Errorf("target: %w", ErrMissingPane)
+	}
+
+	_, err := b.run(ctx, "switch session", switchSessionCommand(b.binary, req))
+	return err
+}
+
 func (b *CLIBackend) run(ctx context.Context, operation string, spec CommandSpec) (CommandResult, error) {
 	result, err := b.runner.Run(ctx, spec)
 	if err != nil {
@@ -184,6 +209,7 @@ type ExecRunner struct{}
 
 func (ExecRunner) Run(ctx context.Context, spec CommandSpec) (CommandResult, error) {
 	cmd := exec.CommandContext(ctx, spec.Name, spec.Args...)
+	cmd.Env = append(os.Environ(), spec.Env...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

@@ -148,6 +148,24 @@ func (c *Client) ListPanes(ctx context.Context) (ListPanesResponse, error) {
 	return response, err
 }
 
+func (c *Client) StartAgent(ctx context.Context, req StartAgentRequest) (StartAgentResponse, error) {
+	var response StartAgentResponse
+	err := c.do(ctx, http.MethodPost, "/v1/agents", req, &response)
+	return response, err
+}
+
+func (c *Client) ListAgents(ctx context.Context) (ListAgentsResponse, error) {
+	var response ListAgentsResponse
+	err := c.do(ctx, http.MethodGet, "/v1/agents", nil, &response)
+	return response, err
+}
+
+func (c *Client) FocusAgent(ctx context.Context, agentID string, req FocusAgentRequest) (FocusAgentResponse, error) {
+	var response FocusAgentResponse
+	err := c.do(ctx, http.MethodPost, "/v1/agents/"+url.PathEscape(agentID)+"/focus", req, &response)
+	return response, err
+}
+
 func (c *Client) InspectRuntime(ctx context.Context) (InspectRuntimeResponse, error) {
 	var response InspectRuntimeResponse
 	err := c.do(ctx, http.MethodGet, "/v1/runtime", nil, &response)

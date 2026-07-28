@@ -98,6 +98,75 @@ func TestPrepareBuildsYoloCodexCommandInRepository(t *testing.T) {
 	}
 }
 
+func TestPrepareBuildsSelectedAgentCommands(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+
+	binDir := t.TempDir()
+	paths := map[string]string{}
+	for _, executable := range []string{"codex", "claude", "agy", "agent"} {
+		path := filepath.Join(binDir, executable)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("write fake %s: %v", executable, err)
+		}
+		paths[executable] = path
+	}
+	t.Setenv("PATH", binDir)
+
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "claude",
+			args: []string{"--agent", "claude", "--yolo", repo},
+			want: []string{paths["claude"], "--dangerously-skip-permissions"},
+		},
+		{
+			name: "gemini with extra arguments",
+			args: []string{"--agent", "gemini", "--yolo", repo, "--", "--model", "gemini-3"},
+			want: []string{paths["agy"], "--dangerously-skip-permissions", "--model", "gemini-3"},
+		},
+		{
+			name: "cursor",
+			args: []string{"--agent", "cursor", "--yolo", repo},
+			want: []string{paths["agent"], "--yolo", "--trust"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, err := prepare(tt.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(cmd.Args, tt.want) {
+				t.Fatalf("cmd.Args = %#v, want %#v", cmd.Args, tt.want)
+			}
+			if cmd.Dir != repo {
+				t.Fatalf("cmd.Dir = %q, want %q", cmd.Dir, repo)
+			}
+		})
+	}
+}
+
+func TestPrepareRejectsInvalidAgentKindsAndPaths(t *testing.T) {
+	for name, args := range map[string][]string{
+		"unknown agent":       {"--agent", "unknown", "/repo"},
+		"executable not kind": {"--agent", "agy", "/repo"},
+		"missing agent path":  {"--agent", "gemini"},
+		"multiple paths":      {"--agent", "gemini", "/repo", "/other"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := prepare(args); err == nil {
+				t.Fatalf("prepare(%q) succeeded, want error", args)
+			}
+		})
+	}
+}
+
 func TestPrepareBuildsCodexCommandFromFileInsideRepository(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0755); err != nil {

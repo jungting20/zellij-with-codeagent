@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"zellij-with-codeagent/internal/codingagent"
 	rt "zellij-with-codeagent/internal/runtime"
 )
 
@@ -25,6 +26,7 @@ type ServerOptions struct {
 }
 
 type ServerRuntime interface {
+	codingagent.AgentService
 	rt.PaneService
 	rt.RuntimeInspectionService
 	rt.EventService
@@ -117,6 +119,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handlePanes(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/panes/"):
 		s.handlePaneAction(w, r)
+	case r.URL.Path == "/v1/agents":
+		s.handleAgents(w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/agents/"):
+		s.handleAgentAction(w, r)
 	case r.URL.Path == "/v1/messages":
 		s.handleMessages(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/runtime":

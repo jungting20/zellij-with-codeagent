@@ -179,6 +179,71 @@ func (r *Registry) UpdatePaneStatusGeneration(id PaneID, generation uint64, stat
 	return r.updatePaneStatusGeneration(id, generation, status, message)
 }
 
+// UpdateActivePaneStatusGeneration updates a generation only while its pane
+// lifecycle is non-terminal. The boolean reports whether the update was
+// applied, allowing callers to own one-shot transition side effects.
+func (r *Registry) UpdateActivePaneStatusGeneration(id PaneID, generation uint64, status PaneStatus, message string) (PaneRecord, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	loc, session, tab, pane, err := r.resolvePanePathLocked(id)
+	if err != nil {
+		return PaneRecord{}, false, err
+	}
+	if generation != 0 && pane.Generation != generation {
+		return PaneRecord{}, false, ErrStaleRecord
+	}
+	switch pane.Status {
+	case PaneStatusClosed, PaneStatusExited, PaneStatusLost:
+		return clonePaneRecord(pane), false, nil
+	}
+
+	now := r.now()
+	pane.Status = status
+	pane.StatusMessage = message
+	pane.UpdatedAt = now
+	tab.Panes[id] = pane
+	tab.UpdatedAt = now
+	session.Tabs[loc.TabID] = tab
+	session.UpdatedAt = now
+	r.sessions[loc.SessionID] = session
+
+	return clonePaneRecord(pane), true, nil
+}
+
+// ClaimPaneClosureGeneration atomically transitions an active pane to a
+// terminal status and claims the one observer close notification for that
+// generation. Already-terminal records retain their first terminal diagnosis,
+// while an unclaimed record can still supply the notification owner.
+func (r *Registry) ClaimPaneClosureGeneration(id PaneID, generation uint64, status PaneStatus, message string) (PaneRecord, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	loc, session, tab, pane, err := r.resolvePanePathLocked(id)
+	if err != nil {
+		return PaneRecord{}, false, err
+	}
+	if generation != 0 && pane.Generation != generation {
+		return PaneRecord{}, false, ErrStaleRecord
+	}
+
+	now := r.now()
+	if !isTerminalPaneStatus(pane.Status) {
+		pane.Status = status
+		pane.StatusMessage = message
+		pane.UpdatedAt = now
+	}
+	claimed := !pane.closeNotificationClaimed
+	pane.closeNotificationClaimed = true
+	tab.Panes[id] = pane
+	tab.UpdatedAt = now
+	session.Tabs[loc.TabID] = tab
+	session.UpdatedAt = now
+	r.sessions[loc.SessionID] = session
+
+	return clonePaneRecord(pane), claimed, nil
+}
+
 func (r *Registry) updatePaneStatusGeneration(id PaneID, generation uint64, status PaneStatus, message string) (PaneRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -210,6 +275,35 @@ func (r *Registry) UpdatePaneOutput(id PaneID, output string) (PaneRecord, error
 
 func (r *Registry) UpdatePaneOutputGeneration(id PaneID, generation uint64, output string) (PaneRecord, error) {
 	return r.updatePaneOutputGeneration(id, generation, output)
+}
+
+// UpdateActivePaneOutputGeneration updates output only while the pane
+// lifecycle is non-terminal.
+func (r *Registry) UpdateActivePaneOutputGeneration(id PaneID, generation uint64, output string) (PaneRecord, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	loc, session, tab, pane, err := r.resolvePanePathLocked(id)
+	if err != nil {
+		return PaneRecord{}, false, err
+	}
+	if generation != 0 && pane.Generation != generation {
+		return PaneRecord{}, false, ErrStaleRecord
+	}
+	if isTerminalPaneStatus(pane.Status) {
+		return clonePaneRecord(pane), false, nil
+	}
+
+	now := r.now()
+	pane.LastOutput = output
+	pane.UpdatedAt = now
+	tab.Panes[id] = pane
+	tab.UpdatedAt = now
+	session.Tabs[loc.TabID] = tab
+	session.UpdatedAt = now
+	r.sessions[loc.SessionID] = session
+
+	return clonePaneRecord(pane), true, nil
 }
 
 func (r *Registry) updatePaneOutputGeneration(id PaneID, generation uint64, output string) (PaneRecord, error) {
@@ -244,6 +338,25 @@ func (r *Registry) RemovePaneGeneration(id PaneID, generation uint64) (PaneRecor
 	return r.removePaneGeneration(id, generation)
 }
 
+// RemovePaneGenerationClaimingClosure atomically removes a pane and claims its
+// one close notification if no earlier terminal transition claimed it.
+func (r *Registry) RemovePaneGenerationClaimingClosure(id PaneID, generation uint64) (PaneRecord, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	loc, session, tab, pane, err := r.resolvePanePathLocked(id)
+	if err != nil {
+		return PaneRecord{}, false, err
+	}
+	if generation != 0 && pane.Generation != generation {
+		return PaneRecord{}, false, ErrStaleRecord
+	}
+	claimed := !pane.closeNotificationClaimed
+	pane.closeNotificationClaimed = true
+	r.removePaneLocked(loc, session, tab, pane)
+	return clonePaneRecord(pane), claimed, nil
+}
+
 func (r *Registry) removePaneGeneration(id PaneID, generation uint64) (PaneRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -256,19 +369,32 @@ func (r *Registry) removePaneGeneration(id PaneID, generation uint64) (PaneRecor
 		return PaneRecord{}, ErrStaleRecord
 	}
 
-	delete(tab.Panes, id)
+	r.removePaneLocked(loc, session, tab, pane)
+
+	return clonePaneRecord(pane), nil
+}
+
+func (r *Registry) removePaneLocked(loc paneLocation, session SessionRecord, tab TabRecord, pane PaneRecord) {
+	delete(tab.Panes, pane.ID)
 	now := r.now()
 	tab.UpdatedAt = now
 	session.Tabs[loc.TabID] = tab
 	session.UpdatedAt = now
 	r.sessions[loc.SessionID] = session
 
-	delete(r.paneToLocation, id)
-	if pane.ZellijPaneID != "" && r.latestByZellij[pane.ZellijPaneID] == id {
+	delete(r.paneToLocation, pane.ID)
+	if pane.ZellijPaneID != "" && r.latestByZellij[pane.ZellijPaneID] == pane.ID {
 		delete(r.latestByZellij, pane.ZellijPaneID)
 	}
+}
 
-	return clonePaneRecord(pane), nil
+func isTerminalPaneStatus(status PaneStatus) bool {
+	switch status {
+	case PaneStatusClosed, PaneStatusExited, PaneStatusLost:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *Registry) GetSession(id SessionID) (SessionRecord, error) {

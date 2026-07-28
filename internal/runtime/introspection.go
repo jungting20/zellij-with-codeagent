@@ -159,13 +159,18 @@ func eventTypeFilter(types []eventbus.EventType) map[eventbus.EventType]bool {
 
 func eventSummary(event eventbus.Event) EventSummary {
 	return EventSummary{
-		Type:         event.Type,
-		PaneID:       PaneID(event.PaneID),
-		TaskID:       TaskID(event.TaskID),
-		AgentID:      AgentID(event.AgentID),
-		ZellijPaneID: ZellijPaneID(event.ZellijPaneID),
-		Message:      event.Message,
-		Time:         event.Time,
+		Type:          event.Type,
+		PaneID:        PaneID(event.PaneID),
+		TaskID:        TaskID(event.TaskID),
+		AgentID:       AgentID(event.AgentID),
+		ZellijPaneID:  ZellijPaneID(event.ZellijPaneID),
+		AgentKind:     event.AgentKind,
+		PreviousState: event.PreviousState,
+		AgentState:    event.AgentState,
+		MatchedRule:   event.MatchedRule,
+		Reason:        event.Reason,
+		Message:       event.Message,
+		Time:          event.Time,
 	}
 }
 

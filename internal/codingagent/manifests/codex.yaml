@@ -1,0 +1,82 @@
+version: 1
+agent: codex
+rules:
+  - id: osc_title_blocked
+    priority: 1100
+    state: blocked
+    region: {type: osc_title}
+    match: {contains: ["Action Required"]}
+    visible_blocker: true
+
+  - id: osc_title_working
+    priority: 1050
+    state: working
+    region: {type: osc_title}
+    match:
+      regex: ['(^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]( |$)']
+    visible_working: true
+
+  - id: transcript_viewer
+    priority: 1000
+    region: {type: after_last_prompt_marker}
+    match:
+      all:
+        - contains: ["↑/↓ to scroll", "pgup/pgdn to", "home/end to jump", "q to quit"]
+        - any:
+            - contains: ["esc to edit prev"]
+            - contains: ["esc/← to edit prev"]
+    skip_state_update: true
+
+  - id: live_strong_blocker
+    priority: 900
+    state: blocked
+    region: {type: after_last_prompt_marker}
+    match:
+      any:
+        - contains: ["press enter to confirm or esc to cancel"]
+        - contains: ["enter to submit answer"]
+        - contains: ["enter to submit all"]
+        - contains: ["allow command?"]
+    visible_blocker: true
+
+  - id: weak_blocker
+    priority: 600
+    state: blocked
+    region: {type: whole_recent}
+    match:
+      any:
+        - line_regex: ['(?i)\[y/n\]']
+        - line_regex: ['(?i)yes[[:space:]]*\(y\)']
+        - all:
+            - contains: ["do you want to"]
+            - any:
+                - contains: ["yes"]
+                - contains: ["❯"]
+        - all:
+            - contains: ["would you like to"]
+            - any:
+                - contains: ["yes"]
+                - contains: ["❯"]
+
+  - id: screen_working_fallback
+    priority: 500
+    state: working
+    region: {type: bottom_non_empty_lines, lines: 3}
+    match:
+      all:
+        - line_regex: ['^[•◦][[:space:]]+Working \([^)]*esc to interrupt\)( · .*)?$']
+        - not:
+            - contains: ["■ Conversation interrupted"]
+    visible_working: true
+
+  - id: osc_title_idle
+    priority: 100
+    state: idle
+    region: {type: osc_title}
+    match:
+      all:
+        - regex: ['\S']
+        - not:
+            - regex: ['(^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]( |$)']
+            - contains: ["Action Required"]
+    visible_idle: true

@@ -106,3 +106,19 @@ func subscribeCommand(binary, session string, req SubscribeRequest) CommandSpec 
 
 	return newCommand(binary, session, args...)
 }
+
+func switchSessionCommand(binary string, req SwitchSessionRequest) CommandSpec {
+	spec := newActionCommand(
+		binary,
+		req.SourceSession,
+		"switch-session",
+		req.TargetSession,
+		"--pane-id",
+		string(req.TargetPaneID),
+	)
+	spec.Env = []string{
+		"ZELLIJ_SESSION_NAME=" + req.SourceSession,
+		"ZELLIJ_PANE_ID=" + string(req.SourcePaneID),
+	}
+	return spec
+}

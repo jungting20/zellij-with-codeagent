@@ -1,0 +1,26 @@
+version: 1
+agent: gemini
+rules:
+  - id: apply_or_allow_change
+    priority: 300
+    state: blocked
+    region: {type: whole_recent}
+    match:
+      any:
+        - contains: ["│ Apply this change"]
+        - contains: ["│ Allow execution"]
+        - all:
+            - contains: ["yes"]
+            - any:
+                - contains: ["waiting for user confirmation"]
+                - contains: ["│ Do you want to proceed"]
+                - contains: ["do you want to proceed?"]
+        - line_regex: ['(?i)^[[:space:]]*❯.*(yes|allow)']
+    visible_blocker: true
+
+  - id: esc_cancel_working
+    priority: 100
+    state: working
+    region: {type: whole_recent}
+    match: {contains: ["esc to cancel"]}
+    visible_working: true

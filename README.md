@@ -79,6 +79,37 @@ Use `zellij-agent ctl` as the thin command-line client for the local socket:
 ./bin/zellij-agent ctl cleanup --task feature-auth
 ```
 
+### Coding Agent Dashboard
+
+Run coding agents in a new pane of the current Zellij tab through the unified
+CLI. These commands include each tool's permission-bypass option by default:
+
+```bash
+./bin/zellij-agent agent start codex
+./bin/zellij-agent agent start claude --cwd /path/to/project
+./bin/zellij-agent agent start gemini -- --model gemini-3
+./bin/zellij-agent agent start cursor
+```
+
+The configured executables are `codex`, `claude`, `agy` for Gemini, and
+`agent` for Cursor. Only agents started through this runtime appear in the
+dedicated dashboard:
+
+```bash
+./bin/zellij-agent agent dashboard
+```
+
+Use `j`/`k` or the arrow keys to select an agent, `Enter` to switch to its
+session and focus its pane, `R` to refresh, and `q` to quit. The dashboard
+shows the detected agent state (`idle`, `working`, `blocked`, or `unknown`),
+agent kind, project, and time in the current state.
+
+Coding-agent records are in-memory. A pane close notification removes its
+record immediately. In addition, the daemon reconciles Zellij every two
+seconds; if a managed pane no longer exists, runtime reconciliation triggers
+the same close observer cleanup. Listing agents also removes any remaining
+orphan whose runtime pane is absent.
+
 ### Personal Work Launcher
 
 `zellij-agent work` starts a daemon-managed mixed coding workspace for the current repository:
@@ -383,5 +414,5 @@ For a current manual CLI flow, see `docs/manual-smoke-test.md`.
 - Local-only, in-memory runtime state.
 - No restart persistence beyond what can be rediscovered through reconciliation.
 - Rule-based semantic event matchers only.
-- No rich TUI dashboard yet.
+- Dashboard state is not restored after a daemon restart.
 # zellij-with-codeagent

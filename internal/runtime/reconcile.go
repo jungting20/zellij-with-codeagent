@@ -93,14 +93,24 @@ func (s *Service) Reconcile(ctx context.Context, _ ReconcileRequest) (ReconcileR
 
 func (s *Service) reconcileRecord(record registry.PaneRecord, liveByKey map[livePaneKey]zellij.Pane) (registry.PaneRecord, error) {
 	if record.Status == registry.PaneStatusExited {
-		removed, err := s.registry.RemovePaneGeneration(record.ID, record.Generation)
-		if err == nil && s.subs != nil {
-			s.subs.StopPaneGeneration(record.ID, record.Generation)
+		removed, claimed, err := s.registry.RemovePaneGenerationClaimingClosure(record.ID, record.Generation)
+		if err == nil && claimed {
+			s.notifyReconciledPaneClosed(removed)
 		}
 		return removed, err
 	}
 
-	if record.ZellijPaneID == "" || isTerminalStatus(record.Status) {
+	if isTerminalStatus(record.Status) {
+		current, claimed, err := s.registry.ClaimPaneClosureGeneration(record.ID, record.Generation, record.Status, record.StatusMessage)
+		if err == nil && claimed {
+			s.notifyReconciledPaneClosed(current)
+		} else if s.subs != nil {
+			s.subs.StopPaneGeneration(record.ID, record.Generation)
+		}
+		return current, err
+	}
+
+	if record.ZellijPaneID == "" {
 		current, err := s.currentPaneGeneration(record)
 		if err != nil {
 			return registry.PaneRecord{}, err
@@ -113,27 +123,39 @@ func (s *Service) reconcileRecord(record registry.PaneRecord, liveByKey map[live
 
 	live, ok := liveByKey[livePaneKey{session: record.SessionID, paneID: record.ZellijPaneID}]
 	if !ok {
-		updated, err := s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusLost, "zellij pane missing during reconcile")
-		if err == nil && s.subs != nil {
-			s.subs.StopPaneGeneration(record.ID, record.Generation)
+		updated, claimed, err := s.registry.ClaimPaneClosureGeneration(record.ID, record.Generation, registry.PaneStatusLost, "zellij pane missing during reconcile")
+		if err == nil && claimed {
+			s.notifyReconciledPaneClosed(updated)
 		}
 		return updated, err
 	}
 
 	if live.Exited {
-		removed, err := s.registry.RemovePaneGeneration(record.ID, record.Generation)
-		if err == nil && s.subs != nil {
-			s.subs.StopPaneGeneration(record.ID, record.Generation)
+		removed, claimed, err := s.registry.RemovePaneGenerationClaimingClosure(record.ID, record.Generation)
+		if err == nil && !isTerminalStatus(removed.Status) {
+			removed.Status = registry.PaneStatusExited
+			removed.StatusMessage = "zellij pane exited during reconcile"
 		}
-		removed.Status = registry.PaneStatusExited
-		removed.StatusMessage = "zellij pane exited during reconcile"
+		if err == nil && claimed {
+			s.notifyReconciledPaneClosed(removed)
+		}
 		return removed, err
 	}
 
 	if record.Status == registry.PaneStatusRunning {
 		return s.currentPaneGeneration(record)
 	}
-	return s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusRunning, "zellij pane live during reconcile")
+	current, _, err := s.registry.UpdateActivePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusRunning, "zellij pane live during reconcile")
+	return current, err
+}
+
+func (s *Service) notifyReconciledPaneClosed(record registry.PaneRecord) {
+	if s.subs != nil {
+		s.subs.StopPaneGeneration(record.ID, record.Generation)
+	}
+	if s.observer != nil {
+		s.observer.PaneClosed(record)
+	}
 }
 
 func (s *Service) currentPaneGeneration(record registry.PaneRecord) (registry.PaneRecord, error) {

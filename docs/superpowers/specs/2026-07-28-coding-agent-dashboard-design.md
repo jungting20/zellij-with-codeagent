@@ -85,7 +85,7 @@ StateChangedAt      현재 상태로 전환된 시각
 
 session, 실제 Zellij pane ID, CWD, 명령, pane 생명주기는 연결된 runtime `Pane`에서 가져온다. 같은 정보를 `AgentRecord`에 중복 저장하지 않는다.
 
-`AgentStore`는 저장 구현과 service를 분리하는 인터페이스다. 첫 버전은 daemon 생명주기 동안만 유지되는 메모리 구현을 사용한다. pane이 닫히면 monitor와 record를 제거한다. 향후 파일 또는 SQLite 저장소를 추가할 수 있지만 첫 버전은 재시작 복구를 보장하지 않는다.
+`AgentStore`는 저장 구현과 service를 분리하는 인터페이스다. 첫 버전은 daemon 생명주기 동안만 유지되는 메모리 구현을 사용한다. pane close 이벤트가 오면 monitor와 record를 즉시 제거한다. 이벤트를 놓친 경우를 위해 daemon은 runtime reconciliation을 2초마다 실행하고, 실제 Zellij pane이 사라진 managed coding-agent record도 제거한다. runtime의 일반 pane registry가 `lost` 진단을 보존하더라도 coding-agent registry에는 사라진 pane을 남기지 않는다. 향후 파일 또는 SQLite 저장소를 추가할 수 있지만 첫 버전은 재시작 복구를 보장하지 않는다.
 
 store 계약은 `Create`, `Get`, `List`, `UpdateState`, `Delete`로 제한한다. 상태 변경 비교와 `StateChangedAt` 갱신은 `UpdateState`가 원자적으로 수행한다.
 
@@ -230,6 +230,7 @@ dashboard는 `AgentRecordWithPane`을 렌더링할 뿐 manifest를 평가하지 
 - 개별 화면 평가 실패: 이전 상태 유지, 진단 이유 기록, daemon 지속
 - focus 대상 pane 소실: not-found 오류, dashboard 유지 및 refresh
 - pane 종료: monitor 중단, AgentRecord 제거, dashboard 목록에서 제거
+- close 이벤트 유실: daemon의 2초 주기 runtime reconciliation이 실제 pane 부재를 확인하고 AgentRecord 제거
 
 ## 테스트 전략
 

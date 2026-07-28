@@ -112,6 +112,34 @@ func TestRecentEventsReturnsSemanticEventsInOrder(t *testing.T) {
 	}
 }
 
+func TestRecentEventsPreservesAgentStateFields(t *testing.T) {
+	bus := eventbus.New()
+	service := newIntrospectionTestService(&fakeBackend{}, bus)
+	bus.Publish(eventbus.Event{
+		Type:          eventbus.TypeAgentStateChanged,
+		PaneID:        "agent-1",
+		AgentID:       "agent-1",
+		AgentKind:     "codex",
+		PreviousState: "idle",
+		AgentState:    "working",
+		MatchedRule:   "screen_working",
+		Reason:        "visible work",
+		Time:          time.Unix(10, 0),
+	})
+
+	response, err := service.RecentEvents(context.Background(), RecentEventsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Events) != 1 {
+		t.Fatalf("events = %#v", response.Events)
+	}
+	event := response.Events[0]
+	if event.AgentKind != "codex" || event.PreviousState != "idle" || event.AgentState != "working" || event.MatchedRule != "screen_working" || event.Reason != "visible work" {
+		t.Fatalf("event = %#v, want agent state metadata", event)
+	}
+}
+
 func TestSnapshotOutputUnknownPaneDoesNotCallBackend(t *testing.T) {
 	backend := &fakeBackend{}
 	service := newIntrospectionTestService(backend, nil)

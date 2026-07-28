@@ -97,6 +97,91 @@ func TestBackendRequestSessionFallsBackToOptionsSession(t *testing.T) {
 	}
 }
 
+func TestSwitchSessionUsesSourceContextAndTargetPane(t *testing.T) {
+	runner := &fakeRunner{}
+	backend := NewBackend(Options{Runner: runner})
+
+	err := backend.SwitchSession(context.Background(), SwitchSessionRequest{
+		SourceSession: "dashboard-session",
+		SourcePaneID:  "terminal_2",
+		TargetSession: "target-session",
+		TargetPaneID:  "terminal_12",
+	})
+	if err != nil {
+		t.Fatalf("SwitchSession() error = %v", err)
+	}
+
+	want := CommandSpec{
+		Name: "zellij",
+		Args: []string{
+			"--session", "dashboard-session",
+			"action", "switch-session", "target-session",
+			"--pane-id", "terminal_12",
+		},
+		Env: []string{
+			"ZELLIJ_SESSION_NAME=dashboard-session",
+			"ZELLIJ_PANE_ID=terminal_2",
+		},
+	}
+	if !reflect.DeepEqual(runner.commands, []CommandSpec{want}) {
+		t.Fatalf("commands = %#v, want %#v", runner.commands, []CommandSpec{want})
+	}
+}
+
+func TestSwitchSessionRejectsMissingContextBeforeRunningCommand(t *testing.T) {
+	tests := []struct {
+		name string
+		req  SwitchSessionRequest
+	}{
+		{
+			name: "source session",
+			req:  SwitchSessionRequest{SourcePaneID: "terminal_2", TargetSession: "target-session", TargetPaneID: "terminal_12"},
+		},
+		{
+			name: "source pane",
+			req:  SwitchSessionRequest{SourceSession: "dashboard-session", TargetSession: "target-session", TargetPaneID: "terminal_12"},
+		},
+		{
+			name: "target session",
+			req:  SwitchSessionRequest{SourceSession: "dashboard-session", SourcePaneID: "terminal_2", TargetPaneID: "terminal_12"},
+		},
+		{
+			name: "target pane",
+			req:  SwitchSessionRequest{SourceSession: "dashboard-session", SourcePaneID: "terminal_2", TargetSession: "target-session"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeRunner{}
+			backend := NewBackend(Options{Runner: runner})
+
+			if err := backend.SwitchSession(context.Background(), tt.req); err == nil {
+				t.Fatal("SwitchSession() error = nil")
+			}
+			if len(runner.commands) != 0 {
+				t.Fatalf("commands = %#v, want none", runner.commands)
+			}
+		})
+	}
+}
+
+func TestExecRunnerEnvAppendsToProcessEnvironment(t *testing.T) {
+	t.Setenv("CODEAGENT_EXEC_RUNNER_BASE", "inherited")
+
+	result, err := (ExecRunner{}).Run(context.Background(), CommandSpec{
+		Name: "sh",
+		Args: []string{"-c", `printf '%s|%s' "$CODEAGENT_EXEC_RUNNER_BASE" "$CODEAGENT_EXEC_RUNNER_ADDED"`},
+		Env:  []string{"CODEAGENT_EXEC_RUNNER_ADDED=appended"},
+	})
+	if err != nil {
+		t.Fatalf("ExecRunner.Run() error = %v", err)
+	}
+	if result.Stdout != "inherited|appended" {
+		t.Fatalf("ExecRunner.Run() stdout = %q, want inherited|appended", result.Stdout)
+	}
+}
+
 func TestSubscribeRequestUsesRequestSession(t *testing.T) {
 	backend := NewBackend(Options{Session: "default-session"})
 

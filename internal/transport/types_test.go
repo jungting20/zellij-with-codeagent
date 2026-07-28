@@ -5,9 +5,98 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"zellij-with-codeagent/internal/codingagent"
+	"zellij-with-codeagent/internal/eventbus"
 	rt "zellij-with-codeagent/internal/runtime"
 )
+
+func TestAgentStartRequestRoundTripPreservesSourceAndArguments(t *testing.T) {
+	payload := []byte(`{
+		"kind": "codex",
+		"cwd": "/workspace/project",
+		"args": ["--model", "gpt-5"],
+		"source_session": "physical-a",
+		"source_zellij_pane_id": "terminal_2"
+	}`)
+	var request StartAgentRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatal(err)
+	}
+	converted := request.ToCodingAgent()
+	if converted.Kind != codingagent.KindCodex || converted.CWD != "/workspace/project" || converted.SourceZellijSession != "physical-a" || converted.SourceZellijPaneID != "terminal_2" {
+		t.Fatalf("StartAgentRequest.ToCodingAgent() = %#v", converted)
+	}
+	request.Args[0] = "mutated"
+	if !reflect.DeepEqual(converted.ExtraArgs, []string{"--model", "gpt-5"}) {
+		t.Fatalf("converted args = %#v, want cloned args", converted.ExtraArgs)
+	}
+	encoded, err := json.Marshal(StartAgentRequestFromCodingAgent(converted))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"kind":"codex"`, `"cwd":"/workspace/project"`, `"args":["--model","gpt-5"]`, `"source_session":"physical-a"`, `"source_zellij_pane_id":"terminal_2"`} {
+		if !strings.Contains(string(encoded), field) {
+			t.Fatalf("marshaled payload = %s, missing %s", encoded, field)
+		}
+	}
+}
+
+func TestAgentResponseConversionPreservesRecordTimestampsAndPane(t *testing.T) {
+	createdAt := time.Unix(10, 123)
+	changedAt := time.Unix(20, 456)
+	updatedAt := time.Unix(30, 789)
+	response := codingagent.ListAgentsResponse{Agents: []codingagent.AgentWithPane{{
+		Agent: codingagent.Record{
+			ID: "agent-1", Kind: codingagent.KindClaude, PaneID: "agent-1",
+			State: codingagent.StateBlocked, StateReason: "approval required", MatchedRule: "permission",
+			CreatedAt: createdAt, StateChangedAt: changedAt,
+		},
+		Pane: rt.Pane{ID: "agent-1", ZellijPaneID: "terminal_7", CWD: "/workspace/project", Status: rt.PaneStatusRunning, CreatedAt: createdAt, UpdatedAt: updatedAt},
+	}}}
+
+	converted := ListAgentsFromCodingAgent(response)
+	if len(converted.Agents) != 1 {
+		t.Fatalf("agents = %#v", converted.Agents)
+	}
+	agent := converted.Agents[0]
+	if agent.Agent.ID != "agent-1" || agent.Agent.Kind != "claude" || agent.Agent.State != "blocked" || agent.Agent.StateReason != "approval required" || agent.Agent.MatchedRule != "permission" {
+		t.Fatalf("agent = %#v", agent.Agent)
+	}
+	if !agent.Agent.CreatedAt.Equal(createdAt) || !agent.Agent.StateChangedAt.Equal(changedAt) || agent.Pane.ZellijPaneID != "terminal_7" || !agent.Pane.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("converted = %#v, want timestamps and joined pane", agent)
+	}
+}
+
+func TestEventAgentStateFieldsAndNonAgentOmitEmpty(t *testing.T) {
+	when := time.Unix(40, 0)
+	converted := EventFromRuntime(eventbus.Event{
+		Type: eventbus.TypeAgentStateChanged, AgentID: "agent-1", PaneID: "agent-1",
+		AgentKind: "codex", PreviousState: "idle", AgentState: "working",
+		MatchedRule: "screen_working", Reason: "visible work", Time: when,
+	})
+	if converted.AgentKind != "codex" || converted.PreviousState != "idle" || converted.AgentState != "working" || converted.MatchedRule != "screen_working" || converted.Reason != "visible work" {
+		t.Fatalf("EventFromRuntime() = %#v", converted)
+	}
+	summary := EventSummaryFromRuntime(rt.EventSummary{
+		Type: eventbus.TypeAgentStateChanged, AgentID: "agent-1", PaneID: "agent-1",
+		AgentKind: "codex", PreviousState: "idle", AgentState: "working",
+		MatchedRule: "screen_working", Reason: "visible work", Time: when,
+	})
+	if summary.AgentKind != converted.AgentKind || summary.PreviousState != converted.PreviousState || summary.AgentState != converted.AgentState || summary.MatchedRule != converted.MatchedRule || summary.Reason != converted.Reason {
+		t.Fatalf("EventSummaryFromRuntime() = %#v, want agent fields %#v", summary, converted)
+	}
+	nonAgent, err := json.Marshal(EventFromRuntime(eventbus.Event{Type: eventbus.TypeServerReady, Time: when}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"agent_kind", "previous_state", "agent_state", "matched_rule", "reason"} {
+		if strings.Contains(string(nonAgent), field) {
+			t.Fatalf("non-agent event = %s, want %s omitted", nonAgent, field)
+		}
+	}
+}
 
 func TestExecutionPlanPayloadJSONIncludesZellijSession(t *testing.T) {
 	payload, err := json.Marshal(ExecutionPlanPayload{ZellijSession: "physical-a"})

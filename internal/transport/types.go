@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"zellij-with-codeagent/internal/codingagent"
 	"zellij-with-codeagent/internal/eventbus"
 	rt "zellij-with-codeagent/internal/runtime"
 )
@@ -93,6 +94,47 @@ type ClosePaneResponse struct {
 
 type ListPanesResponse struct {
 	Panes []Pane `json:"panes"`
+}
+
+type StartAgentRequest struct {
+	Kind               string   `json:"kind"`
+	CWD                string   `json:"cwd"`
+	Args               []string `json:"args,omitempty"`
+	SourceSession      string   `json:"source_session"`
+	SourceZellijPaneID string   `json:"source_zellij_pane_id"`
+}
+
+type StartAgentResponse struct {
+	Agent AgentWithPane `json:"agent"`
+}
+
+type ListAgentsResponse struct {
+	Agents []AgentWithPane `json:"agents"`
+}
+
+type FocusAgentRequest struct {
+	SourceSession      string `json:"source_session"`
+	SourceZellijPaneID string `json:"source_zellij_pane_id"`
+}
+
+type FocusAgentResponse struct {
+	Agent AgentWithPane `json:"agent"`
+}
+
+type Agent struct {
+	ID             string    `json:"id"`
+	Kind           string    `json:"kind"`
+	PaneID         string    `json:"pane_id"`
+	State          string    `json:"state"`
+	StateReason    string    `json:"state_reason,omitempty"`
+	MatchedRule    string    `json:"matched_rule,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	StateChangedAt time.Time `json:"state_changed_at"`
+}
+
+type AgentWithPane struct {
+	Agent Agent `json:"agent"`
+	Pane  Pane  `json:"pane"`
 }
 
 type InspectRuntimeResponse struct {
@@ -236,13 +278,79 @@ type Pane struct {
 }
 
 type Event struct {
-	Type         string    `json:"type"`
-	PaneID       string    `json:"pane_id,omitempty"`
-	TaskID       string    `json:"task_id,omitempty"`
-	AgentID      string    `json:"agent_id,omitempty"`
-	ZellijPaneID string    `json:"zellij_pane_id,omitempty"`
-	Message      string    `json:"message,omitempty"`
-	Time         time.Time `json:"time"`
+	Type          string    `json:"type"`
+	PaneID        string    `json:"pane_id,omitempty"`
+	TaskID        string    `json:"task_id,omitempty"`
+	AgentID       string    `json:"agent_id,omitempty"`
+	ZellijPaneID  string    `json:"zellij_pane_id,omitempty"`
+	AgentKind     string    `json:"agent_kind,omitempty"`
+	PreviousState string    `json:"previous_state,omitempty"`
+	AgentState    string    `json:"agent_state,omitempty"`
+	MatchedRule   string    `json:"matched_rule,omitempty"`
+	Reason        string    `json:"reason,omitempty"`
+	Message       string    `json:"message,omitempty"`
+	Time          time.Time `json:"time"`
+}
+
+func (req StartAgentRequest) ToCodingAgent() codingagent.StartAgentRequest {
+	return codingagent.StartAgentRequest{
+		Kind:                codingagent.Kind(req.Kind),
+		CWD:                 req.CWD,
+		ExtraArgs:           cloneStrings(req.Args),
+		SourceZellijSession: req.SourceSession,
+		SourceZellijPaneID:  rt.ZellijPaneID(req.SourceZellijPaneID),
+	}
+}
+
+func StartAgentRequestFromCodingAgent(req codingagent.StartAgentRequest) StartAgentRequest {
+	return StartAgentRequest{
+		Kind:               string(req.Kind),
+		CWD:                req.CWD,
+		Args:               cloneStrings(req.ExtraArgs),
+		SourceSession:      req.SourceZellijSession,
+		SourceZellijPaneID: string(req.SourceZellijPaneID),
+	}
+}
+
+func (req FocusAgentRequest) ToCodingAgent(id string) codingagent.FocusAgentRequest {
+	return codingagent.FocusAgentRequest{
+		AgentID:             codingagent.ID(id),
+		SourceZellijSession: req.SourceSession,
+		SourceZellijPaneID:  rt.ZellijPaneID(req.SourceZellijPaneID),
+	}
+}
+
+func AgentFromCodingAgent(record codingagent.Record) Agent {
+	return Agent{
+		ID:             string(record.ID),
+		Kind:           string(record.Kind),
+		PaneID:         string(record.PaneID),
+		State:          string(record.State),
+		StateReason:    record.StateReason,
+		MatchedRule:    record.MatchedRule,
+		CreatedAt:      record.CreatedAt,
+		StateChangedAt: record.StateChangedAt,
+	}
+}
+
+func AgentWithPaneFromCodingAgent(agent codingagent.AgentWithPane) AgentWithPane {
+	return AgentWithPane{Agent: AgentFromCodingAgent(agent.Agent), Pane: PaneFromRuntime(agent.Pane)}
+}
+
+func StartAgentFromCodingAgent(response codingagent.StartAgentResponse) StartAgentResponse {
+	return StartAgentResponse{Agent: AgentWithPaneFromCodingAgent(response.Agent)}
+}
+
+func ListAgentsFromCodingAgent(response codingagent.ListAgentsResponse) ListAgentsResponse {
+	agents := make([]AgentWithPane, 0, len(response.Agents))
+	for _, agent := range response.Agents {
+		agents = append(agents, AgentWithPaneFromCodingAgent(agent))
+	}
+	return ListAgentsResponse{Agents: agents}
+}
+
+func FocusAgentFromCodingAgent(response codingagent.FocusAgentResponse) FocusAgentResponse {
+	return FocusAgentResponse{Agent: AgentWithPaneFromCodingAgent(response.Agent)}
 }
 
 func (req CreatePaneRequest) ToRuntime() rt.CreatePaneRequest {
@@ -390,25 +498,35 @@ func MessageFromRuntime(response rt.SendMessageResponse) SendMessageResponse {
 
 func EventFromRuntime(event eventbus.Event) Event {
 	return Event{
-		Type:         string(event.Type),
-		PaneID:       event.PaneID,
-		TaskID:       event.TaskID,
-		AgentID:      event.AgentID,
-		ZellijPaneID: event.ZellijPaneID,
-		Message:      event.Message,
-		Time:         event.Time,
+		Type:          string(event.Type),
+		PaneID:        event.PaneID,
+		TaskID:        event.TaskID,
+		AgentID:       event.AgentID,
+		ZellijPaneID:  event.ZellijPaneID,
+		AgentKind:     event.AgentKind,
+		PreviousState: event.PreviousState,
+		AgentState:    event.AgentState,
+		MatchedRule:   event.MatchedRule,
+		Reason:        event.Reason,
+		Message:       event.Message,
+		Time:          event.Time,
 	}
 }
 
 func EventSummaryFromRuntime(event rt.EventSummary) Event {
 	return Event{
-		Type:         string(event.Type),
-		PaneID:       string(event.PaneID),
-		TaskID:       string(event.TaskID),
-		AgentID:      string(event.AgentID),
-		ZellijPaneID: string(event.ZellijPaneID),
-		Message:      event.Message,
-		Time:         event.Time,
+		Type:          string(event.Type),
+		PaneID:        string(event.PaneID),
+		TaskID:        string(event.TaskID),
+		AgentID:       string(event.AgentID),
+		ZellijPaneID:  string(event.ZellijPaneID),
+		AgentKind:     event.AgentKind,
+		PreviousState: event.PreviousState,
+		AgentState:    event.AgentState,
+		MatchedRule:   event.MatchedRule,
+		Reason:        event.Reason,
+		Message:       event.Message,
+		Time:          event.Time,
 	}
 }
 

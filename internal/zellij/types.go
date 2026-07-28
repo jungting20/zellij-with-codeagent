@@ -12,10 +12,11 @@ import (
 const defaultBinary = "zellij"
 
 var (
-	ErrEmptyPaneID = errors.New("zellij returned an empty pane id")
-	ErrEmptyTabID  = errors.New("zellij returned an empty tab id")
-	ErrMissingPane = errors.New("zellij pane id is required")
-	ErrMissingTab  = errors.New("zellij tab id is required")
+	ErrEmptyPaneID    = errors.New("zellij returned an empty pane id")
+	ErrEmptyTabID     = errors.New("zellij returned an empty tab id")
+	ErrMissingPane    = errors.New("zellij pane id is required")
+	ErrMissingSession = errors.New("zellij session is required")
+	ErrMissingTab     = errors.New("zellij tab id is required")
 )
 
 type PaneID string
@@ -31,6 +32,10 @@ type Backend interface {
 	ListPanes(ctx context.Context, req ListPanesRequest) ([]Pane, error)
 	DumpScreen(ctx context.Context, req DumpScreenRequest) (string, error)
 	SubscribeCommand(req SubscribeRequest) (CommandSpec, error)
+}
+
+type SessionSwitcher interface {
+	SwitchSession(ctx context.Context, req SwitchSessionRequest) error
 }
 
 type Options struct {
@@ -88,6 +93,13 @@ type SubscribeRequest struct {
 	PaneID  PaneID
 	JSON    bool
 	ANSI    bool
+}
+
+type SwitchSessionRequest struct {
+	SourceSession string
+	SourcePaneID  PaneID
+	TargetSession string
+	TargetPaneID  PaneID
 }
 
 type Pane struct {
@@ -158,6 +170,7 @@ func (p *Pane) UnmarshalJSON(data []byte) error {
 type CommandSpec struct {
 	Name string
 	Args []string
+	Env  []string
 }
 
 type CommandResult struct {

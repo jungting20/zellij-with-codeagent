@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	agentprofile "zellij-with-codeagent/internal/codingagent"
 )
 
 func Run(args []string) int {
@@ -26,18 +28,20 @@ func Run(args []string) int {
 		if errors.As(err, &exitErr) {
 			return exitErr.ExitCode()
 		}
-		fmt.Fprintf(os.Stderr, "Error running codex: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error running coding agent: %v\n", err)
 		return 1
 	}
 	return 0
 }
 
 func prepare(args []string) (*exec.Cmd, error) {
+	roleArgs, extraArgs := splitArgs(args)
 	fs := flag.NewFlagSet("coding-agent", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	yolo := fs.Bool("yolo", false, "bypass Codex approvals and sandboxing")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
-		return nil, fmt.Errorf("usage: agent-role coding-agent [--yolo] <path>")
+	agent := fs.String("agent", string(agentprofile.KindCodex), "coding agent kind")
+	yolo := fs.Bool("yolo", false, "bypass coding agent permissions and sandboxing")
+	if err := fs.Parse(roleArgs); err != nil || fs.NArg() != 1 {
+		return nil, fmt.Errorf("usage: agent-role coding-agent [--agent kind] [--yolo] <path> [-- agent-args...]")
 	}
 
 	repoPath, err := resolveRepositoryPath(fs.Arg(0))
@@ -45,18 +49,34 @@ func prepare(args []string) (*exec.Cmd, error) {
 		return nil, err
 	}
 
-	codexPath, err := exec.LookPath("codex")
+	kind, err := agentprofile.ParseKind(*agent)
 	if err != nil {
-		return nil, fmt.Errorf("codex executable not found on PATH")
+		return nil, err
+	}
+	profile, ok := agentprofile.LookupProfile(kind)
+	if !ok {
+		return nil, fmt.Errorf("coding agent profile %q not found", kind)
 	}
 
-	var codexArgs []string
-	if *yolo {
-		codexArgs = append(codexArgs, "--dangerously-bypass-approvals-and-sandbox")
+	agentPath, err := exec.LookPath(profile.Executable)
+	if err != nil {
+		return nil, fmt.Errorf("%s executable not found on PATH", profile.Executable)
 	}
-	cmd := exec.Command(codexPath, codexArgs...)
+
+	commandArgs := profile.BuildCommand(*yolo, extraArgs)
+	commandArgs[0] = agentPath
+	cmd := exec.Command(commandArgs[0], commandArgs[1:]...)
 	cmd.Dir = repoPath
 	return cmd, nil
+}
+
+func splitArgs(args []string) (roleArgs, extraArgs []string) {
+	for i, arg := range args {
+		if arg == "--" {
+			return args[:i], args[i+1:]
+		}
+	}
+	return args, nil
 }
 
 func resolveRepositoryPath(path string) (string, error) {
