@@ -6,28 +6,34 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	configVersion       = 1
-	defaultMaxWorkers   = 3
-	defaultPollInterval = 30 * time.Second
-	configTemplate      = "version: 1\nmax_workers: 3\npoll_interval: 30s\n"
+	configVersion                  = 1
+	defaultMaxWorkers              = 3
+	defaultPollInterval            = 30 * time.Second
+	defaultVoiceNotificationPrefix = "ticket-manager"
+	configTemplate                 = "version: 1\nmax_workers: 3\npoll_interval: 30s\nvoice_notifications: true\nvoice_notification_prefix: ticket-manager\n"
 )
 
 type Config struct {
-	Version      int
-	MaxWorkers   int
-	PollInterval time.Duration
+	Version                 int
+	MaxWorkers              int
+	PollInterval            time.Duration
+	VoiceNotifications      bool
+	VoiceNotificationPrefix string
 }
 
 type diskConfig struct {
-	Version      int    `yaml:"version"`
-	MaxWorkers   *int   `yaml:"max_workers"`
-	PollInterval string `yaml:"poll_interval"`
+	Version                 int     `yaml:"version"`
+	MaxWorkers              *int    `yaml:"max_workers"`
+	PollInterval            string  `yaml:"poll_interval"`
+	VoiceNotifications      *bool   `yaml:"voice_notifications"`
+	VoiceNotificationPrefix *string `yaml:"voice_notification_prefix"`
 }
 
 func ConfigPath(root string) string {
@@ -48,9 +54,11 @@ func LoadConfig(root string) (Config, error) {
 	}
 
 	cfg := Config{
-		Version:      disk.Version,
-		MaxWorkers:   defaultMaxWorkers,
-		PollInterval: defaultPollInterval,
+		Version:                 disk.Version,
+		MaxWorkers:              defaultMaxWorkers,
+		PollInterval:            defaultPollInterval,
+		VoiceNotifications:      true,
+		VoiceNotificationPrefix: defaultVoiceNotificationPrefix,
 	}
 	if disk.MaxWorkers != nil {
 		cfg.MaxWorkers = *disk.MaxWorkers
@@ -59,6 +67,15 @@ func LoadConfig(root string) (Config, error) {
 		cfg.PollInterval, err = time.ParseDuration(disk.PollInterval)
 		if err != nil {
 			return Config{}, fmt.Errorf("poll_interval: %w", err)
+		}
+	}
+	if disk.VoiceNotifications != nil {
+		cfg.VoiceNotifications = *disk.VoiceNotifications
+	}
+	if disk.VoiceNotificationPrefix != nil {
+		cfg.VoiceNotificationPrefix = strings.TrimSpace(*disk.VoiceNotificationPrefix)
+		if cfg.VoiceNotificationPrefix == "" {
+			return Config{}, fmt.Errorf("voice_notification_prefix must not be empty")
 		}
 	}
 	if err := validateConfig(cfg); err != nil {

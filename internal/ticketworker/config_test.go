@@ -3,11 +3,12 @@ package ticketworker
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
-const expectedConfigTemplate = "version: 1\nmax_workers: 3\npoll_interval: 30s\n"
+const expectedConfigTemplate = "version: 1\nmax_workers: 3\npoll_interval: 30s\nvoice_notifications: true\nvoice_notification_prefix: ticket-manager\n"
 
 func TestConfigPathUsesWorkerDirectory(t *testing.T) {
 	root := filepath.Join(string(filepath.Separator), "repo")
@@ -48,7 +49,7 @@ func TestEnsureConfigWritesLoadableDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Version != 1 || cfg.MaxWorkers != 3 || cfg.PollInterval != 30*time.Second {
+	if cfg.Version != 1 || cfg.MaxWorkers != 3 || cfg.PollInterval != 30*time.Second || !cfg.VoiceNotifications || cfg.VoiceNotificationPrefix != "ticket-manager" {
 		t.Fatalf("loaded config = %+v", cfg)
 	}
 }
@@ -101,7 +102,7 @@ func TestEnsureConfigPreservesExistingAndRecreatesDeletedConfig(t *testing.T) {
 	}
 }
 
-func TestLoadConfigAppliesOptionalDefaults(t *testing.T) {
+func TestLoadConfigVoiceDefaults(t *testing.T) {
 	root := t.TempDir()
 	writeConfigFile(t, root, "version: 1\n")
 
@@ -111,6 +112,32 @@ func TestLoadConfigAppliesOptionalDefaults(t *testing.T) {
 	}
 	if cfg.MaxWorkers != 3 || cfg.PollInterval != 30*time.Second {
 		t.Fatalf("defaults = %d, %s; want 3, 30s", cfg.MaxWorkers, cfg.PollInterval)
+	}
+	if !cfg.VoiceNotifications || cfg.VoiceNotificationPrefix != "ticket-manager" {
+		t.Fatalf("voice config = enabled:%v prefix:%q", cfg.VoiceNotifications, cfg.VoiceNotificationPrefix)
+	}
+}
+
+func TestLoadConfigVoiceExplicitValues(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFile(t, root, "version: 1\nvoice_notifications: false\nvoice_notification_prefix: \" project-a \"\n")
+
+	cfg, err := LoadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.VoiceNotifications || cfg.VoiceNotificationPrefix != "project-a" {
+		t.Fatalf("voice config = enabled:%v prefix:%q", cfg.VoiceNotifications, cfg.VoiceNotificationPrefix)
+	}
+}
+
+func TestLoadConfigVoiceRejectsWhitespacePrefix(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFile(t, root, "version: 1\nvoice_notifications: true\nvoice_notification_prefix: \"   \"\n")
+
+	_, err := LoadConfig(root)
+	if err == nil || !strings.Contains(err.Error(), "voice_notification_prefix must not be empty") {
+		t.Fatalf("LoadConfig() error = %v, want empty voice notification prefix error", err)
 	}
 }
 

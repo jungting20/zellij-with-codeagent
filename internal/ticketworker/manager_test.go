@@ -74,7 +74,7 @@ func TestManagerRejectsWrongAnchorIdentityAndDoesNotClaim(t *testing.T) {
 			client.anchorSessionID = identity[1]
 			manager, err := NewManager(ManagerOptions{
 				Store: store, Client: client,
-				Config: Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour},
+				Config: Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour, VoiceNotifications: false, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
 				Root:   "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
 				StartupTimeout: 10 * time.Millisecond, ReadyPollInterval: time.Millisecond,
 			})
@@ -108,7 +108,7 @@ func TestNewManagerGeneratesDistinctInstanceIDs(t *testing.T) {
 	client := newFakeManagerClient()
 	opts := ManagerOptions{
 		Store: store, Client: client,
-		Config: Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour},
+		Config: Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour, VoiceNotifications: false, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
 		Root:   "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
 	}
 	first, err := NewManager(opts)
@@ -716,7 +716,7 @@ func newTestManagerWithTicks(t *testing.T, store *fakeManagerStore, client *fake
 	t.Helper()
 	manager, err := NewManager(ManagerOptions{
 		Store: store, Client: client,
-		Config: Config{Version: 1, MaxWorkers: capacity, PollInterval: time.Hour},
+		Config: Config{Version: 1, MaxWorkers: capacity, PollInterval: time.Hour, VoiceNotifications: false, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
 		Root:   "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
 		StartupTimeout: 200 * time.Millisecond, ReadyPollInterval: time.Millisecond, Tick: ticks, Log: io.Discard, ManagerID: "run-a",
 	})
