@@ -83,6 +83,71 @@ func TestReconcileListFailureLeavesRegistryIntactAndPublishesHealth(t *testing.T
 	}
 }
 
+func TestReconcileNotifiesObserverForMissingManagedPaneAndPreservesRecords(t *testing.T) {
+	reg := registry.New()
+	missing, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID: "missing", SessionID: "session-a", ZellijPaneID: "terminal_missing", Role: "coding-agent",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(missing) error = %v", err)
+	}
+	live, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID: "live", SessionID: "session-a", ZellijPaneID: "terminal_live", Role: "shell",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(live) error = %v", err)
+	}
+	observer := &recordingPaneObserver{}
+	service := NewService(Options{
+		Registry:     reg,
+		Backend:      &fakeBackend{listPanes: []zellij.Pane{{ID: "terminal_live"}}},
+		PaneObserver: observer,
+	})
+
+	if _, err := service.Reconcile(context.Background(), ReconcileRequest{}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if _, err := service.Reconcile(context.Background(), ReconcileRequest{}); err != nil {
+		t.Fatalf("Reconcile() second error = %v", err)
+	}
+
+	assertPaneStatus(t, service, PaneID(missing.ID), PaneStatusLost)
+	if got, err := reg.GetPane(live.ID); err != nil || got.Generation != live.Generation {
+		t.Fatalf("live pane = %#v, error = %v; want preserved generation %d", got, err, live.Generation)
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.closed) != 1 || observer.closed[0] != missing.ID {
+		t.Fatalf("observer closed = %#v, want [%q]", observer.closed, missing.ID)
+	}
+}
+
+func TestReconcileNotifiesObserverForExitedPaneOnce(t *testing.T) {
+	reg := registry.New()
+	exited, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID: "exited", SessionID: "session-a", ZellijPaneID: "terminal_exited", Role: "coding-agent",
+	})
+	if err != nil {
+		t.Fatalf("RegisterPane(exited) error = %v", err)
+	}
+	observer := &recordingPaneObserver{}
+	service := NewService(Options{
+		Registry:     reg,
+		Backend:      &fakeBackend{listPanes: []zellij.Pane{{ID: "terminal_exited", Exited: true}}},
+		PaneObserver: observer,
+	})
+
+	if _, err := service.Reconcile(context.Background(), ReconcileRequest{}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	assertPaneMissing(t, service, PaneID(exited.ID))
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.closed) != 1 || observer.closed[0] != exited.ID {
+		t.Fatalf("observer closed = %#v, want [%q]", observer.closed, exited.ID)
+	}
+}
+
 func TestReconcileMultipleSessionsUsesCompositePaneIdentity(t *testing.T) {
 	backend := &fakeBackend{listPanesBySession: map[string][]zellij.Pane{
 		"session-a": {{ID: "terminal_1", TabID: 1}},
@@ -145,7 +210,8 @@ func TestReconcileMultipleSessionsListFailureLeavesAllRecordsIntact(t *testing.T
 }
 
 func TestReconcileRecordDoesNotMutateReusedPaneGeneration(t *testing.T) {
-	service := newTestService(&fakeBackend{})
+	observer := &recordingPaneObserver{}
+	service := NewService(Options{Registry: registry.New(), Backend: &fakeBackend{}, PaneObserver: observer})
 	oldRecord, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
 		ID:           "coder",
 		TaskID:       "old-task",
@@ -176,6 +242,11 @@ func TestReconcileRecordDoesNotMutateReusedPaneGeneration(t *testing.T) {
 	}
 	if current.Generation != newRecord.Generation || current.Status != registry.PaneStatusStarting || current.TaskID != "new-task" {
 		t.Fatalf("current pane = %#v, want untouched new generation", current)
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.closed) != 0 {
+		t.Fatalf("observer closed = %#v, want stale generation ignored", observer.closed)
 	}
 }
 

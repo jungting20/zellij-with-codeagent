@@ -24,6 +24,7 @@ type Options struct {
 	NewPaneID          PaneIDGenerator
 	EventBus           *eventbus.Bus
 	SubscriptionRunner SubscriptionRunner
+	PaneObserver       PaneObserver
 }
 
 type Service struct {
@@ -32,6 +33,7 @@ type Service struct {
 	newPaneID PaneIDGenerator
 	bus       *eventbus.Bus
 	subs      *SubscriptionManager
+	observer  PaneObserver
 	createMu  sync.Mutex
 	creates   map[PaneID]*createPaneCall
 }
@@ -72,6 +74,7 @@ func NewService(opts Options) *Service {
 			Backend:  backend,
 			Bus:      bus,
 			Runner:   opts.SubscriptionRunner,
+			Observer: opts.PaneObserver,
 		})
 	}
 
@@ -81,6 +84,7 @@ func NewService(opts Options) *Service {
 		newPaneID: newPaneID,
 		bus:       bus,
 		subs:      subs,
+		observer:  opts.PaneObserver,
 		creates:   make(map[PaneID]*createPaneCall),
 	}
 }
