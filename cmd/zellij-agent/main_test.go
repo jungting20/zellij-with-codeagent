@@ -36,7 +36,7 @@ func TestRunHelp(t *testing.T) {
 }
 
 func TestRunDispatchesAgentHelp(t *testing.T) {
-	for _, args := range [][]string{{"agent", "--help"}, {"agent", "start", "--help"}} {
+	for _, args := range [][]string{{"agent", "--help"}, {"agent", "start", "--help"}, {"agent", "dashboard", "--help"}} {
 		var stdout, stderr bytes.Buffer
 		code := run(args, strings.NewReader(""), &stdout, &stderr)
 		if code != 0 || !strings.Contains(stdout.String(), "Usage: zellij-agent agent") || stderr.Len() != 0 {
