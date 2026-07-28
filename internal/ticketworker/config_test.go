@@ -141,6 +141,19 @@ func TestLoadConfigVoiceRejectsWhitespacePrefix(t *testing.T) {
 	}
 }
 
+func TestLoadConfigVoiceAllowsEmptyPrefixWhenDisabled(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFile(t, root, "version: 1\nvoice_notifications: false\nvoice_notification_prefix: \"   \"\n")
+
+	cfg, err := LoadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.VoiceNotifications || cfg.VoiceNotificationPrefix != "" {
+		t.Fatalf("voice config = enabled:%v prefix:%q, want disabled with empty prefix", cfg.VoiceNotifications, cfg.VoiceNotificationPrefix)
+	}
+}
+
 func TestLoadConfigIgnoresLegacyPromptTemplate(t *testing.T) {
 	root := t.TempDir()
 	writeConfigFile(t, root, "version: 1\nmax_workers: 2\nprompt_template: legacy template\n")
@@ -170,6 +183,38 @@ func TestLoadConfigRejectsInvalidValues(t *testing.T) {
 			writeConfigFile(t, root, body)
 			if _, err := LoadConfig(root); err == nil {
 				t.Fatal("LoadConfig() error = nil, want validation error")
+			}
+		})
+	}
+}
+
+func TestValidateConfigRequiresPrefixOnlyWhenVoiceNotificationsEnabled(t *testing.T) {
+	base := Config{Version: 1, MaxWorkers: 1, PollInterval: time.Second}
+	tests := []struct {
+		name    string
+		enabled bool
+		prefix  string
+		wantErr string
+	}{
+		{name: "enabled empty", enabled: true, wantErr: "voice_notification_prefix must not be empty"},
+		{name: "enabled whitespace", enabled: true, prefix: " \t ", wantErr: "voice_notification_prefix must not be empty"},
+		{name: "disabled legacy empty", enabled: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := base
+			cfg.VoiceNotifications = tt.enabled
+			cfg.VoiceNotificationPrefix = tt.prefix
+			err := validateConfig(cfg)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateConfig() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != tt.wantErr {
+				t.Fatalf("validateConfig() error = %v, want %q", err, tt.wantErr)
 			}
 		})
 	}

@@ -99,6 +99,7 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	if opts.Client == nil {
 		return nil, fmt.Errorf("ticket manager client is required")
 	}
+	opts.Config.VoiceNotificationPrefix = strings.TrimSpace(opts.Config.VoiceNotificationPrefix)
 	if err := validateConfig(opts.Config); err != nil {
 		return nil, fmt.Errorf("ticket manager config: %w", err)
 	}
@@ -498,6 +499,10 @@ func (m *Manager) retryClose(ctx context.Context, slot *managerSlot) {
 		m.logTicketf("close", slot.ticket, "pane=%s failed: %v", slot.paneID, err)
 		return
 	}
+	m.finalizeCompletedSlot(slot)
+}
+
+func (m *Manager) finalizeCompletedSlot(slot *managerSlot) {
 	if m.config.VoiceNotifications {
 		message := fmt.Sprintf("%s:%d:완료", m.config.VoiceNotificationPrefix, slot.ticket.ID)
 		if err := m.voiceNotifier.Notify(message); err != nil {
@@ -653,8 +658,10 @@ func (m *Manager) shutdown() error {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("requeue ticket %d: %w", slot.ticket.ID, err))
 				continue
 			}
+			*slot = managerSlot{}
+			continue
 		}
-		*slot = managerSlot{}
+		m.finalizeCompletedSlot(slot)
 	}
 	return errors.Join(cleanupErrors...)
 }

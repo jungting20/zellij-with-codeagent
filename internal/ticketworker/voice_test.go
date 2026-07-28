@@ -32,7 +32,7 @@ func TestResolveSpeechBackend(t *testing.T) {
 			goos:        "darwin",
 			executables: map[string]string{"say": "/usr/bin/say"},
 			wantPath:    "/usr/bin/say",
-			wantArgs:    []string{"hello"},
+			wantArgs:    []string{"--", "hello"},
 		},
 		{
 			name: "Linux prefers spd-say",
@@ -42,14 +42,14 @@ func TestResolveSpeechBackend(t *testing.T) {
 				"espeak":  "/usr/bin/espeak",
 			},
 			wantPath: "/usr/bin/spd-say",
-			wantArgs: []string{"--wait", "hello"},
+			wantArgs: []string{"--wait", "--", "hello"},
 		},
 		{
 			name:        "Linux falls back to espeak",
 			goos:        "linux",
 			executables: map[string]string{"espeak": "/usr/bin/espeak"},
 			wantPath:    "/usr/bin/espeak",
-			wantArgs:    []string{"hello"},
+			wantArgs:    []string{"--", "hello"},
 		},
 		{
 			name: "Windows prefers Windows PowerShell",
@@ -80,6 +80,47 @@ func TestResolveSpeechBackend(t *testing.T) {
 				t.Fatalf("backend path = %q, want %q", backend.path, tt.wantPath)
 			}
 			if got := backend.args("hello"); tt.wantArgs != nil && !reflect.DeepEqual(got, tt.wantArgs) {
+				t.Fatalf("backend args = %q, want %q", got, tt.wantArgs)
+			}
+		})
+	}
+}
+
+func TestResolveSpeechBackendTerminatesUnixOptionParsing(t *testing.T) {
+	const message = "--voice=attacker-controlled"
+	tests := []struct {
+		name        string
+		goos        string
+		executables map[string]string
+		wantArgs    []string
+	}{
+		{
+			name:        "macOS say",
+			goos:        "darwin",
+			executables: map[string]string{"say": "/usr/bin/say"},
+			wantArgs:    []string{"--", message},
+		},
+		{
+			name:        "Linux spd-say retains wait",
+			goos:        "linux",
+			executables: map[string]string{"spd-say": "/usr/bin/spd-say"},
+			wantArgs:    []string{"--wait", "--", message},
+		},
+		{
+			name:        "Linux espeak",
+			goos:        "linux",
+			executables: map[string]string{"espeak": "/usr/bin/espeak"},
+			wantArgs:    []string{"--", message},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend, err := resolveSpeechBackend(tt.goos, mapLookPath(tt.executables))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := backend.args(message); !reflect.DeepEqual(got, tt.wantArgs) {
 				t.Fatalf("backend args = %q, want %q", got, tt.wantArgs)
 			}
 		})

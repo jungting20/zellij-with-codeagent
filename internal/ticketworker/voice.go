@@ -40,8 +40,8 @@ func resolveSpeechBackend(goos string, lookPath func(string) (string, error)) (s
 		args func(string) []string
 	}
 
-	messageOnly := func(message string) []string { return []string{message} }
-	spdSayArgs := func(message string) []string { return []string{"--wait", message} }
+	unixMessageArgs := func(message string) []string { return []string{"--", message} }
+	spdSayArgs := func(message string) []string { return []string{"--wait", "--", message} }
 	windowsArgs := func(message string) []string {
 		encodedMessage := base64.StdEncoding.EncodeToString([]byte(message))
 		script := fmt.Sprintf("$message = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('%s')); Add-Type -AssemblyName System.Speech; $speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer; $speaker.Speak($message)", encodedMessage)
@@ -51,11 +51,11 @@ func resolveSpeechBackend(goos string, lookPath func(string) (string, error)) (s
 	var candidates []candidate
 	switch goos {
 	case "darwin":
-		candidates = []candidate{{name: "say", args: messageOnly}}
+		candidates = []candidate{{name: "say", args: unixMessageArgs}}
 	case "linux":
 		candidates = []candidate{
 			{name: "spd-say", args: spdSayArgs},
-			{name: "espeak", args: messageOnly},
+			{name: "espeak", args: unixMessageArgs},
 		}
 	case "windows":
 		candidates = []candidate{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -637,6 +638,45 @@ func TestManagerVoiceNotifierClosesOnceOnCancellation(t *testing.T) {
 	}
 }
 
+func TestManagerShutdownNotifiesOnlyDoneClosingSlotBeforeNotifierClose(t *testing.T) {
+	store := &fakeManagerStore{}
+	client := newFakeManagerClient()
+	client.streams = []*fakeEventStream{newFakeEventStream()}
+	notifier := &recordingVoiceNotifier{}
+	manager, err := NewManager(ManagerOptions{
+		Store: store, Client: client,
+		Config:        Config{Version: 1, MaxWorkers: 2, PollInterval: time.Hour, VoiceNotifications: true, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
+		VoiceNotifier: notifier,
+		Root:          "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
+		StartupTimeout: 200 * time.Millisecond, ReadyPollInterval: time.Millisecond, Log: io.Discard, ManagerID: "run-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.slots[0] = managerSlot{
+		state: managerSlotClosing, ticket: managerTicket(42), paneID: "ticket-coding-run-a-42", paneCreated: true, done: true,
+	}
+	manager.slots[1] = managerSlot{
+		state: managerSlotWorking, ticket: managerTicket(43), paneID: "ticket-coding-run-a-43", paneCreated: true,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return client.streamCalls() == 1 })
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	wantEvents := []string{"notify:ticket-manager:42:완료", "close"}
+	if got := notifier.recordedEvents(); !reflect.DeepEqual(got, wantEvents) {
+		t.Fatalf("notifier events = %q, want %q", got, wantEvents)
+	}
+	if got := store.requeues(); !reflect.DeepEqual(got, []int64{43}) {
+		t.Fatalf("requeued tickets = %v, want [43]", got)
+	}
+}
+
 func TestNewManagerRequiresVoiceNotifierWhenEnabled(t *testing.T) {
 	_, err := NewManager(ManagerOptions{
 		Store: &fakeManagerStore{}, Client: newFakeManagerClient(),
@@ -645,6 +685,21 @@ func TestNewManagerRequiresVoiceNotifierWhenEnabled(t *testing.T) {
 	})
 	if err == nil || err.Error() != "ticket manager voice notifier is required" {
 		t.Fatalf("NewManager() error = %v, want ticket manager voice notifier is required", err)
+	}
+}
+
+func TestNewManagerTrimsVoiceNotificationPrefix(t *testing.T) {
+	manager, err := NewManager(ManagerOptions{
+		Store: &fakeManagerStore{}, Client: newFakeManagerClient(),
+		Config:        Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour, VoiceNotifications: true, VoiceNotificationPrefix: " project-a "},
+		VoiceNotifier: &recordingVoiceNotifier{},
+		Root:          "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.config.VoiceNotificationPrefix; got != "project-a" {
+		t.Fatalf("voice notification prefix = %q, want project-a", got)
 	}
 }
 
@@ -901,6 +956,7 @@ type synchronizedBuffer struct {
 type recordingVoiceNotifier struct {
 	mu         sync.Mutex
 	messages   []string
+	events     []string
 	notifyErr  error
 	closeCalls int
 	closeErr   error
@@ -910,6 +966,7 @@ func (n *recordingVoiceNotifier) Notify(message string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.messages = append(n.messages, message)
+	n.events = append(n.events, "notify:"+message)
 	return n.notifyErr
 }
 
@@ -917,6 +974,7 @@ func (n *recordingVoiceNotifier) Close() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.closeCalls++
+	n.events = append(n.events, "close")
 	return n.closeErr
 }
 
@@ -930,6 +988,12 @@ func (n *recordingVoiceNotifier) recordedCloseCalls() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.closeCalls
+}
+
+func (n *recordingVoiceNotifier) recordedEvents() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]string(nil), n.events...)
 }
 
 func (b *synchronizedBuffer) Write(p []byte) (int, error) {

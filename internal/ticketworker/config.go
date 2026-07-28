@@ -74,9 +74,6 @@ func LoadConfig(root string) (Config, error) {
 	}
 	if disk.VoiceNotificationPrefix != nil {
 		cfg.VoiceNotificationPrefix = strings.TrimSpace(*disk.VoiceNotificationPrefix)
-		if cfg.VoiceNotificationPrefix == "" {
-			return Config{}, fmt.Errorf("voice_notification_prefix must not be empty")
-		}
 	}
 	if err := validateConfig(cfg); err != nil {
 		return Config{}, err
@@ -93,6 +90,9 @@ func validateConfig(cfg Config) error {
 	}
 	if cfg.PollInterval <= 0 {
 		return fmt.Errorf("poll_interval must be positive")
+	}
+	if cfg.VoiceNotifications && strings.TrimSpace(cfg.VoiceNotificationPrefix) == "" {
+		return fmt.Errorf("voice_notification_prefix must not be empty")
 	}
 	return nil
 }
