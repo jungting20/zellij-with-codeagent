@@ -7,7 +7,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"zellij-with-codeagent/internal/roles"
 )
+
+func TestCodingAgentRoleCatalog(t *testing.T) {
+	spec, ok := roles.Lookup(roles.RoleCodingAgent)
+	if !ok {
+		t.Fatal("coding-agent role missing")
+	}
+	want := "coding-agent [--agent kind] [--yolo] <path> [-- agent-args...]"
+	if spec.Usage != want {
+		t.Fatalf("coding-agent usage = %q, want %q", spec.Usage, want)
+	}
+}
 
 func TestRunDispatchesCodingAgentRole(t *testing.T) {
 	repo := t.TempDir()
