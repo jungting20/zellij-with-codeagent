@@ -55,6 +55,10 @@ type PaneService interface {
 	ClosePane(context.Context, ClosePaneRequest) (ClosePaneResponse, error)
 }
 
+type FocusService interface {
+	FocusPane(context.Context, FocusPaneRequest) (FocusPaneResponse, error)
+}
+
 type RuntimeInspectionService interface {
 	InspectRuntime(context.Context, InspectRuntimeRequest) (InspectRuntimeResponse, error)
 }
@@ -93,6 +97,7 @@ type SessionInspectionService interface {
 
 type RuntimeService interface {
 	PaneService
+	FocusService
 	RuntimeInspectionService
 	EventService
 	ReconciliationService
@@ -115,6 +120,7 @@ type CreatePaneRequest struct {
 	// ID is returned on the Pane instead.
 	ZellijTabID           *ZellijTabID
 	SameTabAsPaneID       PaneID
+	SameTabAsZellijPaneID ZellijPaneID
 	Command               []string
 	CWD                   string
 	InitialInput          string
@@ -124,6 +130,16 @@ type CreatePaneRequest struct {
 type CreatePaneResponse struct {
 	Pane   Pane
 	record registry.PaneRecord
+}
+
+type FocusPaneRequest struct {
+	PaneID              PaneID
+	SourceZellijSession string
+	SourceZellijPaneID  ZellijPaneID
+}
+
+type FocusPaneResponse struct {
+	Pane Pane
 }
 
 type SendInputRequest struct {

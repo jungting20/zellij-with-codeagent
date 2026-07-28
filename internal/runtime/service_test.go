@@ -348,6 +348,82 @@ func TestCreatePaneTargetsTabZero(t *testing.T) {
 	}
 }
 
+func TestCreatePaneSameTabAsZellijPaneTargetsPhysicalSourceTab(t *testing.T) {
+	backend := &fakeBackend{
+		createID: "terminal_agent",
+		listPanes: []zellij.Pane{
+			{ID: "terminal_2", TabID: 7, TabName: "dashboard"},
+			{ID: "terminal_agent", TabID: 7, TabName: "dashboard"},
+		},
+	}
+	service := newTestService(backend)
+
+	response, err := service.CreatePane(context.Background(), CreatePaneRequest{
+		ID:                    "agent-1",
+		ZellijSession:         "dashboard-session",
+		SameTabAsZellijPaneID: "terminal_2",
+		Command:               []string{"codex"},
+	})
+	if err != nil {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+
+	want := zellij.CreatePaneRequest{
+		Session: "dashboard-session",
+		TabID:   zellijTabID(7),
+		Command: []string{"codex"},
+	}
+	if len(backend.createRequests) != 1 || !reflect.DeepEqual(backend.createRequests[0], want) {
+		t.Fatalf("backend CreatePane requests = %#v, want %#v", backend.createRequests, []zellij.CreatePaneRequest{want})
+	}
+	if len(backend.listRequests) < 1 || backend.listRequests[0].Session != "dashboard-session" {
+		t.Fatalf("backend ListPanes requests = %#v, want source session dashboard-session", backend.listRequests)
+	}
+	if response.Pane.ZellijTabID == nil || *response.Pane.ZellijTabID != 7 {
+		t.Fatalf("CreatePane() pane = %#v, want Zellij tab 7", response.Pane)
+	}
+}
+
+func TestCreatePaneSameTabAsZellijPaneRejectsInvalidSource(t *testing.T) {
+	tests := []struct {
+		name          string
+		panes         []zellij.Pane
+		newTab        bool
+		targetTab     *ZellijTabID
+		logicalAnchor PaneID
+		wantErr       error
+	}{
+		{name: "missing source pane", wantErr: ErrPaneNotFound},
+		{name: "ambiguous source pane", panes: []zellij.Pane{{ID: "terminal_2", TabID: 7}, {ID: "terminal_2", TabID: 8}}, wantErr: ErrInvalidPaneTarget},
+		{name: "plugin source pane", panes: []zellij.Pane{{ID: "terminal_2", IsPlugin: true, TabID: 7}}, wantErr: ErrInvalidPaneTarget},
+		{name: "new tab conflict", panes: []zellij.Pane{{ID: "terminal_2", TabID: 7}}, newTab: true, wantErr: ErrInvalidPaneTarget},
+		{name: "explicit tab conflict", panes: []zellij.Pane{{ID: "terminal_2", TabID: 7}}, targetTab: runtimeZellijTabID(8), wantErr: ErrInvalidPaneTarget},
+		{name: "logical anchor conflict", panes: []zellij.Pane{{ID: "terminal_2", TabID: 7}}, logicalAnchor: "manager", wantErr: ErrInvalidPaneTarget},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend := &fakeBackend{listPanes: tt.panes}
+			service := newTestService(backend)
+
+			_, err := service.CreatePane(context.Background(), CreatePaneRequest{
+				ID:                    "agent-1",
+				ZellijSession:         "dashboard-session",
+				NewTab:                tt.newTab,
+				ZellijTabID:           tt.targetTab,
+				SameTabAsPaneID:       tt.logicalAnchor,
+				SameTabAsZellijPaneID: "terminal_2",
+			})
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("CreatePane() error = %v, want %v", err, tt.wantErr)
+			}
+			if len(backend.createRequests) != 0 || len(backend.createTabRequests) != 0 {
+				t.Fatalf("backend create calls = panes %#v, tabs %#v; want none", backend.createRequests, backend.createTabRequests)
+			}
+		})
+	}
+}
+
 func TestCreatePaneSameTabAsActiveLogicalAnchor(t *testing.T) {
 	anchorTabID := registry.ZellijTabID(7)
 	backend := &fakeBackend{
@@ -389,6 +465,143 @@ func TestCreatePaneSameTabAsActiveLogicalAnchor(t *testing.T) {
 	}
 	if response.Pane.ZellijTabID == nil || *response.Pane.ZellijTabID != 7 {
 		t.Fatalf("CreatePane() pane = %#v, want Zellij tab 7", response.Pane)
+	}
+}
+
+func TestFocusPaneSwitchesFromSourceContextToRegisteredTarget(t *testing.T) {
+	switcher := &fakeSessionSwitcher{}
+	service := NewService(Options{
+		Registry:        registry.New(),
+		Backend:         &fakeBackend{},
+		SessionSwitcher: switcher,
+	})
+	if _, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "agent-1",
+		SessionID:    "target-session",
+		ZellijPaneID: "terminal_12",
+		Status:       registry.PaneStatusRunning,
+	}); err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+
+	response, err := service.FocusPane(context.Background(), FocusPaneRequest{
+		PaneID:              "agent-1",
+		SourceZellijSession: "dashboard-session",
+		SourceZellijPaneID:  "terminal_2",
+	})
+	if err != nil {
+		t.Fatalf("FocusPane() error = %v", err)
+	}
+
+	want := zellij.SwitchSessionRequest{
+		SourceSession: "dashboard-session",
+		SourcePaneID:  "terminal_2",
+		TargetSession: "target-session",
+		TargetPaneID:  "terminal_12",
+	}
+	if !reflect.DeepEqual(switcher.requests, []zellij.SwitchSessionRequest{want}) {
+		t.Fatalf("switch requests = %#v, want %#v", switcher.requests, []zellij.SwitchSessionRequest{want})
+	}
+	if response.Pane.ID != "agent-1" || response.Pane.ZellijPaneID != "terminal_12" {
+		t.Fatalf("FocusPane() response = %#v, want registered pane", response)
+	}
+}
+
+func TestFocusPaneUsesBackendSessionSwitcherByDefault(t *testing.T) {
+	switcher := &fakeSessionSwitcher{}
+	backend := &fakeSwitchingBackend{fakeBackend: &fakeBackend{}, fakeSessionSwitcher: switcher}
+	service := NewService(Options{Registry: registry.New(), Backend: backend})
+	if _, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+		ID: "agent-1", SessionID: "target-session", ZellijPaneID: "terminal_12", Status: registry.PaneStatusRunning,
+	}); err != nil {
+		t.Fatalf("RegisterPane() error = %v", err)
+	}
+
+	_, err := service.FocusPane(context.Background(), FocusPaneRequest{
+		PaneID: "agent-1", SourceZellijSession: "dashboard-session", SourceZellijPaneID: "terminal_2",
+	})
+	if err != nil {
+		t.Fatalf("FocusPane() error = %v", err)
+	}
+	if len(switcher.requests) != 1 {
+		t.Fatalf("switch requests = %#v, want one request", switcher.requests)
+	}
+}
+
+func TestFocusPaneRejectsMissingOrInactiveTarget(t *testing.T) {
+	tests := []struct {
+		name    string
+		present bool
+		status  registry.PaneStatus
+		wantErr error
+	}{
+		{name: "missing", wantErr: ErrPaneNotFound},
+		{name: "lost", present: true, status: registry.PaneStatusLost, wantErr: ErrInvalidPaneTarget},
+		{name: "closed", present: true, status: registry.PaneStatusClosed, wantErr: ErrInvalidPaneTarget},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			switcher := &fakeSessionSwitcher{}
+			service := NewService(Options{Registry: registry.New(), Backend: &fakeBackend{}, SessionSwitcher: switcher})
+			if tt.present {
+				if _, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+					ID: "agent-1", SessionID: "target-session", ZellijPaneID: "terminal_12", Status: tt.status,
+				}); err != nil {
+					t.Fatalf("RegisterPane() error = %v", err)
+				}
+			}
+
+			_, err := service.FocusPane(context.Background(), FocusPaneRequest{
+				PaneID: "agent-1", SourceZellijSession: "dashboard-session", SourceZellijPaneID: "terminal_2",
+			})
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("FocusPane() error = %v, want %v", err, tt.wantErr)
+			}
+			if len(switcher.requests) != 0 {
+				t.Fatalf("switch requests = %#v, want none", switcher.requests)
+			}
+		})
+	}
+}
+
+func TestFocusPaneRejectsInvalidSourceContextOrMissingSwitcher(t *testing.T) {
+	tests := []struct {
+		name     string
+		session  string
+		paneID   ZellijPaneID
+		switcher bool
+	}{
+		{name: "missing source session", paneID: "terminal_2", switcher: true},
+		{name: "missing source pane", session: "dashboard-session", switcher: true},
+		{name: "missing switcher", session: "dashboard-session", paneID: "terminal_2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := Options{Registry: registry.New(), Backend: &fakeBackend{}}
+			var switcher *fakeSessionSwitcher
+			if tt.switcher {
+				switcher = &fakeSessionSwitcher{}
+				opts.SessionSwitcher = switcher
+			}
+			service := NewService(opts)
+			if _, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+				ID: "agent-1", SessionID: "target-session", ZellijPaneID: "terminal_12", Status: registry.PaneStatusRunning,
+			}); err != nil {
+				t.Fatalf("RegisterPane() error = %v", err)
+			}
+
+			_, err := service.FocusPane(context.Background(), FocusPaneRequest{
+				PaneID: "agent-1", SourceZellijSession: tt.session, SourceZellijPaneID: tt.paneID,
+			})
+			if !errors.Is(err, ErrInvalidPaneTarget) {
+				t.Fatalf("FocusPane() error = %v, want %v", err, ErrInvalidPaneTarget)
+			}
+			if switcher != nil && len(switcher.requests) != 0 {
+				t.Fatalf("switch requests = %#v, want none", switcher.requests)
+			}
+		})
 	}
 }
 
@@ -1065,6 +1278,21 @@ type fakeBackend struct {
 	beforeCreatePane func(context.Context, zellij.CreatePaneRequest, int) error
 	beforeClosePane  func(context.Context, zellij.ClosePaneRequest) error
 	beforeDumpScreen func(context.Context, zellij.DumpScreenRequest) error
+}
+
+type fakeSessionSwitcher struct {
+	requests []zellij.SwitchSessionRequest
+	err      error
+}
+
+type fakeSwitchingBackend struct {
+	*fakeBackend
+	*fakeSessionSwitcher
+}
+
+func (s *fakeSessionSwitcher) SwitchSession(_ context.Context, req zellij.SwitchSessionRequest) error {
+	s.requests = append(s.requests, req)
+	return s.err
 }
 
 func (b *fakeBackend) Session() string {

@@ -21,6 +21,7 @@ type PaneIDGenerator func() PaneID
 type Options struct {
 	Registry           *registry.Registry
 	Backend            zellij.Backend
+	SessionSwitcher    zellij.SessionSwitcher
 	NewPaneID          PaneIDGenerator
 	EventBus           *eventbus.Bus
 	SubscriptionRunner SubscriptionRunner
@@ -30,6 +31,7 @@ type Options struct {
 type Service struct {
 	registry  *registry.Registry
 	backend   zellij.Backend
+	switcher  zellij.SessionSwitcher
 	newPaneID PaneIDGenerator
 	bus       *eventbus.Bus
 	subs      *SubscriptionManager
@@ -56,6 +58,10 @@ func NewService(opts Options) *Service {
 	if backend == nil {
 		backend = zellij.NewBackend(zellij.Options{})
 	}
+	switcher := opts.SessionSwitcher
+	if switcher == nil {
+		switcher, _ = backend.(zellij.SessionSwitcher)
+	}
 
 	newPaneID := opts.NewPaneID
 	if newPaneID == nil {
@@ -81,6 +87,7 @@ func NewService(opts Options) *Service {
 	return &Service{
 		registry:  reg,
 		backend:   backend,
+		switcher:  switcher,
 		newPaneID: newPaneID,
 		bus:       bus,
 		subs:      subs,
@@ -117,7 +124,7 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 		}
 	}
 
-	req, err = s.resolveCreatePaneTarget(req)
+	req, err = s.resolveCreatePaneTarget(ctx, req)
 	if err != nil {
 		s.finishCreatePane(call, CreatePaneResponse{}, err)
 		return CreatePaneResponse{}, err
@@ -245,9 +252,38 @@ func createPaneCleanupError(cause, cleanupErr error) error {
 	return errors.Join(cause, fmt.Errorf("%w: %v", ErrCleanupPartial, cleanupErr))
 }
 
-func (s *Service) resolveCreatePaneTarget(req CreatePaneRequest) (CreatePaneRequest, error) {
+func (s *Service) resolveCreatePaneTarget(ctx context.Context, req CreatePaneRequest) (CreatePaneRequest, error) {
 	if req.NewTab && req.ZellijTabID != nil {
 		return req, ErrInvalidPaneTarget
+	}
+	if req.SameTabAsZellijPaneID != "" {
+		if req.NewTab || req.ZellijTabID != nil || req.SameTabAsPaneID != "" {
+			return req, ErrInvalidPaneTarget
+		}
+
+		panes, err := s.backend.ListPanes(ctx, zellij.ListPanesRequest{Session: req.ZellijSession})
+		if err != nil {
+			return req, err
+		}
+		matches := make([]zellij.Pane, 0, 1)
+		for _, pane := range panes {
+			if pane.ID == zellij.PaneID(req.SameTabAsZellijPaneID) {
+				matches = append(matches, pane)
+			}
+		}
+		switch len(matches) {
+		case 0:
+			return req, fmt.Errorf("%w: source Zellij pane %s", ErrPaneNotFound, req.SameTabAsZellijPaneID)
+		case 1:
+			if matches[0].IsPlugin {
+				return req, fmt.Errorf("%w: source Zellij pane %s is a plugin pane", ErrInvalidPaneTarget, req.SameTabAsZellijPaneID)
+			}
+			tabID := ZellijTabID(matches[0].TabID)
+			req.ZellijTabID = &tabID
+			return req, nil
+		default:
+			return req, fmt.Errorf("%w: source Zellij pane %s is ambiguous", ErrInvalidPaneTarget, req.SameTabAsZellijPaneID)
+		}
 	}
 	if req.SameTabAsPaneID == "" {
 		return req, nil
@@ -273,6 +309,41 @@ func (s *Service) resolveCreatePaneTarget(req CreatePaneRequest) (CreatePaneRequ
 	tabID := ZellijTabID(*anchor.ZellijTabID)
 	req.ZellijTabID = &tabID
 	return req, nil
+}
+
+func (s *Service) FocusPane(ctx context.Context, req FocusPaneRequest) (FocusPaneResponse, error) {
+	record, err := s.lookupPane(req.PaneID)
+	if err != nil {
+		return FocusPaneResponse{}, err
+	}
+	if record.Status != registry.PaneStatusStarting && record.Status != registry.PaneStatusRunning {
+		return FocusPaneResponse{}, fmt.Errorf("%w: pane %s is %s", ErrInvalidPaneTarget, record.ID, record.Status)
+	}
+
+	sourceSession := strings.TrimSpace(req.SourceZellijSession)
+	sourcePaneID := strings.TrimSpace(string(req.SourceZellijPaneID))
+	targetSession := strings.TrimSpace(string(record.SessionID))
+	targetPaneID := strings.TrimSpace(string(record.ZellijPaneID))
+	if sourceSession == "" || sourcePaneID == "" {
+		return FocusPaneResponse{}, fmt.Errorf("%w: source Zellij context is required", ErrInvalidPaneTarget)
+	}
+	if targetSession == "" || targetPaneID == "" {
+		return FocusPaneResponse{}, fmt.Errorf("%w: pane %s has no Zellij target", ErrInvalidPaneTarget, record.ID)
+	}
+	if s.switcher == nil {
+		return FocusPaneResponse{}, fmt.Errorf("%w: session switcher is not configured", ErrInvalidPaneTarget)
+	}
+
+	err = s.switcher.SwitchSession(ctx, zellij.SwitchSessionRequest{
+		SourceSession: sourceSession,
+		SourcePaneID:  zellij.PaneID(sourcePaneID),
+		TargetSession: targetSession,
+		TargetPaneID:  zellij.PaneID(targetPaneID),
+	})
+	if err != nil {
+		return FocusPaneResponse{}, err
+	}
+	return FocusPaneResponse{Pane: paneFromRecord(record)}, nil
 }
 
 // SubscribeEvents exposes in-process runtime observations published by the daemon.
