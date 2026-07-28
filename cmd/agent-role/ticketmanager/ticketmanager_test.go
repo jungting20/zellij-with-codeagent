@@ -3,6 +3,8 @@ package ticketmanager
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -71,6 +73,8 @@ func TestRunWithDependenciesWiresProjectConfigStoreClientAndManager(t *testing.T
 	}
 
 	client := &fakeRoleClient{}
+	notifier := &fakeVoiceNotifier{}
+	var notifierOutput io.Writer
 	var clientOptions transport.ClientOptions
 	var managerOptions ticketworker.ManagerOptions
 	runner := &fakeRunner{}
@@ -78,6 +82,10 @@ func TestRunWithDependenciesWiresProjectConfigStoreClientAndManager(t *testing.T
 	deps.newClient = func(opts transport.ClientOptions) ticketworker.ManagerClient {
 		clientOptions = opts
 		return client
+	}
+	deps.newVoiceNotifier = func(output io.Writer) ticketworker.VoiceNotifier {
+		notifierOutput = output
+		return notifier
 	}
 	deps.newManager = func(opts ticketworker.ManagerOptions) (managerRunner, error) {
 		managerOptions = opts
@@ -100,14 +108,96 @@ func TestRunWithDependenciesWiresProjectConfigStoreClientAndManager(t *testing.T
 	if managerOptions.Store == nil || managerOptions.Client != client || managerOptions.Config.MaxWorkers != 3 {
 		t.Fatalf("manager dependencies = %+v", managerOptions)
 	}
+	if !managerOptions.Config.VoiceNotifications || managerOptions.Config.VoiceNotificationPrefix != "ticket-manager" {
+		t.Fatalf("voice config = enabled:%v prefix:%q", managerOptions.Config.VoiceNotifications, managerOptions.Config.VoiceNotificationPrefix)
+	}
+	if notifierOutput != &stdout || managerOptions.VoiceNotifier != notifier {
+		t.Fatalf("voice wiring output=%T notifier=%T", notifierOutput, managerOptions.VoiceNotifier)
+	}
 	if !runner.ran {
 		t.Fatal("manager Run was not called")
 	}
 }
 
+func TestRunWithDependenciesSkipsVoiceNotifierWhenDisabled(t *testing.T) {
+	root := initializedTicketManagerProject(t)
+	config := "version: 1\nmax_workers: 3\npoll_interval: 30s\nvoice_notifications: false\nvoice_notification_prefix: ticket-manager\n"
+	if err := os.WriteFile(ticketworker.ConfigPath(root), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var factoryCalls int
+	var managerOptions ticketworker.ManagerOptions
+	deps := defaultDependencies()
+	deps.newClient = func(transport.ClientOptions) ticketworker.ManagerClient { return &fakeRoleClient{} }
+	deps.newVoiceNotifier = func(io.Writer) ticketworker.VoiceNotifier {
+		factoryCalls++
+		return &fakeVoiceNotifier{}
+	}
+	deps.newManager = func(opts ticketworker.ManagerOptions) (managerRunner, error) {
+		managerOptions = opts
+		return &fakeRunner{}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runWithDependencies(context.Background(), []string{
+		"--task", "tickets", "--anchor-pane", "ticket-manager", "--zellij-session", "physical-a", root,
+	}, &stdout, &stderr, deps)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if factoryCalls != 0 || managerOptions.VoiceNotifier != nil {
+		t.Fatalf("disabled voice wiring factory calls=%d notifier=%T", factoryCalls, managerOptions.VoiceNotifier)
+	}
+}
+
+func TestRunWithDependenciesClosesVoiceNotifierWhenManagerConstructionFails(t *testing.T) {
+	root := initializedTicketManagerProject(t)
+	notifier := &fakeVoiceNotifier{}
+	deps := defaultDependencies()
+	deps.newClient = func(transport.ClientOptions) ticketworker.ManagerClient { return &fakeRoleClient{} }
+	deps.newVoiceNotifier = func(io.Writer) ticketworker.VoiceNotifier { return notifier }
+	deps.newManager = func(ticketworker.ManagerOptions) (managerRunner, error) {
+		return nil, errors.New("invalid manager")
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runWithDependencies(context.Background(), []string{
+		"--task", "tickets", "--anchor-pane", "ticket-manager", "--zellij-session", "physical-a", root,
+	}, &stdout, &stderr, deps)
+	if code != 1 {
+		t.Fatalf("code=%d, want 1", code)
+	}
+	if notifier.closeCalls != 1 {
+		t.Fatalf("notifier Close calls=%d, want 1", notifier.closeCalls)
+	}
+}
+
+func initializedTicketManagerProject(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ticketworker.InitializeProject(context.Background(), root, nil); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 type fakeRunner struct{ ran bool }
 
 func (f *fakeRunner) Run(context.Context) error { f.ran = true; return nil }
+
+type fakeVoiceNotifier struct {
+	closeCalls int
+}
+
+func (*fakeVoiceNotifier) Notify(string) error { return nil }
+func (f *fakeVoiceNotifier) Close() error {
+	f.closeCalls++
+	return nil
+}
 
 type fakeRoleClient struct{}
 
