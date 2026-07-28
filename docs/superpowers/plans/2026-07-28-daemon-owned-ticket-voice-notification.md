@@ -377,7 +377,7 @@ git diff --check
 git status --short
 ```
 
-Expected: no formatting errors; only the pre-existing config modification is outside committed feature work.
+Expected: no formatting errors and no feature-unrelated changes in the isolated worktree. The pre-existing config modification remains only in the original main checkout.
 
 - [ ] **Step 2: Run complete and race suites**
 
@@ -407,4 +407,4 @@ git status --short
 git log -6 --oneline
 ```
 
-Expected: only `.zellij-agent/worker/config.yaml` remains modified and Tasks 1-5 appear as Korean commits.
+Expected: the isolated feature worktree is clean and Tasks 1-5 appear as Korean commits. The original main checkout still retains its pre-existing `.zellij-agent/worker/config.yaml` modification.
