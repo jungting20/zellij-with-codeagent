@@ -1,3 +1,4 @@
 version: 1
 max_workers: 3
 poll_interval: 30s
+voice_notification_prefix: 젤리제이 에이전트매니저

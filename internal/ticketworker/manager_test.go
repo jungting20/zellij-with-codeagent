@@ -533,8 +533,8 @@ func TestManagerVoiceNotificationAfterSuccessfulClose(t *testing.T) {
 
 	manager.retryClose(context.Background(), &manager.slots[0])
 
-	if got := notifier.recordedMessages(); len(got) != 1 || got[0] != "ticket-manager:42:완료" {
-		t.Fatalf("notifications = %q, want [ticket-manager:42:완료]", got)
+	if got := notifier.recordedMessages(); len(got) != 1 || got[0] != "ticket-manager 42 완료" {
+		t.Fatalf("notifications = %q, want [ticket-manager 42 완료]", got)
 	}
 	if manager.slots[0].state != managerSlotEmpty {
 		t.Fatalf("slot state = %v, want empty", manager.slots[0].state)
@@ -588,7 +588,7 @@ func TestManagerVoiceNotificationWaitsForSuccessfulCloseRetry(t *testing.T) {
 	}
 
 	manager.retryClose(context.Background(), &manager.slots[0])
-	if got := notifier.recordedMessages(); len(got) != 1 || got[0] != "ticket-manager:42:완료" {
+	if got := notifier.recordedMessages(); len(got) != 1 || got[0] != "ticket-manager 42 완료" {
 		t.Fatalf("notifications after retry = %q, want one completion", got)
 	}
 	if manager.slots[0].state != managerSlotEmpty {
@@ -668,7 +668,7 @@ func TestManagerShutdownNotifiesOnlyDoneClosingSlotBeforeNotifierClose(t *testin
 		t.Fatalf("Run() error = %v", err)
 	}
 
-	wantEvents := []string{"notify:ticket-manager:42:완료", "close"}
+	wantEvents := []string{"notify:ticket-manager 42 완료", "close"}
 	if got := notifier.recordedEvents(); !reflect.DeepEqual(got, wantEvents) {
 		t.Fatalf("notifier events = %q, want %q", got, wantEvents)
 	}

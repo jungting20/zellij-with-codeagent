@@ -504,7 +504,7 @@ func (m *Manager) retryClose(ctx context.Context, slot *managerSlot) {
 
 func (m *Manager) finalizeCompletedSlot(slot *managerSlot) {
 	if m.config.VoiceNotifications {
-		message := fmt.Sprintf("%s:%d:완료", m.config.VoiceNotificationPrefix, slot.ticket.ID)
+		message := fmt.Sprintf("%s %d 완료", m.config.VoiceNotificationPrefix, slot.ticket.ID)
 		if err := m.voiceNotifier.Notify(message); err != nil {
 			m.logTicketf("notify", slot.ticket, "failed: %v", err)
 		}
