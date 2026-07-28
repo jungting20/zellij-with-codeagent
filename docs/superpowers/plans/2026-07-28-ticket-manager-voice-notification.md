@@ -6,17 +6,17 @@
 
 **Architecture:** Extend repository YAML configuration with enabled and prefix fields. Add a `VoiceNotifier` whose single FIFO worker serializes native speech commands, then inject it into the manager and enqueue once after successful pane closure.
 
-**Tech Stack:** Go standard library (`context`, `os/exec`, `runtime`, `sync`), YAML v3, Go `testing`
+**Tech Stack:** Go standard library (`context`, `encoding/base64`, `encoding/binary`, `os/exec`, `runtime`, `sync`, `unicode/utf16`), YAML v3, Go `testing`
 
 ## Global Constraints
 
 - `voice_notifications` defaults to `true` when omitted.
 - `voice_notification_prefix` defaults to `ticket-manager` and must be non-empty after trimming.
-- Native backends: macOS `say`; Linux `spd-say`, then `espeak`; Windows PowerShell `System.Speech.Synthesis.SpeechSynthesizer`.
+- Native backends: macOS `say`; Linux `spd-say --wait`, then `espeak`; Windows PowerShell `System.Speech.Synthesis.SpeechSynthesizer` through UTF-16LE Base64 `-EncodedCommand`.
 - Commands use direct arguments, never a shell.
 - One unbounded FIFO queue prevents overlapping audio and avoids blocking ticket completion.
 - Voice errors never alter ticket or pane outcomes and are not retried.
-- Shutdown cancels active playback and discards queued messages.
+- Shutdown cancels active playback, normalizes process termination to the context cancellation error, and discards queued messages.
 - Configuration version remains `1`; this background feature requires no new role.
 - Commit messages are written in Korean.
 
@@ -136,12 +136,12 @@ backend, err := resolveSpeechBackend("linux", mapLookPath(map[string]string{
 if err != nil {
 	t.Fatal(err)
 }
-if backend.path != "/usr/bin/spd-say" || !reflect.DeepEqual(backend.args("hello"), []string{"hello"}) {
+if backend.path != "/usr/bin/spd-say" || !reflect.DeepEqual(backend.args("hello"), []string{"--wait", "hello"}) {
 	t.Fatalf("backend = path:%q args:%q", backend.path, backend.args("hello"))
 }
 ```
 
-Cover macOS `say`, Linux preference and fallback, Windows `powershell.exe` then `pwsh.exe`, unsupported OS, and missing executables. Windows must pass the message as a separate final argument to a script that calls `$speaker.Speak($args[0])`.
+Cover macOS `say`, Linux `spd-say --wait` preference and `espeak` fallback, Windows `powershell.exe` then `pwsh.exe`, unsupported OS, and missing executables. For Windows, pass `-NoProfile`, `-NonInteractive`, and `-EncodedCommand` followed by one UTF-16LE Base64 command. Decode the command in tests and prove that arbitrary Unicode, quotes, newlines, `$`, and expression-like content round-trip exactly through a Base64 message literal inside the fixed script. The raw message must not appear as a process argument or executable PowerShell expression.
 
 - [ ] **Step 2: Verify backend tests RED**
 
@@ -162,11 +162,15 @@ type speechBackend struct {
 }
 
 func (b speechBackend) speak(ctx context.Context, message string) error {
-	return exec.CommandContext(ctx, b.path, b.args(message)...).Run()
+	err := exec.CommandContext(ctx, b.path, b.args(message)...).Run()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
 }
 ```
 
-Resolve OS candidates with the injected lookup. For Windows use `-NoProfile`, `-NonInteractive`, `-Command`, the `System.Speech` script, then the message. Return a descriptive error listing the OS and candidates when resolution fails.
+Resolve OS candidates with the injected lookup. Use `--wait` before the message for `spd-say`. For Windows, Base64-encode the message inside a fixed `System.Speech` script, encode the complete script as UTF-16LE Base64, and pass it after `-NoProfile`, `-NonInteractive`, and `-EncodedCommand`. Continue using `exec.CommandContext` directly with no shell. Return a descriptive error listing the OS and candidates when resolution fails. If command execution returns after cancellation, return `ctx.Err()` instead of the platform-specific process exit error.
 
 - [ ] **Step 4: Write failing serial-queue tests**
 
@@ -187,7 +191,9 @@ notifier := newSerialVoiceNotifier(func(ctx context.Context, message string) err
 t.Cleanup(func() { _ = notifier.Close() })
 ```
 
-Verify FIFO order using sequential enqueue calls. In a separate concurrency test, verify only one active speaker and every concurrently accepted message runs once without requiring a deterministic order between competing callers. Also verify continuation after one speaker error, error logging, idempotent `Close`, cancellation of the active speaker, discard of pending messages, and rejection of `Notify` after close with `voice notifier is closed`.
+Verify FIFO order using sequential enqueue calls. In a separate concurrency test, verify only one active speaker and every concurrently accepted message runs once without requiring a deterministic order between competing callers. Also verify continuation after one speaker error, genuine-error logging, idempotent `Close`, cancellation of the active speaker, discard of pending messages, and rejection of `Notify` after close with `voice notifier is closed`.
+
+Use a real cancellable helper subprocess to verify `speechBackend.speak` normalizes `exec.CommandContext` termination to `context.Canceled` and the serial worker does not log expected shutdown cancellation. Add a targeted concurrent `Notify`-versus-`Close` test: each `Notify` either succeeds before shutdown (and may be discarded) or returns `voice notifier is closed`; the race must not panic, hang, or report a data race.
 
 - [ ] **Step 5: Verify queue tests RED**
 
@@ -222,8 +228,11 @@ Implement `serialVoiceNotifier` with `sync.Mutex`, `sync.Cond`, an unbounded `[]
 
 ```bash
 gofmt -w internal/ticketworker/voice.go internal/ticketworker/voice_test.go
-go test ./internal/ticketworker -run 'Test(ResolveSpeechBackend|SerialVoiceNotifier|NativeVoiceNotifier)' -count=1
-git add internal/ticketworker/voice.go internal/ticketworker/voice_test.go
+go test ./internal/ticketworker -run 'Test(ResolveSpeechBackend|SpeechBackend|SerialVoiceNotifier|NativeVoiceNotifier)' -count=1
+go test -race ./internal/ticketworker -run 'Test(SerialVoiceNotifier|SpeechBackend|ResolveSpeechBackend)' -count=10
+git add internal/ticketworker/voice.go internal/ticketworker/voice_test.go \
+  docs/superpowers/specs/2026-07-28-ticket-manager-voice-notification-design.md \
+  docs/superpowers/plans/2026-07-28-ticket-manager-voice-notification.md
 git commit -m "feat: 크로스플랫폼 음성 알림 큐 추가"
 ```
 

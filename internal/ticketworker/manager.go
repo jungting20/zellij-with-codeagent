@@ -34,6 +34,7 @@ type ManagerOptions struct {
 	Store             ManagerStore
 	Client            ManagerClient
 	Config            Config
+	VoiceNotifier     VoiceNotifier
 	Root              string
 	TaskID            string
 	AnchorPaneID      string
@@ -75,6 +76,7 @@ type Manager struct {
 	store             ManagerStore
 	client            ManagerClient
 	config            Config
+	voiceNotifier     VoiceNotifier
 	root              string
 	taskID            string
 	anchorPaneID      string
@@ -97,8 +99,12 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	if opts.Client == nil {
 		return nil, fmt.Errorf("ticket manager client is required")
 	}
+	opts.Config.VoiceNotificationPrefix = strings.TrimSpace(opts.Config.VoiceNotificationPrefix)
 	if err := validateConfig(opts.Config); err != nil {
 		return nil, fmt.Errorf("ticket manager config: %w", err)
+	}
+	if opts.Config.VoiceNotifications && opts.VoiceNotifier == nil {
+		return nil, fmt.Errorf("ticket manager voice notifier is required")
 	}
 	root := strings.TrimSpace(opts.Root)
 	if root == "" {
@@ -157,7 +163,7 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		return nil, fmt.Errorf("ticket manager ID must contain only letters, digits, hyphens, or underscores")
 	}
 	return &Manager{
-		store: opts.Store, client: opts.Client, config: opts.Config,
+		store: opts.Store, client: opts.Client, config: opts.Config, voiceNotifier: opts.VoiceNotifier,
 		root: root, taskID: taskID, anchorPaneID: anchorPaneID, zellijSession: zellijSession, roleBin: roleBin,
 		startupTimeout: startupTimeout, pollInterval: pollInterval, readyPollInterval: readyPollInterval,
 		tick: opts.Tick, log: log, managerID: managerID, slots: make([]managerSlot, opts.Config.MaxWorkers),
@@ -186,6 +192,13 @@ func validManagerID(value string) bool {
 }
 
 func (m *Manager) Run(ctx context.Context) error {
+	if m.voiceNotifier != nil {
+		defer func() {
+			if err := m.voiceNotifier.Close(); err != nil {
+				m.logf("voice notifier close failed: %v", err)
+			}
+		}()
+	}
 	if err := m.waitForAnchor(ctx); err != nil {
 		return err
 	}
@@ -486,6 +499,16 @@ func (m *Manager) retryClose(ctx context.Context, slot *managerSlot) {
 		m.logTicketf("close", slot.ticket, "pane=%s failed: %v", slot.paneID, err)
 		return
 	}
+	m.finalizeCompletedSlot(slot)
+}
+
+func (m *Manager) finalizeCompletedSlot(slot *managerSlot) {
+	if m.config.VoiceNotifications {
+		message := fmt.Sprintf("%s:%d:완료", m.config.VoiceNotificationPrefix, slot.ticket.ID)
+		if err := m.voiceNotifier.Notify(message); err != nil {
+			m.logTicketf("notify", slot.ticket, "failed: %v", err)
+		}
+	}
 	m.logTicketf("closed", slot.ticket, "pane=%s", slot.paneID)
 	*slot = managerSlot{}
 }
@@ -635,8 +658,10 @@ func (m *Manager) shutdown() error {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("requeue ticket %d: %w", slot.ticket.ID, err))
 				continue
 			}
+			*slot = managerSlot{}
+			continue
 		}
-		*slot = managerSlot{}
+		m.finalizeCompletedSlot(slot)
 	}
 	return errors.Join(cleanupErrors...)
 }

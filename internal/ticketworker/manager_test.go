@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -74,7 +75,7 @@ func TestManagerRejectsWrongAnchorIdentityAndDoesNotClaim(t *testing.T) {
 			client.anchorSessionID = identity[1]
 			manager, err := NewManager(ManagerOptions{
 				Store: store, Client: client,
-				Config: Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour},
+				Config: Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour, VoiceNotifications: false, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
 				Root:   "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
 				StartupTimeout: 10 * time.Millisecond, ReadyPollInterval: time.Millisecond,
 			})
@@ -108,7 +109,7 @@ func TestNewManagerGeneratesDistinctInstanceIDs(t *testing.T) {
 	client := newFakeManagerClient()
 	opts := ManagerOptions{
 		Store: store, Client: client,
-		Config: Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour},
+		Config: Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour, VoiceNotifications: false, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
 		Root:   "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
 	}
 	first, err := NewManager(opts)
@@ -518,6 +519,190 @@ func TestManagerCloseFailureRetainsCapacityUntilPaneAbsent(t *testing.T) {
 	}
 }
 
+func TestManagerVoiceNotificationAfterSuccessfulClose(t *testing.T) {
+	client := newFakeManagerClient()
+	notifier := &recordingVoiceNotifier{}
+	manager := newTestManagerWithVoiceNotifier(t, client, true, notifier)
+	manager.slots[0] = managerSlot{
+		state:       managerSlotClosing,
+		ticket:      managerTicket(42),
+		paneID:      "ticket-coding-run-a-42",
+		paneCreated: true,
+		done:        true,
+	}
+
+	manager.retryClose(context.Background(), &manager.slots[0])
+
+	if got := notifier.recordedMessages(); len(got) != 1 || got[0] != "ticket-manager:42:완료" {
+		t.Fatalf("notifications = %q, want [ticket-manager:42:완료]", got)
+	}
+	if manager.slots[0].state != managerSlotEmpty {
+		t.Fatalf("slot state = %v, want empty", manager.slots[0].state)
+	}
+}
+
+func TestManagerVoiceNotificationsDisabled(t *testing.T) {
+	client := newFakeManagerClient()
+	notifier := &recordingVoiceNotifier{}
+	manager := newTestManagerWithVoiceNotifier(t, client, false, notifier)
+	manager.slots[0] = managerSlot{
+		state:       managerSlotClosing,
+		ticket:      managerTicket(42),
+		paneID:      "ticket-coding-run-a-42",
+		paneCreated: true,
+		done:        true,
+	}
+
+	manager.retryClose(context.Background(), &manager.slots[0])
+
+	if got := notifier.recordedMessages(); len(got) != 0 {
+		t.Fatalf("notifications = %q, want none", got)
+	}
+}
+
+func TestManagerVoiceNotificationWaitsForSuccessfulCloseRetry(t *testing.T) {
+	client := newFakeManagerClient()
+	client.closeErrors = []error{errors.New("close failed"), nil}
+	_, err := client.CreatePane(context.Background(), transport.CreatePaneRequest{
+		ID: "ticket-coding-run-a-42", TaskID: "tickets", ZellijSession: "physical-a", Role: "coding-agent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notifier := &recordingVoiceNotifier{}
+	manager := newTestManagerWithVoiceNotifier(t, client, true, notifier)
+	manager.slots[0] = managerSlot{
+		state:       managerSlotClosing,
+		ticket:      managerTicket(42),
+		paneID:      "ticket-coding-run-a-42",
+		paneCreated: true,
+		done:        true,
+	}
+
+	manager.retryClose(context.Background(), &manager.slots[0])
+	if got := notifier.recordedMessages(); len(got) != 0 {
+		t.Fatalf("notifications after failed close = %q, want none", got)
+	}
+	if manager.slots[0].state != managerSlotClosing {
+		t.Fatalf("slot state after failed close = %v, want closing", manager.slots[0].state)
+	}
+
+	manager.retryClose(context.Background(), &manager.slots[0])
+	if got := notifier.recordedMessages(); len(got) != 1 || got[0] != "ticket-manager:42:완료" {
+		t.Fatalf("notifications after retry = %q, want one completion", got)
+	}
+	if manager.slots[0].state != managerSlotEmpty {
+		t.Fatalf("slot state after retry = %v, want empty", manager.slots[0].state)
+	}
+}
+
+func TestManagerNotifyErrorDoesNotRetainCompletedSlot(t *testing.T) {
+	client := newFakeManagerClient()
+	notifier := &recordingVoiceNotifier{notifyErr: errors.New("voice unavailable")}
+	manager := newTestManagerWithVoiceNotifier(t, client, true, notifier)
+	var logs synchronizedBuffer
+	manager.log = &logs
+	manager.slots[0] = managerSlot{
+		state:       managerSlotClosing,
+		ticket:      managerTicket(42),
+		paneID:      "ticket-coding-run-a-42",
+		paneCreated: true,
+		done:        true,
+	}
+
+	manager.retryClose(context.Background(), &manager.slots[0])
+
+	if manager.slots[0].state != managerSlotEmpty {
+		t.Fatalf("slot state = %v, want empty", manager.slots[0].state)
+	}
+	if !logs.Contains("notify ticket=42") || !logs.Contains("failed: voice unavailable") {
+		t.Fatalf("manager log = %q, want notify failure", logs.String())
+	}
+}
+
+func TestManagerVoiceNotifierClosesOnceOnCancellation(t *testing.T) {
+	client := newFakeManagerClient()
+	client.streams = []*fakeEventStream{newFakeEventStream()}
+	notifier := &recordingVoiceNotifier{}
+	manager := newTestManagerWithVoiceNotifier(t, client, true, notifier)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return client.streamCalls() == 1 })
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := notifier.recordedCloseCalls(); got != 1 {
+		t.Fatalf("notifier Close calls = %d, want 1", got)
+	}
+}
+
+func TestManagerShutdownNotifiesOnlyDoneClosingSlotBeforeNotifierClose(t *testing.T) {
+	store := &fakeManagerStore{}
+	client := newFakeManagerClient()
+	client.streams = []*fakeEventStream{newFakeEventStream()}
+	notifier := &recordingVoiceNotifier{}
+	manager, err := NewManager(ManagerOptions{
+		Store: store, Client: client,
+		Config:        Config{Version: 1, MaxWorkers: 2, PollInterval: time.Hour, VoiceNotifications: true, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
+		VoiceNotifier: notifier,
+		Root:          "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
+		StartupTimeout: 200 * time.Millisecond, ReadyPollInterval: time.Millisecond, Log: io.Discard, ManagerID: "run-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.slots[0] = managerSlot{
+		state: managerSlotClosing, ticket: managerTicket(42), paneID: "ticket-coding-run-a-42", paneCreated: true, done: true,
+	}
+	manager.slots[1] = managerSlot{
+		state: managerSlotWorking, ticket: managerTicket(43), paneID: "ticket-coding-run-a-43", paneCreated: true,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return client.streamCalls() == 1 })
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	wantEvents := []string{"notify:ticket-manager:42:완료", "close"}
+	if got := notifier.recordedEvents(); !reflect.DeepEqual(got, wantEvents) {
+		t.Fatalf("notifier events = %q, want %q", got, wantEvents)
+	}
+	if got := store.requeues(); !reflect.DeepEqual(got, []int64{43}) {
+		t.Fatalf("requeued tickets = %v, want [43]", got)
+	}
+}
+
+func TestNewManagerRequiresVoiceNotifierWhenEnabled(t *testing.T) {
+	_, err := NewManager(ManagerOptions{
+		Store: &fakeManagerStore{}, Client: newFakeManagerClient(),
+		Config: Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour, VoiceNotifications: true, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
+		Root:   "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
+	})
+	if err == nil || err.Error() != "ticket manager voice notifier is required" {
+		t.Fatalf("NewManager() error = %v, want ticket manager voice notifier is required", err)
+	}
+}
+
+func TestNewManagerTrimsVoiceNotificationPrefix(t *testing.T) {
+	manager, err := NewManager(ManagerOptions{
+		Store: &fakeManagerStore{}, Client: newFakeManagerClient(),
+		Config:        Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour, VoiceNotifications: true, VoiceNotificationPrefix: " project-a "},
+		VoiceNotifier: &recordingVoiceNotifier{},
+		Root:          "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.config.VoiceNotificationPrefix; got != "project-a" {
+		t.Fatalf("voice notification prefix = %q, want project-a", got)
+	}
+}
+
 func TestManagerCloseFailureWithRuntimeErrorStatusRetainsCapacity(t *testing.T) {
 	store := &fakeManagerStore{ready: []Ticket{managerTicket(23), managerTicket(24)}}
 	client := newFakeManagerClient()
@@ -716,9 +901,24 @@ func newTestManagerWithTicks(t *testing.T, store *fakeManagerStore, client *fake
 	t.Helper()
 	manager, err := NewManager(ManagerOptions{
 		Store: store, Client: client,
-		Config: Config{Version: 1, MaxWorkers: capacity, PollInterval: time.Hour},
+		Config: Config{Version: 1, MaxWorkers: capacity, PollInterval: time.Hour, VoiceNotifications: false, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
 		Root:   "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
 		StartupTimeout: 200 * time.Millisecond, ReadyPollInterval: time.Millisecond, Tick: ticks, Log: io.Discard, ManagerID: "run-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manager
+}
+
+func newTestManagerWithVoiceNotifier(t *testing.T, client *fakeManagerClient, enabled bool, notifier VoiceNotifier) *Manager {
+	t.Helper()
+	manager, err := NewManager(ManagerOptions{
+		Store: &fakeManagerStore{}, Client: client,
+		Config:        Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour, VoiceNotifications: enabled, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
+		VoiceNotifier: notifier,
+		Root:          "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
+		StartupTimeout: 200 * time.Millisecond, ReadyPollInterval: time.Millisecond, Log: io.Discard, ManagerID: "run-a",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -751,6 +951,49 @@ func waitFor(t *testing.T, condition func() bool) {
 type synchronizedBuffer struct {
 	mu      sync.Mutex
 	builder strings.Builder
+}
+
+type recordingVoiceNotifier struct {
+	mu         sync.Mutex
+	messages   []string
+	events     []string
+	notifyErr  error
+	closeCalls int
+	closeErr   error
+}
+
+func (n *recordingVoiceNotifier) Notify(message string) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.messages = append(n.messages, message)
+	n.events = append(n.events, "notify:"+message)
+	return n.notifyErr
+}
+
+func (n *recordingVoiceNotifier) Close() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.closeCalls++
+	n.events = append(n.events, "close")
+	return n.closeErr
+}
+
+func (n *recordingVoiceNotifier) recordedMessages() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]string(nil), n.messages...)
+}
+
+func (n *recordingVoiceNotifier) recordedCloseCalls() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.closeCalls
+}
+
+func (n *recordingVoiceNotifier) recordedEvents() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]string(nil), n.events...)
 }
 
 func (b *synchronizedBuffer) Write(p []byte) (int, error) {

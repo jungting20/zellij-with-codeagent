@@ -25,16 +25,16 @@ The prefix is trimmed when loaded and must not be empty. The existing configurat
 A focused voice notifier component selects one native backend for the current operating system:
 
 - macOS: `say`
-- Linux: `spd-say`, falling back to `espeak`
-- Windows: Windows PowerShell or PowerShell Core using `System.Speech.Synthesis.SpeechSynthesizer`
+- Linux: `spd-say --wait`, falling back to `espeak`
+- Windows: Windows PowerShell or PowerShell Core using `System.Speech.Synthesis.SpeechSynthesizer`; the complete fixed speech script is passed through UTF-16LE Base64 `-EncodedCommand`
 
-Executable discovery uses direct path lookup and command arguments rather than a shell. This avoids shell interpolation of the configured prefix. If no supported executable is available, notification returns an error for logging and does not affect ticket state.
+Executable discovery uses direct path lookup and command arguments rather than a shell. This avoids shell interpolation of the configured prefix. On Windows, the message is Base64-encoded inside the fixed speech script before the complete script is UTF-16LE Base64-encoded, so arbitrary message content is never parsed as a PowerShell argument or expression. If no supported executable is available, notification returns an error for logging and does not affect ticket state.
 
-The notifier owns a concurrency-safe, unbounded FIFO queue and one speech worker goroutine. `Notify` only appends a message to the queue and returns, so ticket scheduling does not wait for speech playback. The worker starts one speech process, waits for it to exit, and only then dequeues the next message. Concurrent ticket completions therefore produce ordered announcements without overlapping audio or dropping messages because a fixed-size channel is full.
+The notifier owns a concurrency-safe, unbounded FIFO queue and one speech worker goroutine. `Notify` only appends a message to the queue and returns, so ticket scheduling does not wait for speech playback. The worker starts one speech process, waits for it to exit, and only then dequeues the next message. `spd-say --wait` keeps that process alive until Linux playback completes. Concurrent ticket completions therefore produce ordered announcements without overlapping audio or dropping messages because a fixed-size channel is full.
 
 Queue order is the order in which the manager handles completion events; messages are not reordered by ticket number. Backend execution failures are logged by the notifier and the worker continues with the next queued message.
 
-The notifier has an idempotent close operation. Manager shutdown cancels the active speech process, discards queued messages, waits for the worker goroutine to exit, and prevents subsequent enqueue operations. This avoids leaving speech processes or goroutines behind after the ticket manager exits.
+The notifier has an idempotent close operation. Manager shutdown cancels the active speech process, discards queued messages, waits for the worker goroutine to exit, and prevents subsequent enqueue operations. Native process cancellation is normalized to the context cancellation error so expected shutdown is not logged as a speech failure. This avoids leaving speech processes or goroutines behind after the ticket manager exits.
 
 ## Manager Integration
 
@@ -50,7 +50,7 @@ The guarantee is at-most-once per live manager slot. A process crash between pan
 
 Configuration tests cover explicit values, omitted-key defaults, disabling notifications, and rejection of an empty prefix.
 
-Notifier tests cover backend selection and argument construction without invoking host audio. They verify macOS, Linux fallback order, Windows PowerShell selection, unsupported operating systems, and missing executables. Queue tests verify FIFO playback, no overlapping command executions during concurrent notification, continued playback after a command failure, and cancellation plus queue discard on close.
+Notifier tests cover backend selection and argument construction without invoking host audio. They verify macOS, Linux `spd-say --wait` preference and `espeak` fallback, Windows PowerShell selection, safe UTF-16LE Base64 command decoding with arbitrary message content, unsupported operating systems, and missing executables. A cancellable helper process verifies that native shutdown cancellation is not logged while genuine command failures are logged. Queue tests verify FIFO playback, no overlapping command executions during concurrent notification, continued playback after a command failure, cancellation plus queue discard on close, and race-free concurrent `Notify` versus `Close` behavior.
 
 Manager tests cover one notification after a successful close, the exact `{prefix}:{ticket number}:완료` message, no notification while closing fails and retries, no notification when disabled, and notification errors not preventing slot cleanup.
 
