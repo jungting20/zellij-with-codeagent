@@ -1,0 +1,3 @@
+Select model
+Enter to set as default
+Esc to cancel

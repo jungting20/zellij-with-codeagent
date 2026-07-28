@@ -1,0 +1,3 @@
+›
+↑/↓ to scroll · pgup/pgdn to page · home/end to jump · q to quit
+esc/← to edit prev
