@@ -93,6 +93,28 @@ func TestEmbeddedManifests(t *testing.T) {
 	}
 }
 
+func TestCodexWorkingScreenFooterAllowsZellijRightPadding(t *testing.T) {
+	detector, loadErrors := LoadEmbeddedDetector()
+	if len(loadErrors) != 0 {
+		t.Fatalf("LoadEmbeddedDetector() errors = %v, want none", loadErrors)
+	}
+	contents, err := fs.ReadFile(embeddedManifestFixtures, "testdata/codex/working-screen-footer.txt")
+	if err != nil {
+		t.Fatalf("read working fixture: %v", err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(contents), "\n"), "\n")
+	for index := range lines {
+		lines[index] += "        "
+	}
+	detection, err := detector.Detect(KindCodex, DetectionInput{Screen: strings.Join(lines, "\n")})
+	if err != nil {
+		t.Fatalf("Detect(codex) error = %v", err)
+	}
+	if detection.State != StateWorking || detection.RuleID != "screen_working_fallback" {
+		t.Fatalf("detection = state:%q rule:%q, want working/screen_working_fallback", detection.State, detection.RuleID)
+	}
+}
+
 func TestEmbeddedManifestsInvalidKindIsIsolated(t *testing.T) {
 	files := make(fstest.MapFS)
 	for _, name := range embeddedManifestFiles {
