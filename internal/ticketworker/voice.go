@@ -28,6 +28,10 @@ type speechBackend struct {
 
 func (b speechBackend) speak(ctx context.Context, message string) error {
 	err := exec.CommandContext(ctx, b.path, b.args(message)...).Run()
+	return normalizeSpeechError(ctx, err)
+}
+
+func normalizeSpeechError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}

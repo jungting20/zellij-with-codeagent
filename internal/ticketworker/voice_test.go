@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -205,60 +203,50 @@ func decodeUTF16LEBase64(t *testing.T, value string) string {
 	return string(utf16.Decode(units))
 }
 
-func TestSpeechBackendCancellationIsNotLogged(t *testing.T) {
-	readyPath := filepath.Join(t.TempDir(), "ready")
-	backend := speechBackend{
-		path: os.Args[0],
-		args: func(string) []string {
-			return []string{"-test.run=^TestSpeechBackendHelperProcess$", "--", "--speech-backend-helper", readyPath}
-		},
+func TestNormalizeSpeechError(t *testing.T) {
+	processErr := errors.New("speech process failed")
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+		want error
+	}{
+		{name: "canceled context overrides process error", ctx: canceledCtx, want: context.Canceled},
+		{name: "live context preserves process error", ctx: context.Background(), want: processErr},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeSpeechError(tt.ctx, processErr); got != tt.want {
+				t.Fatalf("normalizeSpeechError() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSerialVoiceNotifierCancellationIsNotLogged(t *testing.T) {
 	var log bytes.Buffer
-	notifier := newSerialVoiceNotifier(backend.speak, &log)
-	t.Cleanup(func() { _ = notifier.Close() })
+	started := make(chan struct{})
+	notifier := newSerialVoiceNotifier(func(ctx context.Context, _ string) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}, &log)
 
 	if err := notifier.Notify("cancel me"); err != nil {
 		t.Fatal(err)
 	}
-	waitForFile(t, readyPath)
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for speaker to start")
+	}
 	if err := notifier.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if got := log.String(); got != "" {
 		t.Fatalf("cancellation log = %q, want empty", got)
-	}
-}
-
-func TestSpeechBackendHelperProcess(t *testing.T) {
-	const marker = "--speech-backend-helper"
-	for i, arg := range os.Args {
-		if arg != marker {
-			continue
-		}
-		if i+1 >= len(os.Args) {
-			t.Fatal("helper ready path is missing")
-		}
-		if err := os.WriteFile(os.Args[i+1], []byte("ready"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		time.Sleep(30 * time.Second)
-		return
-	}
-}
-
-func waitForFile(t *testing.T, path string) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if _, err := os.Stat(path); err == nil {
-			return
-		} else if !errors.Is(err, os.ErrNotExist) {
-			t.Fatal(err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for helper file %s", path)
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 
