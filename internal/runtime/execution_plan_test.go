@@ -438,6 +438,41 @@ func TestApplyExecutionPlanRollsBackOnInitialInputFailure(t *testing.T) {
 	}
 }
 
+func TestApplyExecutionPlanReportsCleanupPartialWhenPlanRollbackCloseFails(t *testing.T) {
+	tabID := ZellijTabID(38)
+	backend := &fakeBackend{
+		createTabID: zellij.TabID(tabID),
+		listPanes: []zellij.Pane{
+			{ID: "terminal_38a", TabID: int(tabID), TabName: "partial-plan-rollback"},
+			{ID: "terminal_38b", TabID: int(tabID), TabName: "partial-plan-rollback"},
+		},
+		createIDs: []zellij.PaneID{"terminal_38b"},
+		sendErr:   errors.New("paste failed"),
+		closeErrByPane: map[zellij.PaneID]error{
+			"terminal_38a": errors.New("plan rollback close failed"),
+		},
+	}
+	service := newTestService(backend)
+
+	_, err := service.ApplyExecutionPlan(context.Background(), ApplyExecutionPlanRequest{
+		Session:       "partial-plan-rollback",
+		ZellijSession: "test-session",
+		Tabs: []ExecutionPlanTabSpec{{
+			Name: "partial-plan-rollback",
+			Panes: []ExecutionPlanPaneSpec{
+				{ID: "planner"},
+				{ID: "review", InitialInput: "review the parser"},
+			},
+		}},
+	})
+	if !errors.Is(err, ErrPaneInitializationFailed) {
+		t.Fatalf("ApplyExecutionPlan() error = %v, want %v", err, ErrPaneInitializationFailed)
+	}
+	if !errors.Is(err, ErrCleanupPartial) {
+		t.Fatalf("ApplyExecutionPlan() error = %v, want %v from plan rollback", err, ErrCleanupPartial)
+	}
+}
+
 func TestApplyExecutionPlanRollsBackAllPanesOnRemainingInitialInputFailure(t *testing.T) {
 	tabID := ZellijTabID(34)
 	backend := &fakeBackend{
@@ -641,5 +676,26 @@ func TestRollbackExecutionPlanDoesNotCloseOrRemoveReusedPane(t *testing.T) {
 	}
 	if current.Generation != newRecord.Generation || current.ZellijPaneID != "terminal_new" {
 		t.Fatalf("current pane = %#v, want untouched replacement", current)
+	}
+}
+
+func TestCollectExecutionPlanPaneResultsPreservesLaterCleanupPartial(t *testing.T) {
+	results := make(chan executionPlanPaneResult, 2)
+	results <- executionPlanPaneResult{
+		index: 0,
+		err:   errors.Join(ErrPaneInitializationFailed, errors.New("safe initialization failure")),
+	}
+	results <- executionPlanPaneResult{
+		index: 1,
+		err:   errors.Join(ErrPaneInitializationFailed, ErrCleanupPartial, errors.New("partial cleanup failure")),
+	}
+	close(results)
+
+	_, err := collectExecutionPlanPaneResults(2, results)
+	if !errors.Is(err, ErrPaneInitializationFailed) {
+		t.Fatalf("collectExecutionPlanPaneResults() error = %v, want %v", err, ErrPaneInitializationFailed)
+	}
+	if !errors.Is(err, ErrCleanupPartial) {
+		t.Fatalf("collectExecutionPlanPaneResults() error = %v, want later %v", err, ErrCleanupPartial)
 	}
 }

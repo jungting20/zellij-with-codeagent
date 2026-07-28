@@ -97,8 +97,8 @@ func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlan
 			InitialInputReadyText: firstSpec.InitialInputReadyText,
 		})
 		if err != nil {
-			_ = s.rollbackExecutionPlan(ctx, createdAll)
-			return ApplyExecutionPlanResponse{}, fmt.Errorf("initialize pane %q: %w", firstSpec.ID, err)
+			cause := fmt.Errorf("initialize pane %q: %w", firstSpec.ID, err)
+			return ApplyExecutionPlanResponse{}, errors.Join(cause, s.rollbackExecutionPlan(ctx, createdAll))
 		}
 		tabID = response.Pane.ZellijTabID
 		createdFirst := createdExecutionPlanPane{pane: response.Pane, record: response.record}
@@ -107,13 +107,12 @@ func (s *Service) ApplyExecutionPlan(ctx context.Context, req ApplyExecutionPlan
 
 		if len(tabSpec.Panes) > 1 {
 			if tabID == nil {
-				_ = s.rollbackExecutionPlan(ctx, createdAll)
-				return ApplyExecutionPlanResponse{}, fmt.Errorf("%w: first pane missing zellij tab id in tab %q", ErrInvalidExecutionPlan, tabName)
+				cause := fmt.Errorf("%w: first pane missing zellij tab id in tab %q", ErrInvalidExecutionPlan, tabName)
+				return ApplyExecutionPlanResponse{}, errors.Join(cause, s.rollbackExecutionPlan(ctx, createdAll))
 			}
 			remaining, err := s.createRemainingExecutionPlanTabPanes(ctx, req.ZellijSession, taskID, tabName, *tabID, tabSpec.Panes[1:])
 			if err != nil {
-				_ = s.rollbackExecutionPlan(ctx, append(createdAll, remaining...))
-				return ApplyExecutionPlanResponse{}, err
+				return ApplyExecutionPlanResponse{}, errors.Join(err, s.rollbackExecutionPlan(ctx, append(createdAll, remaining...)))
 			}
 			for _, created := range remaining {
 				createdTabPanes = append(createdTabPanes, created.pane)
@@ -177,20 +176,22 @@ func (s *Service) createRemainingExecutionPlanTabPanes(ctx context.Context, zell
 	wg.Wait()
 	close(results)
 
-	panes := make([]createdExecutionPlanPane, len(specs))
-	created := make([]createdExecutionPlanPane, 0, len(specs))
-	var firstErr error
+	return collectExecutionPlanPaneResults(len(specs), results)
+}
+
+func collectExecutionPlanPaneResults(count int, results <-chan executionPlanPaneResult) ([]createdExecutionPlanPane, error) {
+	panes := make([]createdExecutionPlanPane, count)
+	created := make([]createdExecutionPlanPane, 0, count)
+	var resultErr error
 	for result := range results {
 		if result.created.pane.ID != "" {
 			panes[result.index] = result.created
 			created = append(created, result.created)
 		}
-		if result.err != nil && firstErr == nil {
-			firstErr = result.err
-		}
+		resultErr = errors.Join(resultErr, result.err)
 	}
-	if firstErr != nil {
-		return created, firstErr
+	if resultErr != nil {
+		return created, resultErr
 	}
 	return panes, nil
 }
@@ -247,5 +248,8 @@ func (s *Service) rollbackExecutionPlan(ctx context.Context, created []createdEx
 	for _, createdPane := range created {
 		rollbackErr = errors.Join(rollbackErr, s.cleanupCreatedPane(rollbackCtx, createdPane.record))
 	}
-	return rollbackErr
+	if rollbackErr == nil {
+		return nil
+	}
+	return errors.Join(ErrCleanupPartial, rollbackErr)
 }

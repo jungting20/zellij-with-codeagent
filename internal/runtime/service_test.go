@@ -150,6 +150,9 @@ func TestCreatePaneIdenticalRetryDoesNotRepeatUnknownCleanup(t *testing.T) {
 	if !errors.Is(firstErr, ErrCleanupPartial) {
 		t.Fatalf("first CreatePane() error = %v, want %v", firstErr, ErrCleanupPartial)
 	}
+	if _, err := service.registry.RemovePane("pane-a"); err != nil {
+		t.Fatalf("RemovePane(existing) error = %v", err)
+	}
 	_, secondErr := service.CreatePane(context.Background(), req)
 	if !errors.Is(secondErr, ErrCleanupPartial) {
 		t.Fatalf("CreatePane() retry error = %v, want cached %v", secondErr, ErrCleanupPartial)
@@ -159,6 +162,51 @@ func TestCreatePaneIdenticalRetryDoesNotRepeatUnknownCleanup(t *testing.T) {
 	backend.mu.Unlock()
 	if createCalls != 1 {
 		t.Fatalf("backend CreatePane calls = %d, want 1", createCalls)
+	}
+}
+
+func TestCreatePaneIdenticalRetryRunsAgainAfterPartialCleanupRecoveredByClosePane(t *testing.T) {
+	backend := &fakeBackend{
+		createIDs: []zellij.PaneID{"terminal_leaked", "terminal_retry"},
+		sendErr:   errors.New("paste failed"),
+		closeErr:  errors.New("close failed"),
+	}
+	service := newTestService(backend)
+	req := CreatePaneRequest{
+		ID:            "pane-a",
+		ZellijSession: "session-a",
+		TaskID:        "task-a",
+		InitialInput:  "implement ticket\n",
+	}
+
+	_, firstErr := service.CreatePane(context.Background(), req)
+	if !errors.Is(firstErr, ErrCleanupPartial) {
+		t.Fatalf("first CreatePane() error = %v, want %v", firstErr, ErrCleanupPartial)
+	}
+	backend.mu.Lock()
+	backend.sendErr = nil
+	backend.closeErr = nil
+	backend.mu.Unlock()
+	closed, err := service.ClosePane(context.Background(), ClosePaneRequest{PaneID: "pane-a"})
+	if err != nil {
+		t.Fatalf("ClosePane() recovery error = %v", err)
+	}
+	if closed.Pane.Status != PaneStatusClosed {
+		t.Fatalf("ClosePane() recovery status = %q, want %q", closed.Pane.Status, PaneStatusClosed)
+	}
+
+	retried, err := service.CreatePane(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreatePane() retry error = %v", err)
+	}
+	if retried.Pane.ID != "pane-a" || retried.Pane.ZellijPaneID != "terminal_retry" {
+		t.Fatalf("CreatePane() retry pane = %#v, want pane-a/terminal_retry", retried.Pane)
+	}
+	backend.mu.Lock()
+	createCalls := len(backend.createRequests)
+	backend.mu.Unlock()
+	if createCalls != 2 {
+		t.Fatalf("backend CreatePane calls = %d, want 2", createCalls)
 	}
 }
 

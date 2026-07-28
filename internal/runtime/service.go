@@ -37,10 +37,11 @@ type Service struct {
 }
 
 type createPaneCall struct {
-	request  CreatePaneRequest
-	done     chan struct{}
-	response CreatePaneResponse
-	err      error
+	request       CreatePaneRequest
+	done          chan struct{}
+	response      CreatePaneResponse
+	createdRecord registry.PaneRecord
+	err           error
 }
 
 func NewService(opts Options) *Service {
@@ -123,11 +124,13 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 			cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			cleanupErr := s.cleanupCreatedPane(cleanupCtx, response.record)
 			cancelCleanup()
-			response = CreatePaneResponse{}
 			createErr = paneInitializationError(err, cleanupErr)
 		}
 	}
 	s.finishCreatePane(call, response, createErr)
+	if createErr != nil {
+		return CreatePaneResponse{}, createErr
+	}
 	return response, createErr
 }
 
@@ -138,11 +141,20 @@ func (s *Service) beginCreatePane(req CreatePaneRequest) (*createPaneCall, bool,
 	if existing, ok := s.creates[id]; ok {
 		select {
 		case <-existing.done:
-			if existing.err == nil {
-				record, recordErr := s.registry.GetPane(registry.PaneID(id))
+			record, recordErr := s.registry.GetPane(registry.PaneID(id))
+			switch {
+			case existing.err == nil:
 				if errors.Is(recordErr, registry.ErrNotFound) || (recordErr == nil && record.Status != registry.PaneStatusStarting && record.Status != registry.PaneStatusRunning) {
 					delete(s.creates, id)
 					break
+				}
+			case errors.Is(existing.err, ErrCleanupPartial):
+				if recordErr == nil && samePaneGeneration(existing.createdRecord, record) && isTerminalStatus(record.Status) {
+					_, removeErr := s.registry.RemovePaneGeneration(record.ID, record.Generation)
+					if removeErr == nil || errors.Is(removeErr, registry.ErrNotFound) {
+						delete(s.creates, id)
+						break
+					}
 				}
 			}
 		default:
@@ -161,13 +173,25 @@ func (s *Service) beginCreatePane(req CreatePaneRequest) (*createPaneCall, bool,
 
 func (s *Service) finishCreatePane(call *createPaneCall, response CreatePaneResponse, err error) {
 	s.createMu.Lock()
-	call.response = response
+	if response.record.ID != "" {
+		call.createdRecord = response.record
+	}
+	if err == nil {
+		call.response = response
+	}
 	call.err = err
 	close(call.done)
 	if err != nil && !errors.Is(err, ErrCleanupPartial) {
 		delete(s.creates, PaneID(call.request.ID))
 	}
 	s.createMu.Unlock()
+}
+
+func samePaneGeneration(want, got registry.PaneRecord) bool {
+	return want.ID != "" &&
+		want.ID == got.ID &&
+		want.Generation == got.Generation &&
+		want.ZellijPaneID == got.ZellijPaneID
 }
 
 func (s *Service) createPaneOnce(ctx context.Context, req CreatePaneRequest, id PaneID) (CreatePaneResponse, error) {
