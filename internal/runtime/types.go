@@ -246,13 +246,18 @@ type RecentEventsRequest struct {
 }
 
 type EventSummary struct {
-	Type         eventbus.EventType
-	PaneID       PaneID
-	TaskID       TaskID
-	AgentID      AgentID
-	ZellijPaneID ZellijPaneID
-	Message      string
-	Time         time.Time
+	Type          eventbus.EventType
+	PaneID        PaneID
+	TaskID        TaskID
+	AgentID       AgentID
+	ZellijPaneID  ZellijPaneID
+	AgentKind     string
+	PreviousState string
+	AgentState    string
+	MatchedRule   string
+	Reason        string
+	Message       string
+	Time          time.Time
 }
 
 type RecentEventsResponse struct {

@@ -3,12 +3,53 @@ package transport
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
 	"zellij-with-codeagent/internal/eventbus"
 	rt "zellij-with-codeagent/internal/runtime"
 )
+
+func TestClientAgentMethodsUseExactPathsMethodsAndEscaping(t *testing.T) {
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.EscapedPath())
+		w.Header().Set("Content-Type", "application/json")
+		switch len(calls) {
+		case 1, 3:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"agent":{"agent":{"id":"agent/1","kind":"codex","pane_id":"agent/1","state":"unknown","created_at":"1970-01-01T00:00:10Z","state_changed_at":"1970-01-01T00:00:20Z"},"pane":{"id":"agent/1","status":"running","created_at":"1970-01-01T00:00:10Z","updated_at":"1970-01-01T00:00:30Z"}}}`))
+		case 2:
+			_, _ = w.Write([]byte(`{"agents":[]}`))
+		}
+	}))
+	defer server.Close()
+	client := NewClient(ClientOptions{})
+	client.baseURL = server.URL
+	client.http = server.Client()
+
+	request := StartAgentRequest{Kind: "codex", CWD: "/workspace/project", Args: []string{"--model", "gpt-5"}, SourceSession: "physical-a", SourceZellijPaneID: "terminal_2"}
+	started, err := client.StartAgent(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Agent.Agent.ID != "agent/1" || !started.Agent.Agent.StateChangedAt.Equal(time.Unix(20, 0)) || !started.Agent.Pane.UpdatedAt.Equal(time.Unix(30, 0)) {
+		t.Fatalf("StartAgent() = %#v", started)
+	}
+	if _, err := client.ListAgents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.FocusAgent(context.Background(), "agent/1", FocusAgentRequest{SourceSession: "physical-a", SourceZellijPaneID: "terminal_2"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"POST /v1/agents", "GET /v1/agents", "POST /v1/agents/agent%2F1/focus"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
 
 func TestClientCreatePaneOverUnixSocket(t *testing.T) {
 	service := newFakeRuntimeService()

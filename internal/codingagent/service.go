@@ -264,6 +264,38 @@ func (s *Service) FocusAgent(ctx context.Context, request FocusAgentRequest) (Fo
 	return FocusAgentResponse{Agent: AgentWithPane{Agent: record, Pane: response.Pane}}, nil
 }
 
+func (s *Service) ListSessions(ctx context.Context) ([]runtime.SessionRecord, error) {
+	inspector, ok := s.RuntimeService.(runtime.SessionInspectionService)
+	if !ok {
+		return nil, errors.New("coding agent runtime does not support session inspection")
+	}
+	return inspector.ListSessions(ctx)
+}
+
+func (s *Service) GetSession(ctx context.Context, id runtime.SessionID) (runtime.SessionRecord, error) {
+	inspector, ok := s.RuntimeService.(runtime.SessionInspectionService)
+	if !ok {
+		return runtime.SessionRecord{}, errors.New("coding agent runtime does not support session inspection")
+	}
+	return inspector.GetSession(ctx, id)
+}
+
+func (s *Service) ListTabs(ctx context.Context, sessionID runtime.SessionID) ([]runtime.TabRecord, error) {
+	inspector, ok := s.RuntimeService.(runtime.SessionInspectionService)
+	if !ok {
+		return nil, errors.New("coding agent runtime does not support session inspection")
+	}
+	return inspector.ListTabs(ctx, sessionID)
+}
+
+func (s *Service) GetTab(ctx context.Context, sessionID runtime.SessionID, tabID runtime.TabID) (runtime.TabRecord, error) {
+	inspector, ok := s.RuntimeService.(runtime.SessionInspectionService)
+	if !ok {
+		return runtime.TabRecord{}, errors.New("coding agent runtime does not support session inspection")
+	}
+	return inspector.GetTab(ctx, sessionID, tabID)
+}
+
 func (s *Service) registerStart(record Record) (Record, *agentOwnership, error) {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()

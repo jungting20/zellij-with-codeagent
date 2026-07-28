@@ -9,12 +9,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"zellij-with-codeagent/internal/cli"
+	"zellij-with-codeagent/internal/codingagent"
+	"zellij-with-codeagent/internal/eventbus"
 	"zellij-with-codeagent/internal/registry"
 	agentruntime "zellij-with-codeagent/internal/runtime"
 	"zellij-with-codeagent/internal/transport"
@@ -22,6 +25,35 @@ import (
 )
 
 const version = "dev"
+
+const defaultReconcileInterval = 2 * time.Second
+
+type daemonBackend interface {
+	zellij.Backend
+	zellij.SessionSwitcher
+}
+
+type reconcileTicker interface {
+	C() <-chan time.Time
+	Stop()
+}
+
+type timeTicker struct {
+	*time.Ticker
+}
+
+func (t timeTicker) C() <-chan time.Time { return t.Ticker.C }
+
+var (
+	newDaemonEventBus           = eventbus.New
+	newDaemonStore              = codingagent.NewMemoryStore
+	loadDaemonDetector          = codingagent.LoadEmbeddedDetector
+	newDaemonMonitor            = codingagent.NewMonitor
+	newDaemonBackend            = func() daemonBackend { return zellij.NewBackend(zellij.Options{}) }
+	newDaemonSubscriptionRunner = func() agentruntime.SubscriptionRunner { return agentruntime.ExecSubscriptionRunner{} }
+	newDaemonRuntimeService     = agentruntime.NewService
+	newDaemonAgentService       = codingagent.NewService
+)
 
 var requestDaemonShutdown = func(ctx context.Context, socketPath string, timeout time.Duration) error {
 	client := transport.NewClient(transport.ClientOptions{SocketPath: socketPath, Timeout: timeout})
@@ -41,7 +73,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		_ = newRuntimeService()
+		if _, err := newRuntimeService(); err != nil {
+			fmt.Fprintf(stderr, "construct daemon service: %v\n", err)
+			return 1
+		}
 		fmt.Fprintln(stdout, "agentd daemon skeleton")
 		return 0
 	}
@@ -58,8 +93,13 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		if !ok {
 			return 2
 		}
+		service, err := newRuntimeService()
+		if err != nil {
+			fmt.Fprintf(stderr, "construct daemon service: %v\n", err)
+			return 1
+		}
 		server, err := transport.NewServer(transport.ServerOptions{
-			Service:    newRuntimeService(),
+			Service:    service,
 			SocketPath: socketPath,
 			Version:    version,
 		})
@@ -68,8 +108,21 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) in
 			return 1
 		}
 		fmt.Fprintf(stdout, "agentd serving on unix socket %s\n", socketPath)
-		if err := server.ListenAndServe(ctx); err != nil && err != context.Canceled && err != context.DeadlineExceeded {
-			fmt.Fprintf(stderr, "agentd serve failed: %v\n", err)
+		serveCtx, cancelServe := context.WithCancel(ctx)
+		reconcileDone := make(chan struct{})
+		go func() {
+			defer close(reconcileDone)
+			runReconcileLoop(serveCtx, service, defaultReconcileInterval, func(interval time.Duration) reconcileTicker {
+				return timeTicker{Ticker: time.NewTicker(interval)}
+			}, func(err error) {
+				fmt.Fprintf(stderr, "agentd reconcile failed: %v\n", err)
+			})
+		}()
+		serveErr := server.ListenAndServe(serveCtx)
+		cancelServe()
+		<-reconcileDone
+		if serveErr != nil && serveErr != context.Canceled && serveErr != context.DeadlineExceeded {
+			fmt.Fprintf(stderr, "agentd serve failed: %v\n", serveErr)
 			return 1
 		}
 		return 0
@@ -257,10 +310,94 @@ func validateLegacyDaemonCommand(command, socketPath string) error {
 	return nil
 }
 
-func newRuntimeService() *agentruntime.Service {
-	return agentruntime.NewService(agentruntime.Options{
-		Registry:           registry.New(),
-		Backend:            zellij.NewBackend(zellij.Options{}),
-		SubscriptionRunner: agentruntime.ExecSubscriptionRunner{},
+func newRuntimeService() (transport.ServerRuntime, error) {
+	bus := newDaemonEventBus()
+	if bus == nil {
+		return nil, errors.New("construct daemon service: event bus is nil")
+	}
+	store := newDaemonStore(time.Now)
+	if isNilDaemonDependency(store) {
+		return nil, errors.New("construct daemon service: agent store is nil")
+	}
+	detector, manifestErrors := loadDaemonDetector()
+	if detector == nil {
+		return nil, errors.New("construct daemon service: agent detector is nil")
+	}
+	monitor := newDaemonMonitor(codingagent.MonitorOptions{
+		Store:          store,
+		Detector:       detector,
+		DetectorErrors: manifestErrors,
+		EventBus:       bus,
 	})
+	if monitor == nil {
+		return nil, errors.New("construct daemon service: agent monitor is nil")
+	}
+	backend := newDaemonBackend()
+	if isNilDaemonDependency(backend) {
+		return nil, errors.New("construct daemon service: zellij backend is nil")
+	}
+	runner := newDaemonSubscriptionRunner()
+	if isNilDaemonDependency(runner) {
+		return nil, errors.New("construct daemon service: subscription runner is nil")
+	}
+	runtimeService := newDaemonRuntimeService(agentruntime.Options{
+		Registry:           registry.New(),
+		Backend:            backend,
+		SessionSwitcher:    backend,
+		EventBus:           bus,
+		SubscriptionRunner: runner,
+		PaneObserver:       monitor,
+	})
+	if runtimeService == nil {
+		return nil, errors.New("construct daemon service: runtime service is nil")
+	}
+	service := newDaemonAgentService(codingagent.ServiceOptions{
+		RuntimeService:   runtimeService,
+		Store:            store,
+		LifecycleMonitor: monitor,
+	})
+	if service == nil {
+		return nil, errors.New("construct daemon service: coding agent service is nil")
+	}
+	return service, nil
+}
+
+func isNilDaemonDependency(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice, reflect.UnsafePointer:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}
+
+func runReconcileLoop(
+	ctx context.Context,
+	service agentruntime.ReconciliationService,
+	interval time.Duration,
+	newTicker func(time.Duration) reconcileTicker,
+	reportError func(error),
+) {
+	if service == nil || newTicker == nil || interval <= 0 {
+		return
+	}
+	ticker := newTicker(interval)
+	if ticker == nil {
+		return
+	}
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C():
+			if _, err := service.Reconcile(ctx, agentruntime.ReconcileRequest{}); err != nil && reportError != nil {
+				reportError(err)
+			}
+		}
+	}
 }

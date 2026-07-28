@@ -15,9 +15,104 @@ import (
 	"testing"
 	"time"
 
+	"zellij-with-codeagent/internal/codingagent"
 	"zellij-with-codeagent/internal/eventbus"
 	rt "zellij-with-codeagent/internal/runtime"
 )
+
+func TestServerAgentRoutes(t *testing.T) {
+	service := newFakeRuntimeService()
+	server := newTestServer(t, service)
+
+	start := httptest.NewRecorder()
+	server.ServeHTTP(start, httptest.NewRequest(http.MethodPost, "/v1/agents", strings.NewReader(`{"kind":"codex","cwd":"/workspace/project","args":["--model","gpt-5"],"source_session":"physical-a","source_zellij_pane_id":"terminal_2"}`)))
+	if start.Code != http.StatusCreated {
+		t.Fatalf("start status = %d, want 201; body=%s", start.Code, start.Body.String())
+	}
+	if service.agentStartReq.Kind != codingagent.KindCodex || service.agentStartReq.CWD != "/workspace/project" || service.agentStartReq.SourceZellijSession != "physical-a" || service.agentStartReq.SourceZellijPaneID != "terminal_2" {
+		t.Fatalf("StartAgent request = %#v", service.agentStartReq)
+	}
+
+	list := httptest.NewRecorder()
+	server.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/v1/agents", nil))
+	if list.Code != http.StatusOK || service.agentListCalls != 1 {
+		t.Fatalf("list status=%d calls=%d body=%s", list.Code, service.agentListCalls, list.Body.String())
+	}
+
+	focus := httptest.NewRecorder()
+	server.ServeHTTP(focus, httptest.NewRequest(http.MethodPost, "/v1/agents/agent%2F1/focus", strings.NewReader(`{"source_session":"physical-a","source_zellij_pane_id":"terminal_2"}`)))
+	if focus.Code != http.StatusOK {
+		t.Fatalf("focus status = %d, want 200; body=%s", focus.Code, focus.Body.String())
+	}
+	if service.agentFocusReq.AgentID != "agent/1" || service.agentFocusReq.SourceZellijSession != "physical-a" || service.agentFocusReq.SourceZellijPaneID != "terminal_2" {
+		t.Fatalf("FocusAgent request = %#v", service.agentFocusReq)
+	}
+}
+
+func TestServerAgentRoutesRejectInvalidMethodShapeAndJSON(t *testing.T) {
+	tests := []struct {
+		name, method, path, body string
+		wantStatus               int
+	}{
+		{name: "collection put", method: http.MethodPut, path: "/v1/agents", wantStatus: http.StatusMethodNotAllowed},
+		{name: "focus get", method: http.MethodGet, path: "/v1/agents/agent-1/focus", wantStatus: http.StatusMethodNotAllowed},
+		{name: "unknown action", method: http.MethodPost, path: "/v1/agents/agent-1/stop", body: `{}`, wantStatus: http.StatusNotFound},
+		{name: "extra suffix", method: http.MethodPost, path: "/v1/agents/agent-1/focus/extra", body: `{}`, wantStatus: http.StatusBadRequest},
+		{name: "malformed start", method: http.MethodPost, path: "/v1/agents", body: `{`, wantStatus: http.StatusBadRequest},
+		{name: "malformed focus", method: http.MethodPost, path: "/v1/agents/agent-1/focus", body: `{`, wantStatus: http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := newFakeRuntimeService()
+			server := newTestServer(t, service)
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body)))
+			if response.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, tt.wantStatus, response.Body.String())
+			}
+			if tt.method == http.MethodGet && strings.Contains(tt.path, "/focus") && service.agentFocusCalls != 0 {
+				t.Fatal("GET focus dispatched to service")
+			}
+		})
+	}
+}
+
+func TestServerAgentErrorsMapToStableHTTPResponses(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   ErrorCode
+	}{
+		{name: "not found", err: fmt.Errorf("lookup: %w", codingagent.ErrNotFound), wantStatus: http.StatusNotFound, wantCode: CodeNotFound},
+		{name: "invalid kind", err: fmt.Errorf("validate: %w", codingagent.ErrInvalidAgentKind), wantStatus: http.StatusBadRequest, wantCode: CodeBadRequest},
+		{name: "invalid cwd", err: fmt.Errorf("validate: %w", codingagent.ErrInvalidAgentCWD), wantStatus: http.StatusBadRequest, wantCode: CodeBadRequest},
+		{name: "source required", err: fmt.Errorf("validate: %w", codingagent.ErrAgentSourceRequired), wantStatus: http.StatusBadRequest, wantCode: CodeBadRequest},
+		{name: "internal", err: errors.New("backend unavailable"), wantStatus: http.StatusInternalServerError, wantCode: CodeRuntimeError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := newFakeRuntimeService()
+			service.agentStartErr = tt.err
+			server := newTestServer(t, service)
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/agents", strings.NewReader(`{"kind":"codex","cwd":"/tmp","source_session":"physical-a","source_zellij_pane_id":"terminal_2"}`)))
+			if response.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, tt.wantStatus, response.Body.String())
+			}
+			var decoded ErrorResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Error.Code != tt.wantCode {
+				t.Fatalf("code = %q, want %q", decoded.Error.Code, tt.wantCode)
+			}
+			if strings.Contains(decoded.Error.Message, "codingagent.") || strings.Contains(decoded.Error.Message, "*codingagent") {
+				t.Fatalf("error leaks Go type name: %q", decoded.Error.Message)
+			}
+		})
+	}
+}
 
 func TestServerCreatePane(t *testing.T) {
 	service := newFakeRuntimeService()
@@ -519,8 +614,55 @@ type fakeRuntimeService struct {
 	markerCanceled  chan struct{}
 	closeReq        rt.ClosePaneRequest
 	closeErr        error
+	agentStartReq   codingagent.StartAgentRequest
+	agentStartErr   error
+	agentListCalls  int
+	agentListErr    error
+	agentFocusReq   codingagent.FocusAgentRequest
+	agentFocusCalls int
+	agentFocusErr   error
 
 	subs []chan eventbus.Event
+}
+
+func (f *fakeRuntimeService) StartAgent(_ context.Context, req codingagent.StartAgentRequest) (codingagent.StartAgentResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.agentStartReq = req
+	if f.agentStartErr != nil {
+		return codingagent.StartAgentResponse{}, f.agentStartErr
+	}
+	return fakeAgentResponse(req.Kind, "agent-1"), nil
+}
+
+func (f *fakeRuntimeService) ListAgents(context.Context) (codingagent.ListAgentsResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.agentListCalls++
+	if f.agentListErr != nil {
+		return codingagent.ListAgentsResponse{}, f.agentListErr
+	}
+	response := fakeAgentResponse(codingagent.KindCodex, "agent-1")
+	return codingagent.ListAgentsResponse{Agents: []codingagent.AgentWithPane{response.Agent}}, nil
+}
+
+func (f *fakeRuntimeService) FocusAgent(_ context.Context, req codingagent.FocusAgentRequest) (codingagent.FocusAgentResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.agentFocusCalls++
+	f.agentFocusReq = req
+	if f.agentFocusErr != nil {
+		return codingagent.FocusAgentResponse{}, f.agentFocusErr
+	}
+	return codingagent.FocusAgentResponse(fakeAgentResponse(codingagent.KindCodex, req.AgentID)), nil
+}
+
+func fakeAgentResponse(kind codingagent.Kind, id codingagent.ID) codingagent.StartAgentResponse {
+	createdAt := time.Unix(10, 0)
+	return codingagent.StartAgentResponse{Agent: codingagent.AgentWithPane{
+		Agent: codingagent.Record{ID: id, Kind: kind, PaneID: rt.PaneID(id), State: codingagent.StateUnknown, CreatedAt: createdAt, StateChangedAt: time.Unix(20, 0)},
+		Pane:  rt.Pane{ID: rt.PaneID(id), ZellijPaneID: "terminal_7", Status: rt.PaneStatusRunning, CreatedAt: createdAt, UpdatedAt: time.Unix(30, 0)},
+	}}
 }
 
 func newFakeRuntimeService() *fakeRuntimeService {
