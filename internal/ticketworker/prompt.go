@@ -35,7 +35,9 @@ func RenderTicketPrompt(ticket Ticket) (string, string, error) {
 func containsExactLine(output, marker string) bool {
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	for scanner.Scan() {
-		if strings.TrimSpace(scanner.Text()) == marker {
+		line := strings.TrimSpace(scanner.Text())
+		line = strings.TrimSpace(strings.TrimPrefix(line, "• "))
+		if line == marker {
 			return true
 		}
 	}

@@ -56,3 +56,25 @@ func TestRenderTicketPromptRejectsInvalidStoredPrompt(t *testing.T) {
 		}
 	}
 }
+
+func TestContainsExactLineAcceptsCodexAnswerBullet(t *testing.T) {
+	marker := "ZELLIJ_AGENT_TICKET_DONE 3"
+	output := "Hello World 3\n\n• ZELLIJ_AGENT_TICKET_DONE 3\n"
+
+	if !containsExactLine(output, marker) {
+		t.Fatalf("containsExactLine(%q, %q) = false, want true", output, marker)
+	}
+}
+
+func TestContainsExactLineRejectsUnknownMarkerPrefixes(t *testing.T) {
+	marker := "ZELLIJ_AGENT_TICKET_DONE 3"
+	for _, output := range []string{
+		"prefix ZELLIJ_AGENT_TICKET_DONE 3",
+		"> ZELLIJ_AGENT_TICKET_DONE 3",
+		"• prefix ZELLIJ_AGENT_TICKET_DONE 3",
+	} {
+		if containsExactLine(output, marker) {
+			t.Fatalf("containsExactLine(%q, %q) = true, want false", output, marker)
+		}
+	}
+}
