@@ -72,7 +72,16 @@ func (m *Monitor) PaneOpened(pane registry.PaneRecord) {
 	if !sameMonitoredRecord(entry, record) || pane.Generation <= entry.paneGeneration {
 		return
 	}
+	m.stopTimersLocked(entry)
+	entry.latestInput = DetectionInput{}
+	entry.hasInput = false
+	m.nextToken++
+	entry.token = m.nextToken
 	entry.paneGeneration = pane.Generation
+	token := entry.token
+	entry.graceTimer = m.opts.AfterFunc(startupGrace, func() {
+		m.finishGrace(record.ID, token)
+	})
 }
 
 var _ runtime.PaneObserver = (*Monitor)(nil)
@@ -122,10 +131,6 @@ func (m *Monitor) Start(record Record) error {
 	m.nextToken++
 	entry := &monitoredAgent{record: stored, token: m.nextToken}
 	m.monitoring[record.ID] = entry
-	token := entry.token
-	entry.graceTimer = m.opts.AfterFunc(startupGrace, func() {
-		m.finishGrace(record.ID, token)
-	})
 	return nil
 }
 

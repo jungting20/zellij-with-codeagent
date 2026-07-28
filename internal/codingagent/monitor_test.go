@@ -246,6 +246,66 @@ func TestMonitorIgnoresObservationsUntilPaneGenerationIsOpened(t *testing.T) {
 	}
 }
 
+func TestMonitorGraceStartsWhenPaneGenerationOpensAfterSlowCreate(t *testing.T) {
+	f := newMonitorFixture(t)
+	f.monitor.Stop(f.record.ID)
+	if err := f.monitor.Start(f.record); err != nil {
+		t.Fatalf("Monitor.Start() error = %v", err)
+	}
+
+	f.scheduler.Advance(10 * time.Second)
+	f.monitor.PaneOpened(f.pane)
+	f.monitor.PaneOutput(f.pane, "WORK")
+
+	f.scheduler.Advance(startupGrace - time.Nanosecond)
+	if got := f.state(t).State; got != StateUnknown {
+		t.Fatalf("state during post-open grace = %q, want unknown", got)
+	}
+	f.scheduler.Advance(time.Nanosecond)
+	if got := f.state(t).State; got != StateWorking {
+		t.Fatalf("state at post-open grace expiry = %q, want working", got)
+	}
+}
+
+func TestMonitorNewGenerationOpenInvalidatesOldGraceAndCachedInput(t *testing.T) {
+	f := newMonitorFixture(t)
+	f.monitor.PaneOutput(f.pane, "WORK")
+	f.monitor.mu.Lock()
+	staleGraceCallback := f.monitor.monitoring[f.record.ID].graceTimer.(*fakeMonitorTimer).fn
+	f.monitor.mu.Unlock()
+
+	newPane := f.pane
+	newPane.Generation++
+	f.monitor.PaneOpened(newPane)
+	staleGraceCallback()
+	f.scheduler.Advance(startupGrace)
+
+	if got := f.state(t).State; got != StateUnknown {
+		t.Fatalf("state after stale generation grace = %q, want unknown with old cache discarded", got)
+	}
+}
+
+func TestMonitorSameOrOlderPaneOpenDoesNotRestartGrace(t *testing.T) {
+	f := newMonitorFixture(t)
+	f.monitor.Stop(f.record.ID)
+	if err := f.monitor.Start(f.record); err != nil {
+		t.Fatalf("Monitor.Start() error = %v", err)
+	}
+	newPane := f.pane
+	newPane.Generation = 2
+	f.monitor.PaneOpened(newPane)
+	f.monitor.PaneOutput(newPane, "WORK")
+	f.scheduler.Advance(2 * time.Second)
+
+	f.monitor.PaneOpened(newPane)
+	f.monitor.PaneOpened(f.pane)
+	f.scheduler.Advance(time.Second)
+
+	if got := f.state(t).State; got != StateWorking {
+		t.Fatalf("state after original grace expiry = %q, want working without restart", got)
+	}
+}
+
 func TestMonitorRejectsLateOldGenerationOutputAndErrorAfterPaneReuse(t *testing.T) {
 	f := newMonitorFixture(t)
 	oldPane := f.pane
