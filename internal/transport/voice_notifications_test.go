@@ -54,6 +54,31 @@ func TestVoiceNotificationDuplicate(t *testing.T) {
 	}
 }
 
+func TestVoiceNotificationRejectsUnknownServiceStatus(t *testing.T) {
+	service := &fakeVoiceNotificationService{response: VoiceNotificationResponse{Status: "typo"}}
+	server := newVoiceTestServer(t, service)
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/voice-notifications", strings.NewReader(validVoiceNotificationJSON(t))))
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusInternalServerError, recorder.Body.String())
+	}
+	assertVoiceAPIError(t, recorder, CodeRuntimeError, false)
+}
+
+func TestVoiceNotificationRejectsUnknownJSONField(t *testing.T) {
+	server := newVoiceTestServer(t, &fakeVoiceNotificationService{response: VoiceNotificationResponse{Status: "queued"}})
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/voice-notifications", strings.NewReader(`{"request_id":"request-1","prefix":"ticket-manager","ticket_id":42,"unexpected":true}`)))
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+	assertVoiceAPIError(t, recorder, CodeBadRequest, false)
+}
+
 func TestVoiceNotificationRejectsInvalidFieldsAtExactLimits(t *testing.T) {
 	validRequestID := strings.Repeat("r", 256)
 	validPrefix := strings.Repeat("가", 128)

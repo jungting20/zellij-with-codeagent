@@ -32,11 +32,17 @@ func (s *Server) handleVoiceNotifications(w http.ResponseWriter, r *http.Request
 		writeRuntimeError(w, err)
 		return
 	}
-	if response.Status == "duplicate" {
+	switch response.Status {
+	case "queued":
+		writeJSON(w, http.StatusAccepted, response)
+	case "duplicate":
 		writeJSON(w, http.StatusOK, response)
-		return
+	default:
+		writeAPIError(w, APIError{
+			Code:    CodeRuntimeError,
+			Message: fmt.Sprintf("unknown voice notification status %q", response.Status),
+		}, http.StatusInternalServerError)
 	}
-	writeJSON(w, http.StatusAccepted, response)
 }
 
 func decodeVoiceNotificationRequest(w http.ResponseWriter, r *http.Request, target *VoiceNotificationRequest) bool {
