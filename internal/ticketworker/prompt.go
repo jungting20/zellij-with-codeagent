@@ -29,7 +29,7 @@ func RenderTicketPrompt(ticket Ticket) (string, string, error) {
 	if done, _ := parseCompletionOutput(body, marker); done {
 		return "", "", ErrInvalidPrompt
 	}
-	instruction := fmt.Sprintf("작업을 모두 완료한 뒤 마지막 두 줄에 아래 내용을 순서대로 출력하세요.\n%s 실제 변경 사항을 한 줄로 간결하게 요약\n%s", completionSummaryPrefix, marker)
+	instruction := fmt.Sprintf("작업을 모두 완료한 뒤 최종 출력의 마지막 두 줄을 다음 형식으로 작성하세요. 첫째 줄은 %q 다음에 실제 변경 사항을 한 줄로 간결하게 요약하고, 둘째 줄은 정확히 %q로 작성하세요. 여기의 따옴표는 설명용이며 실제 출력에는 따옴표를 포함하지 마세요.", completionSummaryPrefix, marker)
 	return body + "\n\n" + instruction, marker, nil
 }
 

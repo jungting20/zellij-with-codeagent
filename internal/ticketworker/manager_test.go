@@ -233,6 +233,81 @@ func TestManagerIgnoresPromptEchoAndCompletesExactMarker(t *testing.T) {
 	}
 }
 
+func TestManagerIgnoresRenderedViewportPromptEcho(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(41)}}
+	client := newFakeManagerClient()
+	stream := newFakeEventStream()
+	client.streams = []*fakeEventStream{stream}
+	manager := newTestManager(t, store, client, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.created()) == 1 })
+
+	viewport := renderedPromptViewport(client.created()[0].InitialInput)
+	stream.events <- transport.Event{
+		Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-41", Message: viewport,
+	}
+	time.Sleep(20 * time.Millisecond)
+	if got := store.transitions(); len(got) != 0 {
+		t.Fatalf("rendered prompt echo completed ticket: %v", got)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagerPeriodicSnapshotIgnoresRenderedViewportPromptEcho(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(42)}}
+	client := newFakeManagerClient()
+	client.streams = []*fakeEventStream{newFakeEventStream()}
+	ticks := make(chan time.Time, 1)
+	manager := newTestManagerWithTicks(t, store, client, 1, ticks)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.created()) == 1 })
+
+	client.setSnapshot("ticket-coding-run-a-42", renderedPromptViewport(client.created()[0].InitialInput))
+	ticks <- time.Now()
+	time.Sleep(20 * time.Millisecond)
+	if got := store.transitions(); len(got) != 0 {
+		t.Fatalf("periodic rendered prompt snapshot completed ticket: %v", got)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagerCompletesPromptEchoFollowedByRealFinalOutput(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(43)}}
+	client := newFakeManagerClient()
+	stream := newFakeEventStream()
+	client.streams = []*fakeEventStream{stream}
+	manager := newTestManager(t, store, client, 1)
+	manager.config.VoiceNotifications = true
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.created()) == 1 })
+
+	output := renderedPromptViewport(client.created()[0].InitialInput) +
+		"\nZELLIJ_AGENT_TICKET_SUMMARY 실제 완료 변경\nZELLIJ_AGENT_TICKET_DONE 43"
+	stream.events <- transport.Event{
+		Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-43", Message: output,
+	}
+	waitFor(t, func() bool { return len(client.voiceRequests()) == 1 })
+	if got := client.voiceRequests()[0].Summary; got != "실제 완료 변경" {
+		t.Fatalf("voice summary = %q, want 실제 완료 변경", got)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManagerCapturesSplitEventSummaryFromIdentityCheckedSnapshot(t *testing.T) {
 	store := &fakeManagerStore{}
 	client := newFakeManagerClient()
@@ -294,6 +369,72 @@ func TestManagerQueuesCompletionWithoutSummaryWhenSnapshotHasNone(t *testing.T) 
 	requests := client.voiceRequests()
 	if len(requests) != 1 || requests[0].Summary != "" {
 		t.Fatalf("voice requests = %#v, want empty summary fallback", requests)
+	}
+	if got := client.snapshotCount("ticket-coding-run-a-42"); got != 1 {
+		t.Fatalf("fallback snapshot calls = %d, want exactly 1", got)
+	}
+}
+
+func TestManagerMarkerEventSnapshotErrorFallsBackAfterWorkerIdentityCheck(t *testing.T) {
+	store := &fakeManagerStore{}
+	client := newFakeManagerClient()
+	_, err := client.CreatePane(context.Background(), transport.CreatePaneRequest{
+		ID: "ticket-coding-run-a-44", TaskID: "tickets", ZellijSession: "physical-a", Role: "coding-agent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.snapshotErrors["ticket-coding-run-a-44"] = errors.New("snapshot unavailable")
+	manager := newTestManager(t, store, client, 1)
+	var logs synchronizedBuffer
+	manager.log = &logs
+	manager.slots[0] = managerSlot{
+		state: managerSlotWorking, ticket: managerTicket(44), paneID: "ticket-coding-run-a-44",
+		marker: "ZELLIJ_AGENT_TICKET_DONE 44", paneCreated: true,
+	}
+
+	manager.handleEvent(context.Background(), transport.Event{
+		Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-44", Message: "ZELLIJ_AGENT_TICKET_DONE 44",
+	})
+
+	if got := store.transitions(); len(got) != 1 || got[0].id != 44 {
+		t.Fatalf("transitions = %v, want ticket 44 completion", got)
+	}
+	if got := client.voiceRequests(); len(got) != 0 {
+		t.Fatalf("voice requests = %#v, want none while disabled", got)
+	}
+	if !logs.Contains("completion snapshot") || !logs.Contains("snapshot unavailable") {
+		t.Fatalf("manager log = %q, want snapshot fallback failure", logs.String())
+	}
+	if got := client.snapshotCount("ticket-coding-run-a-44"); got != 1 {
+		t.Fatalf("fallback snapshot calls = %d, want exactly 1", got)
+	}
+	if got := client.inspections(); got != 1 {
+		t.Fatalf("runtime inspections = %d, want one independent identity check", got)
+	}
+}
+
+func TestManagerMarkerEventRejectsInactiveFallbackSnapshot(t *testing.T) {
+	store := &fakeManagerStore{}
+	client := newFakeManagerClient()
+	client.setSnapshotPane("ticket-coding-run-a-45", transport.Pane{
+		ID: "ticket-coding-run-a-45", TaskID: "tickets", SessionID: "physical-a", Role: "coding-agent", Status: "exited",
+	})
+	manager := newTestManager(t, store, client, 1)
+	manager.slots[0] = managerSlot{
+		state: managerSlotWorking, ticket: managerTicket(45), paneID: "ticket-coding-run-a-45",
+		marker: "ZELLIJ_AGENT_TICKET_DONE 45", paneCreated: true,
+	}
+
+	manager.handleEvent(context.Background(), transport.Event{
+		Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-45", Message: "ZELLIJ_AGENT_TICKET_DONE 45",
+	})
+
+	if got := store.transitions(); len(got) != 0 {
+		t.Fatalf("inactive snapshot completed ticket: %v", got)
+	}
+	if got := client.snapshotCount("ticket-coding-run-a-45"); got != 1 {
+		t.Fatalf("fallback snapshot calls = %d, want exactly 1", got)
 	}
 }
 
@@ -619,6 +760,25 @@ func TestManagerQueuesCompletionVoiceAfterSuccessfulClose(t *testing.T) {
 	}
 }
 
+func TestCompletionVoiceRequestIDChangesAfterReopenedTicketCompletesAgain(t *testing.T) {
+	first := completedManagerTicket(42)
+	second := completedManagerTicket(42)
+	reopenedCompletedAt := first.CompletedAt.Add(time.Second)
+	second.CompletedAt = &reopenedCompletedAt
+
+	firstID, err := completionVoiceRequestID("tickets", first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondID, err := completionVoiceRequestID("tickets", second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstID == secondID {
+		t.Fatalf("request IDs = %q and %q, want reopened completion to differ", firstID, secondID)
+	}
+}
+
 func TestManagerVoiceNotificationWaitsForSuccessfulCloseRetry(t *testing.T) {
 	client := newFakeManagerClient()
 	client.closeErrors = []error{errors.New("close failed"), nil}
@@ -811,6 +971,14 @@ func TestManagerShutdownUsesLiveContextForDoneNotification(t *testing.T) {
 	}
 	if canceled := client.voiceContextErrors(); len(canceled) != 1 || canceled[0] != nil {
 		t.Fatalf("voice context errors = %v, want live cleanup context", canceled)
+	}
+	deadlines := client.voiceDeadlines()
+	if len(deadlines) != 1 || deadlines[0].IsZero() {
+		t.Fatalf("voice deadlines = %v, want one cleanup deadline", deadlines)
+	}
+	remaining := time.Until(deadlines[0])
+	if remaining <= 0 || remaining > manager.startupTimeout {
+		t.Fatalf("cleanup deadline remaining = %v, want positive and bounded by %v", remaining, manager.startupTimeout)
 	}
 	if got := store.requeues(); !reflect.DeepEqual(got, []int64{43}) {
 		t.Fatalf("requeued tickets = %v, want [43]", got)
@@ -1088,6 +1256,10 @@ func completedManagerSlot(id int64, summary string) managerSlot {
 	}
 }
 
+func renderedPromptViewport(prompt string) string {
+	return "terminal header\n• " + strings.ReplaceAll(strings.TrimSpace(prompt), "\n", "\n• ") + "\n›"
+}
+
 func waitFor(t *testing.T, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
@@ -1232,6 +1404,7 @@ type fakeManagerClient struct {
 	snapshots         map[string]string
 	snapshotPanes     map[string]transport.Pane
 	snapshotErrors    map[string]error
+	snapshotCalls     map[string]int
 	closeRequests     []string
 	closeErrors       []error
 	beforeClose       func()
@@ -1246,7 +1419,7 @@ type fakeManagerClient struct {
 }
 
 func newFakeManagerClient() *fakeManagerClient {
-	return &fakeManagerClient{anchorReady: true, anchorTaskID: "tickets", anchorSessionID: "physical-a", successfulCreates: map[string]bool{}, snapshots: map[string]string{}, snapshotPanes: map[string]transport.Pane{}, snapshotErrors: map[string]error{}, absentPanes: map[string]bool{}, paneStatuses: map[string]string{}}
+	return &fakeManagerClient{anchorReady: true, anchorTaskID: "tickets", anchorSessionID: "physical-a", successfulCreates: map[string]bool{}, snapshots: map[string]string{}, snapshotPanes: map[string]transport.Pane{}, snapshotErrors: map[string]error{}, snapshotCalls: map[string]int{}, absentPanes: map[string]bool{}, paneStatuses: map[string]string{}}
 }
 
 func (f *fakeManagerClient) CreatePane(ctx context.Context, req transport.CreatePaneRequest) (transport.CreatePaneResponse, error) {
@@ -1272,6 +1445,7 @@ func (f *fakeManagerClient) CreatePane(ctx context.Context, req transport.Create
 func (f *fakeManagerClient) SnapshotOutput(_ context.Context, paneID string, _ transport.SnapshotOutputRequest) (transport.SnapshotOutputResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.snapshotCalls[paneID]++
 	if err := f.snapshotErrors[paneID]; err != nil {
 		return transport.SnapshotOutputResponse{}, err
 	}
@@ -1431,4 +1605,9 @@ func (f *fakeManagerClient) voiceContextErrors() []error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]error(nil), f.voiceCtxErrors...)
+}
+func (f *fakeManagerClient) snapshotCount(paneID string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.snapshotCalls[paneID]
 }

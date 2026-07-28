@@ -33,11 +33,41 @@ func TestRenderTicketPromptAppendsCompletionInstruction(t *testing.T) {
 	if !strings.HasPrefix(prompt, ticket.Prompt+"\n\n") {
 		t.Fatalf("prompt = %q, want stored prompt prefix", prompt)
 	}
-	wantSuffix := "작업을 모두 완료한 뒤 마지막 두 줄에 아래 내용을 순서대로 출력하세요.\n" +
-		"ZELLIJ_AGENT_TICKET_SUMMARY 실제 변경 사항을 한 줄로 간결하게 요약\n" +
-		"ZELLIJ_AGENT_TICKET_DONE 42"
-	if !strings.HasSuffix(prompt, wantSuffix) {
-		t.Fatalf("prompt = %q, want suffix %q", prompt, wantSuffix)
+	for _, want := range []string{
+		"마지막 두 줄",
+		`"ZELLIJ_AGENT_TICKET_SUMMARY"`,
+		`"ZELLIJ_AGENT_TICKET_DONE 42"`,
+		"실제 출력에는 따옴표를 포함하지 마세요",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt = %q, want instruction containing %q", prompt, want)
+		}
+	}
+}
+
+func TestRenderTicketPromptViewportEchoCannotParseAsCompletion(t *testing.T) {
+	prompt, marker, err := RenderTicketPrompt(Ticket{ID: 42, Prompt: "Implement search."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewport := "terminal header\n• " + strings.ReplaceAll(prompt, "\n", "\n• ") + "\n›"
+
+	if done, summary := parseCompletionOutput(viewport, marker); done || summary != "" {
+		t.Fatalf("parseCompletionOutput(rendered prompt, %q) = (%t, %q), want (false, empty)", marker, done, summary)
+	}
+}
+
+func TestParseCompletionOutputFindsRealCompletionAfterPromptEcho(t *testing.T) {
+	prompt, marker, err := RenderTicketPrompt(Ticket{ID: 42, Prompt: "Implement search."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewport := "terminal header\n• " + strings.ReplaceAll(prompt, "\n", "\n• ")
+	output := viewport + "\nZELLIJ_AGENT_TICKET_SUMMARY 실제 변경\n" + marker
+
+	done, summary := parseCompletionOutput(output, marker)
+	if !done || summary != "실제 변경" {
+		t.Fatalf("parseCompletionOutput(prompt plus real completion, %q) = (%t, %q), want (true, 실제 변경)", marker, done, summary)
 	}
 }
 

@@ -433,9 +433,6 @@ func (m *Manager) handleEvent(ctx context.Context, event transport.Event) {
 		if slot.state != managerSlotWorking || slot.paneID != event.PaneID {
 			continue
 		}
-		if strings.TrimSpace(event.Message) == strings.TrimSpace(slot.prompt) {
-			return
-		}
 		done, summary := parseCompletionOutput(event.Message, slot.marker)
 		if !done {
 			return
@@ -444,13 +441,15 @@ func (m *Manager) handleEvent(ctx context.Context, event transport.Event) {
 			response, err := m.client.SnapshotOutput(ctx, slot.paneID, transport.SnapshotOutputRequest{})
 			if err != nil {
 				m.logTicketf("completion snapshot", slot.ticket, "pane=%s failed: %v", slot.paneID, err)
-				return
+				if !m.workerExists(ctx, slot) {
+					return
+				}
+			} else {
+				if !m.matchesWorkerPane(response.Pane, slot, true) {
+					return
+				}
+				_, summary = parseCompletionOutput(response.Output, slot.marker)
 			}
-			if !m.matchesWorkerPane(response.Pane, slot, true) {
-				return
-			}
-			_, snapshotSummary := parseCompletionOutput(response.Output, slot.marker)
-			summary = snapshotSummary
 		} else if !m.workerExists(ctx, slot) {
 			return
 		}
