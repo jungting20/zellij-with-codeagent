@@ -86,6 +86,18 @@ func (c *fakeAgentClient) StartAgent(_ context.Context, request transport.StartA
 	return c.response, nil
 }
 
+func (c *fakeAgentClient) ListAgents(context.Context) (transport.ListAgentsResponse, error) {
+	return transport.ListAgentsResponse{}, nil
+}
+
+func (c *fakeAgentClient) FocusAgent(context.Context, string, transport.FocusAgentRequest) (transport.FocusAgentResponse, error) {
+	return transport.FocusAgentResponse{}, nil
+}
+
+func (c *fakeAgentClient) StreamEvents(context.Context) (*transport.EventStream, error) {
+	return &transport.EventStream{}, nil
+}
+
 func TestRunDispatchesTicketWorkerHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 

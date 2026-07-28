@@ -2,29 +2,41 @@ package agentcli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
+	"zellij-with-codeagent/internal/agentdashboard"
 	"zellij-with-codeagent/internal/cli"
 	"zellij-with-codeagent/internal/transport"
 )
 
-const defaultTimeout = 10 * time.Second
+const (
+	defaultTimeout         = 10 * time.Second
+	defaultRefreshInterval = 2 * time.Second
+)
 
 type AgentClient interface {
 	StartAgent(context.Context, transport.StartAgentRequest) (transport.StartAgentResponse, error)
+	agentdashboard.Client
 }
 
 type ClientFactory func(socketPath string, timeout time.Duration) AgentClient
 
 type Config struct {
-	Getwd  func() (string, error)
-	Getenv func(string) string
+	Getwd      func() (string, error)
+	Getenv     func(string) string
+	NewModel   func(context.Context, agentdashboard.Client, agentdashboard.Options) tea.Model
+	RunProgram func(context.Context, tea.Model, io.Reader, io.Writer) error
 }
 
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient ClientFactory, cfg Config) int {
@@ -41,11 +53,84 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 		return 0
 	case "start":
 		return runStart(args[1:], stdout, stderr, newClient, cfg)
+	case "dashboard":
+		return runDashboard(args[1:], stdin, stdout, stderr, newClient, cfg)
 	default:
 		fmt.Fprintf(stderr, "unknown agent command: %s\n", args[0])
 		printUsage(stderr)
 		return 2
 	}
+}
+
+func runDashboard(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient ClientFactory, cfg Config) int {
+	if len(args) == 1 && isHelp(args[0]) {
+		printDashboardUsage(stdout)
+		return 0
+	}
+	fs := flag.NewFlagSet("agent dashboard", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	socket := fs.String("socket", cli.DefaultSocketPath, "agentd Unix socket path")
+	timeout := fs.Duration("timeout", defaultTimeout, "request timeout")
+	refresh := fs.Duration("refresh-interval", defaultRefreshInterval, "polling refresh interval")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "agent dashboard does not accept positional arguments")
+		return 2
+	}
+	if *timeout <= 0 {
+		fmt.Fprintln(stderr, "agent dashboard --timeout must be positive")
+		return 2
+	}
+	if *refresh <= 0 {
+		fmt.Fprintln(stderr, "agent dashboard --refresh-interval must be positive")
+		return 2
+	}
+	if cfg.Getenv == nil {
+		fmt.Fprintln(stderr, "agent dashboard configuration error: Getenv is required")
+		return 1
+	}
+	session := strings.TrimSpace(cfg.Getenv("ZELLIJ_SESSION_NAME"))
+	paneID := strings.TrimSpace(cfg.Getenv("ZELLIJ_PANE_ID"))
+	if session == "" || paneID == "" {
+		fmt.Fprintln(stderr, "agent dashboard must run inside a Zellij pane (ZELLIJ_SESSION_NAME and ZELLIJ_PANE_ID are required)")
+		return 2
+	}
+	if newClient == nil {
+		fmt.Fprintln(stderr, "agent dashboard client is not configured")
+		return 1
+	}
+	client := newClient(*socket, *timeout)
+	if isNilAgentClient(client) {
+		fmt.Fprintln(stderr, "agent dashboard client is not configured")
+		return 1
+	}
+	newModel := cfg.NewModel
+	if newModel == nil {
+		newModel = agentdashboard.NewModel
+	}
+	runner := cfg.RunProgram
+	if runner == nil {
+		runner = runProgram
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	model := newModel(ctx, client, agentdashboard.Options{
+		RefreshInterval:    *refresh,
+		SourceSession:      session,
+		SourceZellijPaneID: paneID,
+	})
+	if err := runner(ctx, model, stdin, stdout); err != nil {
+		fmt.Fprintf(stderr, "agent dashboard failed: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func runProgram(ctx context.Context, model tea.Model, stdin io.Reader, stdout io.Writer) error {
+	_, err := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(stdin), tea.WithOutput(stdout), tea.WithAltScreen()).Run()
+	return err
 }
 
 func runStart(args []string, stdout, stderr io.Writer, newClient ClientFactory, cfg Config) int {
@@ -240,10 +325,23 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  start   Start a coding agent in the current Zellij tab")
+	fmt.Fprintln(w, "  dashboard  Show and focus managed coding agents")
 	fmt.Fprintln(w)
 	printStartSummary(w)
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Run 'zellij-agent agent start --help' for start options.")
+	fmt.Fprintln(w, "Run 'zellij-agent agent <command> --help' for command options.")
+}
+
+func printDashboardUsage(w io.Writer) {
+	fmt.Fprintln(w, "Usage: zellij-agent agent dashboard [--socket PATH --timeout DURATION --refresh-interval DURATION]")
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  --socket PATH\n    agentd Unix socket path (default %q)\n", cli.DefaultSocketPath)
+	fmt.Fprintln(w, "  --timeout DURATION")
+	fmt.Fprintln(w, "    request timeout (default 10s)")
+	fmt.Fprintln(w, "  --refresh-interval DURATION")
+	fmt.Fprintln(w, "    polling refresh interval (default 2s)")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Keys: j/k move, Enter focus, R refresh, q quit")
 }
 
 func printStartUsage(w io.Writer) {

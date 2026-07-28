@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,8 +12,59 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
+	"zellij-with-codeagent/internal/agentdashboard"
 	"zellij-with-codeagent/internal/transport"
 )
+
+func TestRunDashboardPassesZellijContextAndOptions(t *testing.T) {
+	client := &testClient{}
+	var gotOptions agentdashboard.Options
+	run := false
+	var stdout, stderr bytes.Buffer
+	code := Run(
+		[]string{"dashboard", "--socket", "/tmp/dashboard.sock", "--timeout", "3s", "--refresh-interval", "4s"},
+		strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
+			Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": " session-a ", "ZELLIJ_PANE_ID": " terminal_7 "}),
+			NewModel: func(_ context.Context, got agentdashboard.Client, opts agentdashboard.Options) tea.Model {
+				if got != client {
+					t.Fatal("dashboard received a different client")
+				}
+				gotOptions = opts
+				return stubModel{}
+			},
+			RunProgram: func(context.Context, tea.Model, io.Reader, io.Writer) error {
+				run = true
+				return nil
+			},
+		},
+	)
+	if code != 0 || !run || stderr.Len() != 0 {
+		t.Fatalf("code=%d run=%t stderr=%q", code, run, stderr.String())
+	}
+	if client.socket != "/tmp/dashboard.sock" || client.timeout != 3*time.Second {
+		t.Fatalf("client socket=%q timeout=%s", client.socket, client.timeout)
+	}
+	want := agentdashboard.Options{RefreshInterval: 4 * time.Second, SourceSession: "session-a", SourceZellijPaneID: "terminal_7"}
+	if gotOptions != want {
+		t.Fatalf("options=%#v, want %#v", gotOptions, want)
+	}
+}
+
+func TestRunDashboardRequiresZellijContext(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"dashboard"}, strings.NewReader(""), &stdout, &stderr, testFactory(&testClient{}), Config{Getenv: func(string) string { return "" }})
+	if code != 2 || !strings.Contains(stderr.String(), "must run inside a Zellij pane") {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+type stubModel struct{}
+
+func (stubModel) Init() tea.Cmd                         { return nil }
+func (m stubModel) Update(tea.Msg) (tea.Model, tea.Cmd) { return m, nil }
+func (stubModel) View() string                          { return "" }
 
 func TestRunStartSendsValidatedRequest(t *testing.T) {
 	cwd := t.TempDir()
@@ -313,6 +365,18 @@ func (c *testClient) StartAgent(ctx context.Context, request transport.StartAgen
 	c.request = request
 	c.deadline, c.hasDeadline = ctx.Deadline()
 	return c.response, c.err
+}
+
+func (c *testClient) ListAgents(context.Context) (transport.ListAgentsResponse, error) {
+	return transport.ListAgentsResponse{}, nil
+}
+
+func (c *testClient) FocusAgent(context.Context, string, transport.FocusAgentRequest) (transport.FocusAgentResponse, error) {
+	return transport.FocusAgentResponse{}, nil
+}
+
+func (c *testClient) StreamEvents(context.Context) (*transport.EventStream, error) {
+	return &transport.EventStream{}, nil
 }
 
 func testFactory(client *testClient) ClientFactory {
