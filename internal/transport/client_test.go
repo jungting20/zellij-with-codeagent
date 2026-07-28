@@ -19,7 +19,7 @@ func TestClientAgentMethodsUseExactPathsMethodsAndEscaping(t *testing.T) {
 		calls = append(calls, r.Method+" "+r.URL.EscapedPath())
 		w.Header().Set("Content-Type", "application/json")
 		switch len(calls) {
-		case 1, 3:
+		case 1, 3, 4:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"agent":{"agent":{"id":"agent/1","kind":"codex","pane_id":"agent/1","state":"unknown","created_at":"1970-01-01T00:00:10Z","state_changed_at":"1970-01-01T00:00:20Z"},"pane":{"id":"agent/1","status":"running","created_at":"1970-01-01T00:00:10Z","updated_at":"1970-01-01T00:00:30Z"}}}`))
 		case 2:
@@ -45,7 +45,10 @@ func TestClientAgentMethodsUseExactPathsMethodsAndEscaping(t *testing.T) {
 	if _, err := client.FocusAgent(context.Background(), "agent/1", FocusAgentRequest{SourceSession: "physical-a", SourceZellijPaneID: "terminal_2"}); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"POST /v1/agents", "GET /v1/agents", "POST /v1/agents/agent%2F1/focus"}
+	if _, err := client.FocusAgent(context.Background(), "agent%2F1", FocusAgentRequest{SourceSession: "physical-a", SourceZellijPaneID: "terminal_2"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"POST /v1/agents", "GET /v1/agents", "POST /v1/agents/agent%2F1/focus", "POST /v1/agents/agent%252F1/focus"}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %#v, want %#v", calls, want)
 	}

@@ -2,7 +2,9 @@ package transport
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 )
 
@@ -10,6 +12,14 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
+		writeAPIError(w, BadRequest(fmt.Sprintf("invalid json request: %v", err)), http.StatusBadRequest)
+		return false
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			err = errors.New("multiple json values are not allowed")
+		}
 		writeAPIError(w, BadRequest(fmt.Sprintf("invalid json request: %v", err)), http.StatusBadRequest)
 		return false
 	}

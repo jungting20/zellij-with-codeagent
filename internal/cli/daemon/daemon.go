@@ -33,6 +33,10 @@ type daemonBackend interface {
 	zellij.SessionSwitcher
 }
 
+type daemonServeServer interface {
+	ListenAndServe(context.Context) error
+}
+
 type reconcileTicker interface {
 	C() <-chan time.Time
 	Stop()
@@ -53,6 +57,9 @@ var (
 	newDaemonSubscriptionRunner = func() agentruntime.SubscriptionRunner { return agentruntime.ExecSubscriptionRunner{} }
 	newDaemonRuntimeService     = agentruntime.NewService
 	newDaemonAgentService       = codingagent.NewService
+	newDaemonTransportServer    = func(opts transport.ServerOptions) (daemonServeServer, error) { return transport.NewServer(opts) }
+	newDaemonReconcileTicker    = func(interval time.Duration) reconcileTicker { return timeTicker{Ticker: time.NewTicker(interval)} }
+	reconcileServiceForDaemon   = func(service transport.ServerRuntime) agentruntime.ReconciliationService { return service }
 )
 
 var requestDaemonShutdown = func(ctx context.Context, socketPath string, timeout time.Duration) error {
@@ -98,7 +105,7 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) in
 			fmt.Fprintf(stderr, "construct daemon service: %v\n", err)
 			return 1
 		}
-		server, err := transport.NewServer(transport.ServerOptions{
+		server, err := newDaemonTransportServer(transport.ServerOptions{
 			Service:    service,
 			SocketPath: socketPath,
 			Version:    version,
@@ -112,9 +119,7 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		reconcileDone := make(chan struct{})
 		go func() {
 			defer close(reconcileDone)
-			runReconcileLoop(serveCtx, service, defaultReconcileInterval, func(interval time.Duration) reconcileTicker {
-				return timeTicker{Ticker: time.NewTicker(interval)}
-			}, func(err error) {
+			runReconcileLoop(serveCtx, reconcileServiceForDaemon(service), defaultReconcileInterval, newDaemonReconcileTicker, func(err error) {
 				fmt.Fprintf(stderr, "agentd reconcile failed: %v\n", err)
 			})
 		}()

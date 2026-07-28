@@ -47,6 +47,44 @@ func TestServerAgentRoutes(t *testing.T) {
 	if service.agentFocusReq.AgentID != "agent/1" || service.agentFocusReq.SourceZellijSession != "physical-a" || service.agentFocusReq.SourceZellijPaneID != "terminal_2" {
 		t.Fatalf("FocusAgent request = %#v", service.agentFocusReq)
 	}
+
+	doubleEscaped := httptest.NewRecorder()
+	server.ServeHTTP(doubleEscaped, httptest.NewRequest(http.MethodPost, "/v1/agents/agent%252F1/focus", strings.NewReader(`{"source_session":"physical-a","source_zellij_pane_id":"terminal_2"}`)))
+	if doubleEscaped.Code != http.StatusOK {
+		t.Fatalf("double-escaped focus status = %d, want 200; body=%s", doubleEscaped.Code, doubleEscaped.Body.String())
+	}
+	if service.agentFocusReq.AgentID != "agent%2F1" {
+		t.Fatalf("double-escaped FocusAgent id = %q, want literal agent%%2F1", service.agentFocusReq.AgentID)
+	}
+}
+
+func TestServerAgentRoutesRejectTrailingJSONWithoutDispatch(t *testing.T) {
+	validStart := `{"kind":"codex","cwd":"/tmp","source_session":"physical-a","source_zellij_pane_id":"terminal_2"}`
+	validFocus := `{"source_session":"physical-a","source_zellij_pane_id":"terminal_2"}`
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "start junk", path: "/v1/agents", body: validStart + ` junk`},
+		{name: "start second object", path: "/v1/agents", body: validStart + ` {}`},
+		{name: "focus junk", path: "/v1/agents/agent-1/focus", body: validFocus + ` junk`},
+		{name: "focus second object", path: "/v1/agents/agent-1/focus", body: validFocus + ` {}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := newFakeRuntimeService()
+			server := newTestServer(t, service)
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body)))
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
+			}
+			if service.agentStartCalls != 0 || service.agentFocusCalls != 0 {
+				t.Fatalf("service dispatch start=%d focus=%d, want zero", service.agentStartCalls, service.agentFocusCalls)
+			}
+		})
+	}
 }
 
 func TestServerAgentRoutesRejectInvalidMethodShapeAndJSON(t *testing.T) {
@@ -615,6 +653,7 @@ type fakeRuntimeService struct {
 	closeReq        rt.ClosePaneRequest
 	closeErr        error
 	agentStartReq   codingagent.StartAgentRequest
+	agentStartCalls int
 	agentStartErr   error
 	agentListCalls  int
 	agentListErr    error
@@ -628,6 +667,7 @@ type fakeRuntimeService struct {
 func (f *fakeRuntimeService) StartAgent(_ context.Context, req codingagent.StartAgentRequest) (codingagent.StartAgentResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.agentStartCalls++
 	f.agentStartReq = req
 	if f.agentStartErr != nil {
 		return codingagent.StartAgentResponse{}, f.agentStartErr
