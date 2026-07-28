@@ -39,6 +39,23 @@ func TestErrorForCleanupPartial(t *testing.T) {
 	}
 }
 
+func TestErrorForPaneInitializationFailed(t *testing.T) {
+	apiErr, status := ErrorFor(errors.Join(rt.ErrPaneInitializationFailed, errors.New("prompt timeout")))
+	if status != http.StatusInternalServerError ||
+		apiErr.Code != CodeInitializationFailed ||
+		!apiErr.Retryable {
+		t.Fatalf("status/error = %d/%#v", status, apiErr)
+	}
+}
+
+func TestErrorForCleanupPartialOverridesInitializationFailure(t *testing.T) {
+	err := errors.Join(rt.ErrPaneInitializationFailed, rt.ErrCleanupPartial, errors.New("close failed"))
+	apiErr, status := ErrorFor(err)
+	if status != http.StatusConflict || apiErr.Code != CodeCleanupPartial {
+		t.Fatalf("status/error = %d/%#v", status, apiErr)
+	}
+}
+
 func TestErrorForTimeout(t *testing.T) {
 	apiErr, status := ErrorFor(context.DeadlineExceeded)
 	if status != http.StatusGatewayTimeout {

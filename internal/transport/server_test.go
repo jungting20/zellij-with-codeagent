@@ -50,6 +50,27 @@ func TestServerCreatePane(t *testing.T) {
 	}
 }
 
+func TestHandleCreatePaneInitialInput(t *testing.T) {
+	service := newFakeRuntimeService()
+	server := newTestServer(t, service)
+	request := httptest.NewRequest(http.MethodPost, "/v1/panes", strings.NewReader(`{
+		"id": "coder",
+		"zellij_session": "physical-a",
+		"initial_input": "implement ticket\n",
+		"initial_input_ready_text": "›"
+	}`))
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	if service.createReq.InitialInput != "implement ticket\n" || service.createReq.InitialInputReadyText != "›" {
+		t.Fatalf("CreatePane request = %#v, want initial input fields", service.createReq)
+	}
+}
+
 func TestServerShutdownStopsListeningAndRemovesSocket(t *testing.T) {
 	socketPath := fmt.Sprintf("/tmp/agentd-shutdown-test-%d.sock", time.Now().UnixNano())
 	defer os.Remove(socketPath)

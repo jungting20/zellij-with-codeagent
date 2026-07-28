@@ -14,12 +14,13 @@ const statusClientClosedRequest = 499
 type ErrorCode string
 
 const (
-	CodeBadRequest     ErrorCode = "bad_request"
-	CodeNotFound       ErrorCode = "not_found"
-	CodeRuntimeError   ErrorCode = "runtime_error"
-	CodeCleanupPartial ErrorCode = "cleanup_partial"
-	CodeStreamClosed   ErrorCode = "stream_closed"
-	CodeTimeout        ErrorCode = "timeout"
+	CodeBadRequest           ErrorCode = "bad_request"
+	CodeNotFound             ErrorCode = "not_found"
+	CodeRuntimeError         ErrorCode = "runtime_error"
+	CodeCleanupPartial       ErrorCode = "cleanup_partial"
+	CodeInitializationFailed ErrorCode = "initialization_failed"
+	CodeStreamClosed         ErrorCode = "stream_closed"
+	CodeTimeout              ErrorCode = "timeout"
 )
 
 type APIError struct {
@@ -63,6 +64,8 @@ func ErrorFor(err error) (APIError, int) {
 		return APIError{Code: CodeBadRequest, Message: err.Error()}, http.StatusBadRequest
 	case errors.Is(err, rt.ErrCleanupPartial):
 		return APIError{Code: CodeCleanupPartial, Message: err.Error(), Retryable: true}, http.StatusConflict
+	case errors.Is(err, rt.ErrPaneInitializationFailed):
+		return APIError{Code: CodeInitializationFailed, Message: err.Error(), Retryable: true}, http.StatusInternalServerError
 	case errors.Is(err, context.DeadlineExceeded):
 		return APIError{Code: CodeTimeout, Message: err.Error(), Retryable: true}, http.StatusGatewayTimeout
 	case errors.Is(err, context.Canceled):

@@ -22,17 +22,19 @@ func TestExecutionPlanPayloadJSONIncludesZellijSession(t *testing.T) {
 func TestCreatePaneRequestToRuntimePreservesPayloadFields(t *testing.T) {
 	tabID := 7
 	source := CreatePaneRequest{
-		ID:            "pane-1",
-		TaskID:        "task-1",
-		AgentID:       "agent-1",
-		Role:          "coder",
-		Name:          "worker",
-		ZellijSession: "physical-a",
-		NewTab:        true,
-		TabName:       "main",
-		ZellijTabID:   &tabID,
-		Command:       []string{"go", "test"},
-		CWD:           "/tmp/work",
+		ID:                    "pane-1",
+		TaskID:                "task-1",
+		AgentID:               "agent-1",
+		Role:                  "coder",
+		Name:                  "worker",
+		ZellijSession:         "physical-a",
+		NewTab:                true,
+		TabName:               "main",
+		ZellijTabID:           &tabID,
+		Command:               []string{"go", "test"},
+		CWD:                   "/tmp/work",
+		InitialInput:          "implement ticket\n",
+		InitialInputReadyText: "›",
 	}
 
 	converted := source.ToRuntime()
@@ -47,7 +49,9 @@ func TestCreatePaneRequestToRuntimePreservesPayloadFields(t *testing.T) {
 		converted.TabName != "main" ||
 		converted.ZellijTabID == nil ||
 		*converted.ZellijTabID != rt.ZellijTabID(tabID) ||
-		converted.CWD != "/tmp/work" {
+		converted.CWD != "/tmp/work" ||
+		converted.InitialInput != "implement ticket\n" ||
+		converted.InitialInputReadyText != "›" {
 		t.Fatalf("CreatePaneRequest.ToRuntime() = %#v, want all scalar fields preserved", converted)
 	}
 	source.Command[0] = "mutated"
