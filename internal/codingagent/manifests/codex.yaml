@@ -64,7 +64,7 @@ rules:
     region: {type: bottom_non_empty_lines, lines: 3}
     match:
       all:
-        - line_regex: ['^[•◦][[:space:]]+Working \([^)]*esc to interrupt\)( · .*)?$']
+        - line_regex: ['^[•◦][[:space:]]+Working \([^)]*esc to interrupt\)( · .*)?[[:space:]]*$']
         - not:
             - contains: ["■ Conversation interrupted"]
     visible_working: true
