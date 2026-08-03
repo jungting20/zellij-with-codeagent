@@ -176,19 +176,25 @@ zellij-agent ctl cleanup --socket /tmp/agentd.sock --task task-b
 ## Agent Next Navigation Smoke
 
 With the daemon still serving, start managed agents from panes attached to
-both `physical-a` and `physical-b`. Create at least two agents, noting their
-creation order. In either attached session, press `Alt+e` to enter tab mode,
-then press `Tab`.
+both `physical-a` and `physical-b`. Create at least four agents in creation
+order and arrange their detected states as follows:
 
-Confirm the first press focuses the first created managed agent, each repeated
-`Tab` focuses the next one, and the press after the last agent wraps to the
-first. The cursor is daemon-wide and in-memory, so repeat the check from the
-other session and confirm it advances the same sequence.
+```text
+idle → working → blocked → idle
+```
 
-Close the agent currently recorded by the cursor, then press `Alt+e` followed
-by `Tab` again. Confirm navigation recovers by focusing the first remaining
-agent in creation order. Finally, leave tab mode and press `Tab` in a normal
-application pane; it must retain the application's normal Tab behavior.
+In either attached session, press `Alt+o` repeatedly. Confirm navigation
+visits only the two idle agents in their creation order and wraps from the
+second idle agent back to the first. The cursor is daemon-wide and in-memory,
+so repeat the check from the other session and confirm it advances the same
+idle-only sequence.
+
+Change one of those idle agents to `working`, then press `Alt+o` again. Confirm
+the remaining idle agent is selected. Change every agent to a non-idle state,
+record the current focus, and then invoke both `Alt+o` and
+`zellij-agent agent next`. Confirm each leaves focus unchanged and produces no
+visible CLI error or output. Finally, press `Tab` in a normal application pane;
+it must retain the application's normal Tab behavior.
 
 ## Runtime Dashboard Smoke
 
