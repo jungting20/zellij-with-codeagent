@@ -14,6 +14,7 @@ import (
 	daemoncli "zellij-with-codeagent/internal/cli/daemon"
 	dashboardcli "zellij-with-codeagent/internal/cli/dashboard"
 	debatebg "zellij-with-codeagent/internal/cli/debatebackground"
+	listselectorcli "zellij-with-codeagent/internal/cli/listselector"
 	plannercli "zellij-with-codeagent/internal/cli/planner"
 	rolecli "zellij-with-codeagent/internal/cli/role"
 	ticketworkercli "zellij-with-codeagent/internal/cli/ticketworker"
@@ -22,7 +23,10 @@ import (
 	"zellij-with-codeagent/internal/transport"
 )
 
-var getWorkingDirectory = os.Getwd
+var (
+	getWorkingDirectory = os.Getwd
+	runListSelector     = listselectorcli.Run
+)
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -61,6 +65,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			Getwd:  os.Getwd,
 			Getenv: os.Getenv,
 		})
+	case "list-selector":
+		return runListSelector(args[1:], stdin, stdout, stderr, listselectorcli.Config{})
 	case "ticket-worker":
 		cwd, err := getWorkingDirectory()
 		if err != nil {
@@ -149,6 +155,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  dashboard")
 	fmt.Fprintln(w, "           Supervise the managed runtime in a live TUI")
 	fmt.Fprintln(w, "  agent    Manage coding agents in the current Zellij pane through close-on-exit")
+	fmt.Fprintln(w, "  list-selector")
+	fmt.Fprintln(w, "           Select and start a coding agent in the current terminal")
 	fmt.Fprintln(w, "  ticket-worker")
 	fmt.Fprintln(w, "           Manage a project-local SQLite ticket queue")
 	fmt.Fprintln(w, "  code-review")

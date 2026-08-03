@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	agentcli "zellij-with-codeagent/internal/cli/agent"
+	listselectorcli "zellij-with-codeagent/internal/cli/listselector"
 	ticketworkercli "zellij-with-codeagent/internal/cli/ticketworker"
 	"zellij-with-codeagent/internal/ticketworker"
 	"zellij-with-codeagent/internal/transport"
@@ -32,6 +34,41 @@ func TestRunHelp(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunDispatchesListSelector(t *testing.T) {
+	stdin := strings.NewReader("input")
+	var stdout, stderr bytes.Buffer
+	original := runListSelector
+	t.Cleanup(func() { runListSelector = original })
+
+	runListSelector = func(args []string, gotStdin io.Reader, gotStdout, gotStderr io.Writer, _ listselectorcli.Config) int {
+		if !reflect.DeepEqual(args, []string{"--help"}) {
+			t.Fatalf("args = %#v, want --help", args)
+		}
+		if gotStdin != stdin || gotStdout != &stdout || gotStderr != &stderr {
+			t.Fatal("terminal streams were not forwarded")
+		}
+		return 23
+	}
+
+	if code := run([]string{"list-selector", "--help"}, stdin, &stdout, &stderr); code != 23 {
+		t.Fatalf("run() exit code = %d, want 23", code)
+	}
+}
+
+func TestUsageIncludesListSelector(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--help"}, strings.NewReader(""), &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0", code)
+	}
+	for _, want := range []string{"list-selector", "Select and start a coding agent"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, missing %q", stdout.String(), want)
+		}
 	}
 }
 
