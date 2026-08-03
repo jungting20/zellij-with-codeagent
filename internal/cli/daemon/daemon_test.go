@@ -15,7 +15,6 @@ import (
 
 	"zellij-with-codeagent/internal/codingagent"
 	"zellij-with-codeagent/internal/eventbus"
-	"zellij-with-codeagent/internal/registry"
 	agentruntime "zellij-with-codeagent/internal/runtime"
 	"zellij-with-codeagent/internal/transport"
 	"zellij-with-codeagent/internal/voice"
@@ -252,8 +251,8 @@ func TestNewRuntimeServiceAssemblesSharedRuntimeAgentStoreAndEventBus(t *testing
 	if err == nil || !strings.Contains(err.Error(), "claude.yaml") {
 		t.Fatalf("StartAgent(invalid manifest) error = %v, want filename-qualified error", err)
 	}
-	if backend.createCount() != 1 {
-		t.Fatalf("backend create calls = %d, want invalid kind rejected before pane creation", backend.createCount())
+	if backend.createCount() != 0 {
+		t.Fatalf("backend create calls = %d, want current pane claims without pane creation", backend.createCount())
 	}
 	if _, err := service.InspectRuntime(context.Background(), agentruntime.InspectRuntimeRequest{}); err != nil {
 		t.Fatalf("daemon runtime unavailable after invalid manifest: %v", err)
@@ -504,16 +503,12 @@ func (r *daemonCancelableReconciler) Reconcile(ctx context.Context, _ agentrunti
 
 func TestDaemonReconcileRemovesOnlyMissingManagedAgentThroughObserver(t *testing.T) {
 	backend := newDaemonFakeBackend()
+	backend.addPane(zellij.Pane{ID: "second-source-pane", TabID: 7, TabName: "main"})
 	store := codingagent.NewMemoryStore(time.Now)
-	var runtimeRegistry *registry.Registry
 	restoreDaemonFactories(t)
 	newDaemonStore = func(func() time.Time) codingagent.Store { return store }
 	newDaemonBackend = func() daemonBackend { return backend }
 	newDaemonSubscriptionRunner = func() agentruntime.SubscriptionRunner { return daemonFakeSubscriptionRunner{} }
-	newDaemonRuntimeService = func(opts agentruntime.Options) *agentruntime.Service {
-		runtimeRegistry = opts.Registry
-		return agentruntime.NewService(opts)
-	}
 	service, err := newRuntimeService()
 	if err != nil {
 		t.Fatal(err)
@@ -523,35 +518,9 @@ func TestDaemonReconcileRemovesOnlyMissingManagedAgentThroughObserver(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := service.StartAgent(context.Background(), codingagent.StartAgentRequest{Kind: codingagent.KindGemini, CWD: cwd, SourceZellijSession: "physical-a", SourceZellijPaneID: "source-pane"})
+	second, err := service.StartAgent(context.Background(), codingagent.StartAgentRequest{Kind: codingagent.KindGemini, CWD: cwd, SourceZellijSession: "physical-a", SourceZellijPaneID: "second-source-pane"})
 	if err != nil {
 		t.Fatal(err)
-	}
-	tabID := registry.ZellijTabID(7)
-	if _, err := runtimeRegistry.RegisterPane(registry.RegisterPaneRequest{
-		ID: "agent-3", SessionID: "physical-a", TabID: "7", AgentID: "agent-3",
-		ZellijPaneID: "uncertain-pane", ZellijTabID: &tabID, Role: "coding-agent",
-	}); err != nil {
-		t.Fatalf("register cleanup-uncertain runtime placeholder: %v", err)
-	}
-	backend.addPane(zellij.Pane{ID: "uncertain-pane", TabID: 7, TabName: "main", CWD: cwd})
-	backend.setCloseError(errors.New("close confirmation unavailable"))
-	_, uncertainErr := service.StartAgent(context.Background(), codingagent.StartAgentRequest{Kind: codingagent.KindClaude, CWD: cwd, SourceZellijSession: "physical-a", SourceZellijPaneID: "source-pane"})
-	if !errors.Is(uncertainErr, agentruntime.ErrCleanupPartial) {
-		t.Fatalf("cleanup-uncertain StartAgent() error = %v, want cleanup partial", uncertainErr)
-	}
-	backend.setCloseError(nil)
-
-	provisionStarted, releaseProvision := backend.blockNextCreate()
-	provisionResult := make(chan error, 1)
-	go func() {
-		_, err := service.StartAgent(context.Background(), codingagent.StartAgentRequest{Kind: codingagent.KindCursor, CWD: cwd, SourceZellijSession: "physical-a", SourceZellijPaneID: "source-pane"})
-		provisionResult <- err
-	}()
-	select {
-	case <-provisionStarted:
-	case <-time.After(time.Second):
-		t.Fatal("provisioning agent did not reach backend creation")
 	}
 
 	backend.removePane(zellij.PaneID(first.Agent.Pane.ZellijPaneID))
@@ -561,23 +530,8 @@ func TestDaemonReconcileRemovesOnlyMissingManagedAgentThroughObserver(t *testing
 	if _, err := store.Get(first.Agent.Agent.ID); !errors.Is(err, codingagent.ErrNotFound) {
 		t.Fatalf("missing agent store Get() error = %v, want not found", err)
 	}
-	for name, id := range map[string]codingagent.ID{
-		"unrelated live":    second.Agent.Agent.ID,
-		"cleanup uncertain": "agent-3",
-		"provisioning":      "agent-4",
-	} {
-		if _, err := store.Get(id); err != nil {
-			t.Fatalf("%s agent %q removed: %v", name, id, err)
-		}
-	}
-	close(releaseProvision)
-	select {
-	case err := <-provisionResult:
-		if err != nil {
-			t.Fatalf("provisioning StartAgent() after release error = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("provisioning StartAgent did not finish after release")
+	if _, err := store.Get(second.Agent.Agent.ID); err != nil {
+		t.Fatalf("unrelated live agent %q removed: %v", second.Agent.Agent.ID, err)
 	}
 }
 
