@@ -996,6 +996,7 @@ func TestServiceFocusNextAgentSerializesConcurrentSelection(t *testing.T) {
 	store := NewMemoryStore(nil)
 	seedFocusRecords(t, store)
 	firstFocusStarted := make(chan struct{})
+	secondCallStarted := make(chan struct{})
 	secondFocusStarted := make(chan struct{})
 	releaseFirstFocus := make(chan struct{})
 	var focusCalls atomic.Int32
@@ -1021,24 +1022,47 @@ func TestServiceFocusNextAgentSerializesConcurrentSelection(t *testing.T) {
 		response, err := service.FocusNextAgent(context.Background(), request)
 		results <- result{response: response, err: err}
 	}()
-	<-firstFocusStarted
+	select {
+	case <-firstFocusStarted:
+	case <-time.After(time.Second):
+		close(releaseFirstFocus)
+		t.Fatal("first FocusNextAgent() did not reach runtime focus")
+	}
 	go func() {
+		close(secondCallStarted)
 		response, err := service.FocusNextAgent(context.Background(), request)
 		results <- result{response: response, err: err}
 	}()
 	select {
+	case <-secondCallStarted:
+	case <-time.After(time.Second):
+		close(releaseFirstFocus)
+		t.Fatal("second FocusNextAgent() did not start")
+	}
+	select {
 	case <-secondFocusStarted:
+		close(releaseFirstFocus)
+		t.Fatal("second runtime focus started before first runtime focus was released")
 	case <-time.After(100 * time.Millisecond):
 	}
 	close(releaseFirstFocus)
+	select {
+	case <-secondFocusStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second runtime focus did not start after first runtime focus was released")
+	}
 
 	gotIDs := make([]ID, 0, 2)
 	for index := 0; index < 2; index++ {
-		result := <-results
-		if result.err != nil {
-			t.Fatalf("FocusNextAgent() error = %v", result.err)
+		select {
+		case result := <-results:
+			if result.err != nil {
+				t.Fatalf("FocusNextAgent() error = %v", result.err)
+			}
+			gotIDs = append(gotIDs, result.response.Agent.Agent.ID)
+		case <-time.After(time.Second):
+			t.Fatal("FocusNextAgent() result timed out")
 		}
-		gotIDs = append(gotIDs, result.response.Agent.Agent.ID)
 	}
 	if !((gotIDs[0] == "agent-1" && gotIDs[1] == "agent-2") || (gotIDs[0] == "agent-2" && gotIDs[1] == "agent-1")) {
 		t.Fatalf("concurrent FocusNextAgent() IDs = %v, want agent-1 and agent-2", gotIDs)
