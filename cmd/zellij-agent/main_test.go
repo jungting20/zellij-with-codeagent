@@ -36,7 +36,7 @@ func TestRunHelp(t *testing.T) {
 }
 
 func TestRunDispatchesAgentHelp(t *testing.T) {
-	for _, args := range [][]string{{"agent", "--help"}, {"agent", "start", "--help"}, {"agent", "dashboard", "--help"}} {
+	for _, args := range [][]string{{"agent", "--help"}, {"agent", "start", "--help"}, {"agent", "next", "--help"}, {"agent", "dashboard", "--help"}} {
 		var stdout, stderr bytes.Buffer
 		code := run(args, strings.NewReader(""), &stdout, &stderr)
 		if code != 0 || !strings.Contains(stdout.String(), "Usage: zellij-agent agent") || stderr.Len() != 0 {
@@ -75,10 +75,12 @@ func TestRunDispatchesAgentStart(t *testing.T) {
 }
 
 type fakeAgentClient struct {
-	request  transport.StartAgentRequest
-	response transport.StartAgentResponse
-	socket   string
-	timeout  time.Duration
+	request      transport.StartAgentRequest
+	response     transport.StartAgentResponse
+	nextRequest  transport.FocusNextAgentRequest
+	nextResponse transport.FocusNextAgentResponse
+	socket       string
+	timeout      time.Duration
 }
 
 func (c *fakeAgentClient) StartAgent(_ context.Context, request transport.StartAgentRequest) (transport.StartAgentResponse, error) {
@@ -92,6 +94,11 @@ func (c *fakeAgentClient) ListAgents(context.Context) (transport.ListAgentsRespo
 
 func (c *fakeAgentClient) FocusAgent(context.Context, string, transport.FocusAgentRequest) (transport.FocusAgentResponse, error) {
 	return transport.FocusAgentResponse{}, nil
+}
+
+func (c *fakeAgentClient) FocusNextAgent(_ context.Context, request transport.FocusNextAgentRequest) (transport.FocusNextAgentResponse, error) {
+	c.nextRequest = request
+	return c.nextResponse, nil
 }
 
 func (c *fakeAgentClient) StreamEvents(context.Context) (*transport.EventStream, error) {

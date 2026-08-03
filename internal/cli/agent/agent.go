@@ -28,6 +28,7 @@ const (
 
 type AgentClient interface {
 	StartAgent(context.Context, transport.StartAgentRequest) (transport.StartAgentResponse, error)
+	FocusNextAgent(context.Context, transport.FocusNextAgentRequest) (transport.FocusNextAgentResponse, error)
 	agentdashboard.Client
 }
 
@@ -54,6 +55,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 		return 0
 	case "start":
 		return runStart(args[1:], stdout, stderr, newClient, cfg)
+	case "next":
+		return runNext(args[1:], stdout, stderr, newClient, cfg)
 	case "dashboard":
 		return runDashboard(args[1:], stdin, stdout, stderr, newClient, cfg)
 	default:
@@ -61,6 +64,65 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 		printUsage(stderr)
 		return 2
 	}
+}
+
+func runNext(args []string, stdout, stderr io.Writer, newClient ClientFactory, cfg Config) int {
+	if len(args) == 1 && isHelp(args[0]) {
+		printNextUsage(stdout)
+		return 0
+	}
+	fs := flag.NewFlagSet("agent next", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	socket := fs.String("socket", cli.DefaultSocketPath, "agentd Unix socket path")
+	timeout := fs.Duration("timeout", defaultTimeout, "request timeout")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "agent next does not accept positional arguments")
+		return 2
+	}
+	if *timeout <= 0 {
+		fmt.Fprintln(stderr, "agent next --timeout must be positive")
+		return 2
+	}
+	if cfg.Getenv == nil {
+		fmt.Fprintln(stderr, "agent next configuration error: Getenv is required")
+		return 1
+	}
+	session := strings.TrimSpace(cfg.Getenv("ZELLIJ_SESSION_NAME"))
+	paneID := normalizeZellijPaneID(cfg.Getenv("ZELLIJ_PANE_ID"))
+	if session == "" || paneID == "" {
+		fmt.Fprintln(stderr, "agent next must run inside a Zellij pane (ZELLIJ_SESSION_NAME and ZELLIJ_PANE_ID are required)")
+		return 2
+	}
+	if newClient == nil {
+		fmt.Fprintln(stderr, "agent next client is not configured")
+		return 1
+	}
+	client := newClient(*socket, *timeout)
+	if isNilAgentClient(client) {
+		fmt.Fprintln(stderr, "agent next client is not configured")
+		return 1
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	response, err := client.FocusNextAgent(ctx, transport.FocusNextAgentRequest{
+		SourceSession:      session,
+		SourceZellijPaneID: paneID,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "agent next failed via socket %s: %v\n", *socket, err)
+		return 1
+	}
+
+	focusedPaneID := response.Agent.Agent.PaneID
+	if focusedPaneID == "" {
+		focusedPaneID = response.Agent.Pane.ID
+	}
+	fmt.Fprintf(stdout, "focused agent=%s kind=%s pane=%s\n", response.Agent.Agent.ID, response.Agent.Agent.Kind, focusedPaneID)
+	return 0
 }
 
 func runDashboard(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient ClientFactory, cfg Config) int {
@@ -334,11 +396,20 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  start   Start a coding agent in the current Zellij tab")
+	fmt.Fprintln(w, "  next    Focus the next managed coding agent")
 	fmt.Fprintln(w, "  dashboard  Show and focus managed coding agents")
 	fmt.Fprintln(w)
 	printStartSummary(w)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Run 'zellij-agent agent <command> --help' for command options.")
+}
+
+func printNextUsage(w io.Writer) {
+	fmt.Fprintln(w, "Usage: zellij-agent agent next [--socket PATH --timeout DURATION]")
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  --socket PATH\n    agentd Unix socket path (default %q)\n", cli.DefaultSocketPath)
+	fmt.Fprintln(w, "  --timeout DURATION")
+	fmt.Fprintln(w, "    request timeout (default 10s; must be positive)")
 }
 
 func printDashboardUsage(w io.Writer) {
