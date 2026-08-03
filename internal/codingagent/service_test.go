@@ -973,6 +973,47 @@ func TestServiceFocusNextAgentDoesNothingWithoutIdleAgents(t *testing.T) {
 	}
 }
 
+func TestServiceFocusNextAgentDoesNothingForEmptyStore(t *testing.T) {
+	store := NewMemoryStore(nil)
+	runtimeService := &serviceFakeRuntime{}
+	service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
+	service.lastFocusedID = "agent-previous"
+
+	response, err := service.FocusNextAgent(context.Background(), FocusNextAgentRequest{
+		SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1",
+	})
+	if err != nil || response.Focused || response.Agent.Agent.ID != "" {
+		t.Fatalf("FocusNextAgent() response=%#v error=%v, want successful no-op", response, err)
+	}
+	if len(runtimeService.focused) != 0 || service.lastFocusedID != "agent-previous" {
+		t.Fatalf("empty-store no-op focus calls=%d cursor=%q", len(runtimeService.focused), service.lastFocusedID)
+	}
+}
+
+func TestServiceFocusNextAgentRepeatedlySelectsOnlyIdleAgent(t *testing.T) {
+	store := NewMemoryStore(nil)
+	seedRecordsWithStates(t, store, []State{StateWorking, StateIdle, StateBlocked})
+	runtimeService := successfulFocusRuntime()
+	service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
+	request := FocusNextAgentRequest{SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1"}
+
+	for call := 1; call <= 2; call++ {
+		response, err := service.FocusNextAgent(context.Background(), request)
+		if err != nil {
+			t.Fatalf("FocusNextAgent() call %d error = %v", call, err)
+		}
+		if !response.Focused || response.Agent.Agent.ID != "agent-2" {
+			t.Fatalf("FocusNextAgent() call %d response = %#v, want focused agent-2", call, response)
+		}
+		if got := len(runtimeService.focused); got != call {
+			t.Fatalf("runtime focus calls after call %d = %d, want %d", call, got, call)
+		}
+		if service.lastFocusedID != "agent-2" {
+			t.Fatalf("cursor after call %d = %q, want agent-2", call, service.lastFocusedID)
+		}
+	}
+}
+
 func TestServiceFocusNextAgentRestartsWhenCursorAgentBecomesWorking(t *testing.T) {
 	store := NewMemoryStore(nil)
 	seedFocusRecords(t, store)

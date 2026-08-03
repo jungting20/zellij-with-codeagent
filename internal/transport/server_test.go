@@ -80,18 +80,36 @@ func TestServerAgentRoutes(t *testing.T) {
 func TestServerFocusNextAgentReturnsSuccessfulNoOp(t *testing.T) {
 	service := newFakeRuntimeService()
 	service.agentNextResponseSet = true
-	service.agentNextResponse = codingagent.FocusNextAgentResponse{Focused: false}
+	service.agentNextResponse = codingagent.FocusNextAgentResponse{
+		Focused: false,
+		Agent:   fakeAgentResponse(codingagent.KindCodex, "ignored-agent").Agent,
+	}
 	server := newTestServer(t, service)
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/agents/next", strings.NewReader(`{"source_session":"physical-b","source_zellij_pane_id":"terminal_8"}`)))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(recorder.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw no-op response: %v", err)
+	}
+	rawFocused, ok := raw["focused"]
+	if !ok {
+		t.Fatalf("no-op response body=%s, want explicit focused key", recorder.Body.String())
+	}
+	var focused bool
+	if err := json.Unmarshal(rawFocused, &focused); err != nil {
+		t.Fatalf("decode focused value: %v", err)
+	}
+	if focused {
+		t.Fatalf("no-op focused=%t, want false", focused)
+	}
 	var response FocusNextAgentResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Focused || response.Agent.Agent.ID != "" {
+	if response.Focused {
 		t.Fatalf("response=%#v, want no-op", response)
 	}
 }

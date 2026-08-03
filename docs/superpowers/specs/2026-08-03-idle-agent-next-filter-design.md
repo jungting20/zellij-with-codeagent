@@ -43,18 +43,12 @@ Add a `Focused bool` field to the domain and transport
 `FocusNextAgentResponse` types. The JSON response gains an additive `focused`
 boolean:
 
-```json
-{
-  "focused": false,
-  "agent": {}
-}
-```
-
 `focused: true` means `agent` contains the successfully focused agent and pane.
-`focused: false` means no idle agent existed and the `agent` value must be
-ignored. The endpoint continues to return HTTP 200 for the no-op case. Existing
-error mapping remains unchanged for store, runtime, validation, and transport
-failures.
+`focused: false` means no idle agent existed. The response explicitly includes
+`"focused": false`; its ignored zero-value `agent` wire representation is
+non-normative, and clients must ignore `agent` whenever `focused` is false. The
+endpoint continues to return HTTP 200 for the no-op case. Existing error mapping
+remains unchanged for store, runtime, validation, and transport failures.
 
 ## CLI Behavior
 
