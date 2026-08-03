@@ -48,6 +48,25 @@ func TestServerAgentRoutes(t *testing.T) {
 		t.Fatalf("FocusAgent request = %#v", service.agentFocusReq)
 	}
 
+	next := httptest.NewRecorder()
+	server.ServeHTTP(next, httptest.NewRequest(http.MethodPost, "/v1/agents/next", strings.NewReader(`{"source_session":"physical-b","source_zellij_pane_id":"terminal_8"}`)))
+	if next.Code != http.StatusOK {
+		t.Fatalf("next status = %d, want 200; body=%s", next.Code, next.Body.String())
+	}
+	if service.agentNextCalls != 1 {
+		t.Fatalf("FocusNextAgent calls = %d, want 1", service.agentNextCalls)
+	}
+	if service.agentNextReq.SourceZellijSession != "physical-b" || service.agentNextReq.SourceZellijPaneID != "terminal_8" {
+		t.Fatalf("FocusNextAgent request = %#v", service.agentNextReq)
+	}
+	var nextResponse FocusNextAgentResponse
+	if err := json.Unmarshal(next.Body.Bytes(), &nextResponse); err != nil {
+		t.Fatalf("decode next response: %v", err)
+	}
+	if nextResponse.Agent.Agent.ID != "agent-2" {
+		t.Fatalf("FocusNextAgent response agent id = %q, want agent-2", nextResponse.Agent.Agent.ID)
+	}
+
 	doubleEscaped := httptest.NewRecorder()
 	server.ServeHTTP(doubleEscaped, httptest.NewRequest(http.MethodPost, "/v1/agents/agent%252F1/focus", strings.NewReader(`{"source_session":"physical-a","source_zellij_pane_id":"terminal_2"}`)))
 	if doubleEscaped.Code != http.StatusOK {
@@ -61,6 +80,7 @@ func TestServerAgentRoutes(t *testing.T) {
 func TestServerAgentRoutesRejectTrailingJSONWithoutDispatch(t *testing.T) {
 	validStart := `{"kind":"codex","cwd":"/tmp","source_session":"physical-a","source_zellij_pane_id":"terminal_2"}`
 	validFocus := `{"source_session":"physical-a","source_zellij_pane_id":"terminal_2"}`
+	validNext := `{"source_session":"physical-b","source_zellij_pane_id":"terminal_8"}`
 	tests := []struct {
 		name string
 		path string
@@ -70,6 +90,8 @@ func TestServerAgentRoutesRejectTrailingJSONWithoutDispatch(t *testing.T) {
 		{name: "start second object", path: "/v1/agents", body: validStart + ` {}`},
 		{name: "focus junk", path: "/v1/agents/agent-1/focus", body: validFocus + ` junk`},
 		{name: "focus second object", path: "/v1/agents/agent-1/focus", body: validFocus + ` {}`},
+		{name: "next junk", path: "/v1/agents/next", body: validNext + ` junk`},
+		{name: "next second object", path: "/v1/agents/next", body: validNext + ` {}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -80,8 +102,8 @@ func TestServerAgentRoutesRejectTrailingJSONWithoutDispatch(t *testing.T) {
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
 			}
-			if service.agentStartCalls != 0 || service.agentFocusCalls != 0 {
-				t.Fatalf("service dispatch start=%d focus=%d, want zero", service.agentStartCalls, service.agentFocusCalls)
+			if service.agentStartCalls != 0 || service.agentFocusCalls != 0 || service.agentNextCalls != 0 {
+				t.Fatalf("service dispatch start=%d focus=%d next=%d, want zero", service.agentStartCalls, service.agentFocusCalls, service.agentNextCalls)
 			}
 		})
 	}
@@ -94,10 +116,12 @@ func TestServerAgentRoutesRejectInvalidMethodShapeAndJSON(t *testing.T) {
 	}{
 		{name: "collection put", method: http.MethodPut, path: "/v1/agents", wantStatus: http.StatusMethodNotAllowed},
 		{name: "focus get", method: http.MethodGet, path: "/v1/agents/agent-1/focus", wantStatus: http.StatusMethodNotAllowed},
+		{name: "next get", method: http.MethodGet, path: "/v1/agents/next", wantStatus: http.StatusMethodNotAllowed},
 		{name: "unknown action", method: http.MethodPost, path: "/v1/agents/agent-1/stop", body: `{}`, wantStatus: http.StatusNotFound},
 		{name: "extra suffix", method: http.MethodPost, path: "/v1/agents/agent-1/focus/extra", body: `{}`, wantStatus: http.StatusBadRequest},
 		{name: "malformed start", method: http.MethodPost, path: "/v1/agents", body: `{`, wantStatus: http.StatusBadRequest},
 		{name: "malformed focus", method: http.MethodPost, path: "/v1/agents/agent-1/focus", body: `{`, wantStatus: http.StatusBadRequest},
+		{name: "malformed next", method: http.MethodPost, path: "/v1/agents/next", body: `{`, wantStatus: http.StatusBadRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -108,8 +132,44 @@ func TestServerAgentRoutesRejectInvalidMethodShapeAndJSON(t *testing.T) {
 			if response.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d; body=%s", response.Code, tt.wantStatus, response.Body.String())
 			}
-			if tt.method == http.MethodGet && strings.Contains(tt.path, "/focus") && service.agentFocusCalls != 0 {
-				t.Fatal("GET focus dispatched to service")
+			if service.agentFocusCalls != 0 || service.agentNextCalls != 0 {
+				t.Fatalf("invalid request dispatched focus=%d next=%d", service.agentFocusCalls, service.agentNextCalls)
+			}
+		})
+	}
+}
+
+func TestServerNextAgentErrorsMapToStableHTTPResponses(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		err        error
+		wantStatus int
+		wantCode   ErrorCode
+	}{
+		{name: "no agents", body: `{"source_session":"physical-b","source_zellij_pane_id":"terminal_8"}`, err: codingagent.ErrNoAgents, wantStatus: http.StatusNotFound, wantCode: CodeNotFound},
+		{name: "session required", body: `{"source_zellij_pane_id":"terminal_8"}`, err: codingagent.ErrAgentSourceRequired, wantStatus: http.StatusBadRequest, wantCode: CodeBadRequest},
+		{name: "pane required", body: `{"source_session":"physical-b"}`, err: codingagent.ErrAgentSourceRequired, wantStatus: http.StatusBadRequest, wantCode: CodeBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := newFakeRuntimeService()
+			service.agentNextErr = tt.err
+			server := newTestServer(t, service)
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/agents/next", strings.NewReader(tt.body)))
+			if response.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, tt.wantStatus, response.Body.String())
+			}
+			if service.agentNextCalls != 1 {
+				t.Fatalf("FocusNextAgent calls = %d, want 1", service.agentNextCalls)
+			}
+			var decoded ErrorResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Error.Code != tt.wantCode {
+				t.Fatalf("code = %q, want %q", decoded.Error.Code, tt.wantCode)
 			}
 		})
 	}
@@ -663,6 +723,9 @@ type fakeRuntimeService struct {
 	agentFocusReq   codingagent.FocusAgentRequest
 	agentFocusCalls int
 	agentFocusErr   error
+	agentNextReq    codingagent.FocusNextAgentRequest
+	agentNextCalls  int
+	agentNextErr    error
 
 	subs []chan eventbus.Event
 }
@@ -698,6 +761,17 @@ func (f *fakeRuntimeService) FocusAgent(_ context.Context, req codingagent.Focus
 		return codingagent.FocusAgentResponse{}, f.agentFocusErr
 	}
 	return codingagent.FocusAgentResponse(fakeAgentResponse(codingagent.KindCodex, req.AgentID)), nil
+}
+
+func (f *fakeRuntimeService) FocusNextAgent(_ context.Context, req codingagent.FocusNextAgentRequest) (codingagent.FocusNextAgentResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.agentNextCalls++
+	f.agentNextReq = req
+	if f.agentNextErr != nil {
+		return codingagent.FocusNextAgentResponse{}, f.agentNextErr
+	}
+	return codingagent.FocusNextAgentResponse(fakeAgentResponse(codingagent.KindCodex, "agent-2")), nil
 }
 
 func fakeAgentResponse(kind codingagent.Kind, id codingagent.ID) codingagent.StartAgentResponse {

@@ -166,6 +166,12 @@ func (c *Client) FocusAgent(ctx context.Context, agentID string, req FocusAgentR
 	return response, err
 }
 
+func (c *Client) FocusNextAgent(ctx context.Context, req FocusNextAgentRequest) (FocusNextAgentResponse, error) {
+	var response FocusNextAgentResponse
+	err := c.do(ctx, http.MethodPost, "/v1/agents/next", req, &response)
+	return response, err
+}
+
 func (c *Client) InspectRuntime(ctx context.Context) (InspectRuntimeResponse, error) {
 	var response InspectRuntimeResponse
 	err := c.do(ctx, http.MethodGet, "/v1/runtime", nil, &response)

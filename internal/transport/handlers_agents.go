@@ -63,6 +63,25 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, FocusAgentFromCodingAgent(response))
 }
 
+func (s *Server) handleNextAgent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, BadRequest("next focus requires POST"), http.StatusMethodNotAllowed)
+		return
+	}
+	var request FocusNextAgentRequest
+	if !decodeRequest(w, r, &request) {
+		return
+	}
+	ctx, cancel := s.requestContext(r)
+	defer cancel()
+	response, err := s.service.FocusNextAgent(ctx, request.ToCodingAgent())
+	if err != nil {
+		writeRuntimeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, FocusNextAgentFromCodingAgent(response))
+}
+
 func splitAgentAction(escapedPath string) (string, string, bool) {
 	rest := strings.TrimPrefix(escapedPath, "/v1/agents/")
 	parts := strings.Split(rest, "/")

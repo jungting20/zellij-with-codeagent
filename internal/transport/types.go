@@ -121,6 +121,15 @@ type FocusAgentResponse struct {
 	Agent AgentWithPane `json:"agent"`
 }
 
+type FocusNextAgentRequest struct {
+	SourceSession      string `json:"source_session"`
+	SourceZellijPaneID string `json:"source_zellij_pane_id"`
+}
+
+type FocusNextAgentResponse struct {
+	Agent AgentWithPane `json:"agent"`
+}
+
 type Agent struct {
 	ID             string    `json:"id"`
 	Kind           string    `json:"kind"`
@@ -320,6 +329,13 @@ func (req FocusAgentRequest) ToCodingAgent(id string) codingagent.FocusAgentRequ
 	}
 }
 
+func (req FocusNextAgentRequest) ToCodingAgent() codingagent.FocusNextAgentRequest {
+	return codingagent.FocusNextAgentRequest{
+		SourceZellijSession: req.SourceSession,
+		SourceZellijPaneID:  rt.ZellijPaneID(req.SourceZellijPaneID),
+	}
+}
+
 func AgentFromCodingAgent(record codingagent.Record) Agent {
 	return Agent{
 		ID:             string(record.ID),
@@ -351,6 +367,10 @@ func ListAgentsFromCodingAgent(response codingagent.ListAgentsResponse) ListAgen
 
 func FocusAgentFromCodingAgent(response codingagent.FocusAgentResponse) FocusAgentResponse {
 	return FocusAgentResponse{Agent: AgentWithPaneFromCodingAgent(response.Agent)}
+}
+
+func FocusNextAgentFromCodingAgent(response codingagent.FocusNextAgentResponse) FocusNextAgentResponse {
+	return FocusNextAgentResponse{Agent: AgentWithPaneFromCodingAgent(response.Agent)}
 }
 
 func (req CreatePaneRequest) ToRuntime() rt.CreatePaneRequest {

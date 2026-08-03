@@ -64,7 +64,7 @@ func ErrorFor(err error) (APIError, int) {
 	switch {
 	case errors.Is(err, ErrVoiceQueueFull):
 		return APIError{Code: CodeQueueFull, Message: err.Error(), Retryable: true}, http.StatusServiceUnavailable
-	case errors.Is(err, codingagent.ErrNotFound), errors.Is(err, rt.ErrPaneNotFound), errors.Is(err, rt.ErrSessionNotFound), errors.Is(err, rt.ErrTabNotFound):
+	case errors.Is(err, codingagent.ErrNotFound), errors.Is(err, codingagent.ErrNoAgents), errors.Is(err, rt.ErrPaneNotFound), errors.Is(err, rt.ErrSessionNotFound), errors.Is(err, rt.ErrTabNotFound):
 		return APIError{Code: CodeNotFound, Message: err.Error()}, http.StatusNotFound
 	case errors.Is(err, codingagent.ErrInvalidAgentKind), errors.Is(err, codingagent.ErrInvalidAgentCWD), errors.Is(err, codingagent.ErrAgentSourceRequired), errors.Is(err, codingagent.ErrAgentIDRequired), errors.Is(err, codingagent.ErrInvalidRecord), errors.Is(err, codingagent.ErrInvalidState), errors.Is(err, rt.ErrMissingPaneID), errors.Is(err, rt.ErrInvalidExecutionPlan), errors.Is(err, rt.ErrInvalidMessage), errors.Is(err, rt.ErrInvalidPaneTarget), errors.Is(err, rt.ErrZellijSessionRequired):
 		return APIError{Code: CodeBadRequest, Message: err.Error()}, http.StatusBadRequest

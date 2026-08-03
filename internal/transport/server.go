@@ -121,6 +121,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handlePaneAction(w, r)
 	case r.URL.Path == "/v1/agents":
 		s.handleAgents(w, r)
+	case r.URL.Path == "/v1/agents/next":
+		s.handleNextAgent(w, r)
 	case strings.HasPrefix(r.URL.Path, "/v1/agents/"):
 		s.handleAgentAction(w, r)
 	case r.URL.Path == "/v1/messages":
