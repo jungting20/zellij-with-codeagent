@@ -116,6 +116,9 @@ func runNext(args []string, stdout, stderr io.Writer, newClient ClientFactory, c
 		fmt.Fprintf(stderr, "agent next failed via socket %s: %v\n", *socket, err)
 		return 1
 	}
+	if !response.Focused {
+		return 0
+	}
 
 	focusedPaneID := response.Agent.Agent.PaneID
 	if focusedPaneID == "" {

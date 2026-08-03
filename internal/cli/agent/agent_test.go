@@ -90,6 +90,9 @@ func TestRunNextFocusesNextAgentWithZellijContext(t *testing.T) {
 	if stdout.String() != "focused agent=agent-2 kind=claude pane=agent-2\n" {
 		t.Fatalf("stdout=%q", stdout.String())
 	}
+	if client.nextCalls != 1 {
+		t.Fatalf("FocusNextAgent calls=%d, want 1", client.nextCalls)
+	}
 }
 
 func TestRunNextFallsBackToPaneID(t *testing.T) {
@@ -103,33 +106,60 @@ func TestRunNextFallsBackToPaneID(t *testing.T) {
 	if code != 0 || stderr.Len() != 0 || stdout.String() != "focused agent=agent-2 kind=claude pane=pane-2\n" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
+	if client.nextCalls != 1 {
+		t.Fatalf("FocusNextAgent calls=%d, want 1", client.nextCalls)
+	}
+}
+
+func TestRunNextSilentlySucceedsWhenNoIdleAgentExists(t *testing.T) {
+	client := &testClient{nextResponse: transport.FocusNextAgentResponse{Focused: false}}
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"next"}, strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
+		Getenv: mapGetenv(map[string]string{
+			"ZELLIJ_SESSION_NAME": "session-b",
+			"ZELLIJ_PANE_ID":      "terminal_8",
+		}),
+	})
+	if code != 0 || stdout.Len() != 0 || stderr.Len() != 0 || client.nextCalls != 1 {
+		t.Fatalf("code=%d stdout=%q stderr=%q calls=%d", code, stdout.String(), stderr.String(), client.nextCalls)
+	}
 }
 
 func TestRunNextRejectsInvalidConfigurationAndInput(t *testing.T) {
 	validConfig := Config{Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-b", "ZELLIJ_PANE_ID": "terminal_8"})}
 	tests := []struct {
-		name    string
-		args    []string
-		cfg     Config
-		factory ClientFactory
-		code    int
-		want    string
+		name           string
+		args           []string
+		cfg            Config
+		factory        ClientFactory
+		concreteClient bool
+		code           int
+		want           string
 	}{
-		{name: "positional argument", args: []string{"next", "extra"}, cfg: validConfig, factory: testFactory(&testClient{}), code: 2, want: "agent next does not accept positional arguments"},
-		{name: "non-positive timeout", args: []string{"next", "--timeout", "0s"}, cfg: validConfig, factory: testFactory(&testClient{}), code: 2, want: "agent next --timeout must be positive"},
-		{name: "missing getenv", args: []string{"next"}, cfg: Config{}, factory: testFactory(&testClient{}), code: 1, want: "agent next configuration error: Getenv is required"},
-		{name: "missing zellij session", args: []string{"next"}, cfg: Config{Getenv: mapGetenv(map[string]string{"ZELLIJ_PANE_ID": "terminal_8"})}, factory: testFactory(&testClient{}), code: 2, want: "agent next must run inside a Zellij pane"},
-		{name: "missing zellij pane", args: []string{"next"}, cfg: Config{Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-b"})}, factory: testFactory(&testClient{}), code: 2, want: "agent next must run inside a Zellij pane"},
+		{name: "positional argument", args: []string{"next", "extra"}, cfg: validConfig, concreteClient: true, code: 2, want: "agent next does not accept positional arguments"},
+		{name: "non-positive timeout", args: []string{"next", "--timeout", "0s"}, cfg: validConfig, concreteClient: true, code: 2, want: "agent next --timeout must be positive"},
+		{name: "missing getenv", args: []string{"next"}, cfg: Config{}, concreteClient: true, code: 1, want: "agent next configuration error: Getenv is required"},
+		{name: "missing zellij session", args: []string{"next"}, cfg: Config{Getenv: mapGetenv(map[string]string{"ZELLIJ_PANE_ID": "terminal_8"})}, concreteClient: true, code: 2, want: "agent next must run inside a Zellij pane"},
+		{name: "missing zellij pane", args: []string{"next"}, cfg: Config{Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-b"})}, concreteClient: true, code: 2, want: "agent next must run inside a Zellij pane"},
 		{name: "nil factory", args: []string{"next"}, cfg: validConfig, code: 1, want: "agent next client is not configured"},
 		{name: "nil client", args: []string{"next"}, cfg: validConfig, factory: func(string, time.Duration) AgentClient { return nil }, code: 1, want: "agent next client is not configured"},
 		{name: "typed nil client", args: []string{"next"}, cfg: validConfig, factory: func(string, time.Duration) AgentClient { var client *testClient; return client }, code: 1, want: "agent next client is not configured"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			factory := tt.factory
+			var client *testClient
+			if tt.concreteClient {
+				client = &testClient{}
+				factory = testFactory(client)
+			}
 			var stdout, stderr bytes.Buffer
-			code := Run(tt.args, strings.NewReader(""), &stdout, &stderr, tt.factory, tt.cfg)
+			code := Run(tt.args, strings.NewReader(""), &stdout, &stderr, factory, tt.cfg)
 			if code != tt.code || !strings.Contains(stderr.String(), tt.want) || stdout.Len() != 0 {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if client != nil && client.nextCalls != 0 {
+				t.Fatalf("FocusNextAgent calls=%d, want 0", client.nextCalls)
 			}
 		})
 	}
@@ -145,6 +175,9 @@ func TestRunNextReportsClientError(t *testing.T) {
 
 	if code != 1 || !strings.Contains(stderr.String(), "agent next failed via socket") || !strings.Contains(stderr.String(), "daemon unavailable") || stdout.Len() != 0 {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if client.nextCalls != 1 {
+		t.Fatalf("FocusNextAgent calls=%d, want 1", client.nextCalls)
 	}
 }
 
@@ -515,7 +548,7 @@ func mapGetenv(values map[string]string) func(string) string {
 }
 
 func focusedNext(id, kind, agentPaneID, paneID string) transport.FocusNextAgentResponse {
-	return transport.FocusNextAgentResponse{Agent: transport.AgentWithPane{
+	return transport.FocusNextAgentResponse{Focused: true, Agent: transport.AgentWithPane{
 		Agent: transport.Agent{ID: id, Kind: kind, PaneID: agentPaneID},
 		Pane:  transport.Pane{ID: paneID},
 	}}

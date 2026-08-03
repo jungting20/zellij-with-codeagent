@@ -127,7 +127,8 @@ type FocusNextAgentRequest struct {
 }
 
 type FocusNextAgentResponse struct {
-	Agent AgentWithPane `json:"agent"`
+	Focused bool          `json:"focused"`
+	Agent   AgentWithPane `json:"agent"`
 }
 
 type Agent struct {
@@ -370,7 +371,10 @@ func FocusAgentFromCodingAgent(response codingagent.FocusAgentResponse) FocusAge
 }
 
 func FocusNextAgentFromCodingAgent(response codingagent.FocusNextAgentResponse) FocusNextAgentResponse {
-	return FocusNextAgentResponse{Agent: AgentWithPaneFromCodingAgent(response.Agent)}
+	return FocusNextAgentResponse{
+		Focused: response.Focused,
+		Agent:   AgentWithPaneFromCodingAgent(response.Agent),
+	}
 }
 
 func (req CreatePaneRequest) ToRuntime() rt.CreatePaneRequest {

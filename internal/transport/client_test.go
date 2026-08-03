@@ -28,11 +28,15 @@ func TestClientAgentMethodsUseExactPathsMethodsAndEscaping(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		switch len(calls) {
-		case 1, 3, 4, 5:
+		case 1, 3, 4:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"agent":{"agent":{"id":"agent/1","kind":"codex","pane_id":"agent/1","state":"unknown","created_at":"1970-01-01T00:00:10Z","state_changed_at":"1970-01-01T00:00:20Z"},"pane":{"id":"agent/1","status":"running","created_at":"1970-01-01T00:00:10Z","updated_at":"1970-01-01T00:00:30Z"}}}`))
 		case 2:
 			_, _ = w.Write([]byte(`{"agents":[]}`))
+		case 5:
+			_, _ = w.Write([]byte(`{"focused":true,"agent":{"agent":{"id":"agent/1","kind":"codex","pane_id":"agent/1","state":"unknown","created_at":"1970-01-01T00:00:10Z","state_changed_at":"1970-01-01T00:00:20Z"},"pane":{"id":"agent/1","status":"running","created_at":"1970-01-01T00:00:10Z","updated_at":"1970-01-01T00:00:30Z"}}}`))
+		case 6:
+			_, _ = w.Write([]byte(`{"focused":false,"agent":{}}`))
 		}
 	}))
 	defer server.Close()
@@ -57,10 +61,21 @@ func TestClientAgentMethodsUseExactPathsMethodsAndEscaping(t *testing.T) {
 	if _, err := client.FocusAgent(context.Background(), "agent%2F1", FocusAgentRequest{SourceSession: "physical-a", SourceZellijPaneID: "terminal_2"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.FocusNextAgent(context.Background(), FocusNextAgentRequest{SourceSession: "physical-b", SourceZellijPaneID: "terminal_8"}); err != nil {
+	next, err := client.FocusNextAgent(context.Background(), FocusNextAgentRequest{SourceSession: "physical-b", SourceZellijPaneID: "terminal_8"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"POST /v1/agents", "GET /v1/agents", "POST /v1/agents/agent%2F1/focus", "POST /v1/agents/agent%252F1/focus", "POST /v1/agents/next"}
+	if !next.Focused || next.Agent.Agent.ID != "agent/1" {
+		t.Fatalf("FocusNextAgent() = %#v", next)
+	}
+	noOp, err := client.FocusNextAgent(context.Background(), FocusNextAgentRequest{SourceSession: "physical-b", SourceZellijPaneID: "terminal_8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if noOp.Focused || noOp.Agent.Agent.ID != "" {
+		t.Fatalf("FocusNextAgent() = %#v, want no-op", noOp)
+	}
+	want := []string{"POST /v1/agents", "GET /v1/agents", "POST /v1/agents/agent%2F1/focus", "POST /v1/agents/agent%252F1/focus", "POST /v1/agents/next", "POST /v1/agents/next"}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %#v, want %#v", calls, want)
 	}

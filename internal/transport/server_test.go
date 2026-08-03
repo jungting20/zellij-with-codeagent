@@ -63,8 +63,8 @@ func TestServerAgentRoutes(t *testing.T) {
 	if err := json.Unmarshal(next.Body.Bytes(), &nextResponse); err != nil {
 		t.Fatalf("decode next response: %v", err)
 	}
-	if nextResponse.Agent.Agent.ID != "agent-2" {
-		t.Fatalf("FocusNextAgent response agent id = %q, want agent-2", nextResponse.Agent.Agent.ID)
+	if !nextResponse.Focused || nextResponse.Agent.Agent.ID != "agent-2" {
+		t.Fatalf("FocusNextAgent response = %#v", nextResponse)
 	}
 
 	doubleEscaped := httptest.NewRecorder()
@@ -74,6 +74,43 @@ func TestServerAgentRoutes(t *testing.T) {
 	}
 	if service.agentFocusReq.AgentID != "agent%2F1" {
 		t.Fatalf("double-escaped FocusAgent id = %q, want literal agent%%2F1", service.agentFocusReq.AgentID)
+	}
+}
+
+func TestServerFocusNextAgentReturnsSuccessfulNoOp(t *testing.T) {
+	service := newFakeRuntimeService()
+	service.agentNextResponseSet = true
+	service.agentNextResponse = codingagent.FocusNextAgentResponse{
+		Focused: false,
+		Agent:   fakeAgentResponse(codingagent.KindCodex, "ignored-agent").Agent,
+	}
+	server := newTestServer(t, service)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/agents/next", strings.NewReader(`{"source_session":"physical-b","source_zellij_pane_id":"terminal_8"}`)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(recorder.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw no-op response: %v", err)
+	}
+	rawFocused, ok := raw["focused"]
+	if !ok {
+		t.Fatalf("no-op response body=%s, want explicit focused key", recorder.Body.String())
+	}
+	var focused bool
+	if err := json.Unmarshal(rawFocused, &focused); err != nil {
+		t.Fatalf("decode focused value: %v", err)
+	}
+	if focused {
+		t.Fatalf("no-op focused=%t, want false", focused)
+	}
+	var response FocusNextAgentResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Focused {
+		t.Fatalf("response=%#v, want no-op", response)
 	}
 }
 
@@ -147,7 +184,6 @@ func TestServerNextAgentErrorsMapToStableHTTPResponses(t *testing.T) {
 		wantStatus int
 		wantCode   ErrorCode
 	}{
-		{name: "no agents", body: `{"source_session":"physical-b","source_zellij_pane_id":"terminal_8"}`, err: codingagent.ErrNoAgents, wantStatus: http.StatusNotFound, wantCode: CodeNotFound},
 		{name: "session required", body: `{"source_zellij_pane_id":"terminal_8"}`, err: codingagent.ErrAgentSourceRequired, wantStatus: http.StatusBadRequest, wantCode: CodeBadRequest},
 		{name: "pane required", body: `{"source_session":"physical-b"}`, err: codingagent.ErrAgentSourceRequired, wantStatus: http.StatusBadRequest, wantCode: CodeBadRequest},
 	}
@@ -697,35 +733,37 @@ func newTestServer(t *testing.T, service *fakeRuntimeService) *Server {
 type fakeRuntimeService struct {
 	mu sync.Mutex
 
-	createCalled    bool
-	createReq       rt.CreatePaneRequest
-	createErr       error
-	applyPlanCalled bool
-	applyPlanReq    rt.ApplyExecutionPlanRequest
-	sendReq         rt.SendInputRequest
-	sendErr         error
-	messageReq      rt.SendMessageRequest
-	messageErr      error
-	recentReq       rt.RecentEventsRequest
-	cleanupErr      error
-	markerReq       rt.WaitForOutputMarkerRequest
-	markerResponse  rt.WaitForOutputMarkerResponse
-	markerErr       error
-	markerBlock     chan struct{}
-	markerCanceled  chan struct{}
-	closeReq        rt.ClosePaneRequest
-	closeErr        error
-	agentStartReq   codingagent.StartAgentRequest
-	agentStartCalls int
-	agentStartErr   error
-	agentListCalls  int
-	agentListErr    error
-	agentFocusReq   codingagent.FocusAgentRequest
-	agentFocusCalls int
-	agentFocusErr   error
-	agentNextReq    codingagent.FocusNextAgentRequest
-	agentNextCalls  int
-	agentNextErr    error
+	createCalled         bool
+	createReq            rt.CreatePaneRequest
+	createErr            error
+	applyPlanCalled      bool
+	applyPlanReq         rt.ApplyExecutionPlanRequest
+	sendReq              rt.SendInputRequest
+	sendErr              error
+	messageReq           rt.SendMessageRequest
+	messageErr           error
+	recentReq            rt.RecentEventsRequest
+	cleanupErr           error
+	markerReq            rt.WaitForOutputMarkerRequest
+	markerResponse       rt.WaitForOutputMarkerResponse
+	markerErr            error
+	markerBlock          chan struct{}
+	markerCanceled       chan struct{}
+	closeReq             rt.ClosePaneRequest
+	closeErr             error
+	agentStartReq        codingagent.StartAgentRequest
+	agentStartCalls      int
+	agentStartErr        error
+	agentListCalls       int
+	agentListErr         error
+	agentFocusReq        codingagent.FocusAgentRequest
+	agentFocusCalls      int
+	agentFocusErr        error
+	agentNextReq         codingagent.FocusNextAgentRequest
+	agentNextCalls       int
+	agentNextErr         error
+	agentNextResponseSet bool
+	agentNextResponse    codingagent.FocusNextAgentResponse
 
 	subs []chan eventbus.Event
 }
@@ -771,7 +809,13 @@ func (f *fakeRuntimeService) FocusNextAgent(_ context.Context, req codingagent.F
 	if f.agentNextErr != nil {
 		return codingagent.FocusNextAgentResponse{}, f.agentNextErr
 	}
-	return codingagent.FocusNextAgentResponse(fakeAgentResponse(codingagent.KindCodex, "agent-2")), nil
+	if f.agentNextResponseSet {
+		return f.agentNextResponse, nil
+	}
+	return codingagent.FocusNextAgentResponse{
+		Focused: true,
+		Agent:   fakeAgentResponse(codingagent.KindCodex, "agent-2").Agent,
+	}, nil
 }
 
 func fakeAgentResponse(kind codingagent.Kind, id codingagent.ID) codingagent.StartAgentResponse {
