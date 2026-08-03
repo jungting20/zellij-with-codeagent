@@ -20,6 +20,7 @@ var (
 	ErrInvalidAgentCWD      = errors.New("invalid coding agent cwd")
 	ErrAgentSourceRequired  = errors.New("coding agent source Zellij context is required")
 	ErrAgentIDRequired      = errors.New("coding agent id is required")
+	ErrNoAgents             = errors.New("no managed coding agents")
 	ErrAgentRuntimeRequired = errors.New("coding agent runtime service is required")
 	ErrAgentMonitorRequired = errors.New("coding agent lifecycle monitor is required")
 )
@@ -55,10 +56,20 @@ type FocusAgentResponse struct {
 	Agent AgentWithPane
 }
 
+type FocusNextAgentRequest struct {
+	SourceZellijSession string
+	SourceZellijPaneID  runtime.ZellijPaneID
+}
+
+type FocusNextAgentResponse struct {
+	Agent AgentWithPane
+}
+
 type AgentService interface {
 	StartAgent(context.Context, StartAgentRequest) (StartAgentResponse, error)
 	ListAgents(context.Context) (ListAgentsResponse, error)
 	FocusAgent(context.Context, FocusAgentRequest) (FocusAgentResponse, error)
+	FocusNextAgent(context.Context, FocusNextAgentRequest) (FocusNextAgentResponse, error)
 }
 
 type LifecycleMonitor interface {
@@ -80,6 +91,9 @@ type Service struct {
 	monitor    LifecycleMonitor
 	now        func() time.Time
 	newAgentID func() ID
+
+	focusMu       sync.Mutex
+	lastFocusedID ID
 
 	lifecycleMu sync.Mutex
 	nextOwner   uint64
@@ -231,6 +245,40 @@ func (s *Service) ListAgents(ctx context.Context) (ListAgentsResponse, error) {
 }
 
 func (s *Service) FocusAgent(ctx context.Context, request FocusAgentRequest) (FocusAgentResponse, error) {
+	s.focusMu.Lock()
+	defer s.focusMu.Unlock()
+	return s.focusAgentLocked(ctx, request)
+}
+
+func (s *Service) FocusNextAgent(ctx context.Context, request FocusNextAgentRequest) (FocusNextAgentResponse, error) {
+	s.focusMu.Lock()
+	defer s.focusMu.Unlock()
+
+	sourceSession := strings.TrimSpace(request.SourceZellijSession)
+	sourcePaneID := runtime.ZellijPaneID(strings.TrimSpace(string(request.SourceZellijPaneID)))
+	if sourceSession == "" || sourcePaneID == "" {
+		return FocusNextAgentResponse{}, ErrAgentSourceRequired
+	}
+	records, err := s.store.List()
+	if err != nil {
+		return FocusNextAgentResponse{}, fmt.Errorf("list coding agents: %w", err)
+	}
+	record, err := nextAgentRecord(records, s.lastFocusedID)
+	if err != nil {
+		return FocusNextAgentResponse{}, err
+	}
+	response, err := s.focusAgentLocked(ctx, FocusAgentRequest{
+		AgentID:             record.ID,
+		SourceZellijSession: sourceSession,
+		SourceZellijPaneID:  sourcePaneID,
+	})
+	if err != nil {
+		return FocusNextAgentResponse{}, err
+	}
+	return FocusNextAgentResponse{Agent: response.Agent}, nil
+}
+
+func (s *Service) focusAgentLocked(ctx context.Context, request FocusAgentRequest) (FocusAgentResponse, error) {
 	sourceSession := strings.TrimSpace(request.SourceZellijSession)
 	sourcePaneID := runtime.ZellijPaneID(strings.TrimSpace(string(request.SourceZellijPaneID)))
 	if sourceSession == "" || sourcePaneID == "" {
@@ -261,7 +309,20 @@ func (s *Service) FocusAgent(ctx context.Context, request FocusAgentRequest) (Fo
 	if terminalAgentPane(response.Pane.Status) {
 		return FocusAgentResponse{}, fmt.Errorf("%w: %q runtime pane is %s", ErrNotFound, request.AgentID, response.Pane.Status)
 	}
+	s.lastFocusedID = record.ID
 	return FocusAgentResponse{Agent: AgentWithPane{Agent: record, Pane: response.Pane}}, nil
+}
+
+func nextAgentRecord(records []Record, current ID) (Record, error) {
+	if len(records) == 0 {
+		return Record{}, ErrNoAgents
+	}
+	for index := range records {
+		if records[index].ID == current {
+			return records[(index+1)%len(records)], nil
+		}
+	}
+	return records[0], nil
 }
 
 func (s *Service) ListSessions(ctx context.Context) ([]runtime.SessionRecord, error) {
