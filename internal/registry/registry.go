@@ -2,6 +2,7 @@ package registry
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"sync"
@@ -53,11 +54,14 @@ func (r *Registry) RegisterPane(req RegisterPaneRequest) (PaneRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	req = applyRegisterPaneDefaults(req)
+
 	if err := r.validatePaneUniqueLocked(req.ID); err != nil {
 		return PaneRecord{}, err
 	}
-
-	req = applyRegisterPaneDefaults(req)
+	if err := r.validateActiveZellijPaneUniqueLocked(req); err != nil {
+		return PaneRecord{}, err
+	}
 	r.nextGeneration++
 
 	now := r.now()
@@ -512,6 +516,26 @@ func cloneStrings(values []string) []string {
 func (r *Registry) validatePaneUniqueLocked(id PaneID) error {
 	if _, ok := r.paneToLocation[id]; ok {
 		return ErrAlreadyExists
+	}
+	return nil
+}
+
+func (r *Registry) validateActiveZellijPaneUniqueLocked(req RegisterPaneRequest) error {
+	if req.ZellijPaneID == "" {
+		return nil
+	}
+
+	session, ok := r.sessions[req.SessionID]
+	if !ok {
+		return nil
+	}
+	for _, tab := range session.Tabs {
+		for _, pane := range tab.Panes {
+			if pane.ZellijPaneID == req.ZellijPaneID &&
+				(pane.Status == PaneStatusStarting || pane.Status == PaneStatusRunning) {
+				return fmt.Errorf("%w: session %q pane %q", ErrZellijPaneAlreadyRegistered, req.SessionID, req.ZellijPaneID)
+			}
+		}
 	}
 	return nil
 }

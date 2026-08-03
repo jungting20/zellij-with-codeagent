@@ -3,6 +3,7 @@ package registry
 import (
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -62,6 +63,93 @@ func TestRegisterPaneRejectsDuplicateLogicalID(t *testing.T) {
 	_, err := registry.RegisterPane(RegisterPaneRequest{ID: "pane-1"})
 	if !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("RegisterPane() error = %v, want %v", err, ErrAlreadyExists)
+	}
+}
+
+func TestRegisterPaneRejectsActivePhysicalPaneDuplicate(t *testing.T) {
+	for _, status := range []PaneStatus{PaneStatusStarting, PaneStatusRunning} {
+		t.Run(string(status), func(t *testing.T) {
+			registry := newTestRegistry()
+			if _, err := registry.RegisterPane(RegisterPaneRequest{
+				ID: "pane-1", SessionID: "session-a", ZellijPaneID: "terminal_2", Status: status,
+			}); err != nil {
+				t.Fatalf("first RegisterPane() error = %v", err)
+			}
+
+			_, err := registry.RegisterPane(RegisterPaneRequest{
+				ID: "pane-2", SessionID: "session-a", ZellijPaneID: "terminal_2",
+			})
+			if !errors.Is(err, ErrZellijPaneAlreadyRegistered) {
+				t.Fatalf("RegisterPane() error = %v, want %v", err, ErrZellijPaneAlreadyRegistered)
+			}
+		})
+	}
+}
+
+func TestRegisterPaneAllowsPhysicalPaneReuseOutsideActiveScope(t *testing.T) {
+	for _, status := range []PaneStatus{PaneStatusClosed, PaneStatusExited, PaneStatusLost, PaneStatusError} {
+		t.Run(string(status), func(t *testing.T) {
+			registry := newTestRegistry()
+			if _, err := registry.RegisterPane(RegisterPaneRequest{
+				ID: "pane-1", SessionID: "session-a", ZellijPaneID: "terminal_2", Status: status,
+			}); err != nil {
+				t.Fatalf("first RegisterPane() error = %v", err)
+			}
+			if _, err := registry.RegisterPane(RegisterPaneRequest{
+				ID: "pane-2", SessionID: "session-a", ZellijPaneID: "terminal_2",
+			}); err != nil {
+				t.Fatalf("RegisterPane() error = %v", err)
+			}
+		})
+	}
+
+	registry := newTestRegistry()
+	if _, err := registry.RegisterPane(RegisterPaneRequest{
+		ID: "pane-1", SessionID: "session-a", ZellijPaneID: "terminal_2", Status: PaneStatusRunning,
+	}); err != nil {
+		t.Fatalf("first RegisterPane() error = %v", err)
+	}
+	if _, err := registry.RegisterPane(RegisterPaneRequest{
+		ID: "pane-2", SessionID: "session-b", ZellijPaneID: "terminal_2",
+	}); err != nil {
+		t.Fatalf("RegisterPane() in another session error = %v", err)
+	}
+}
+
+func TestRegisterPaneAllowsOnlyOneConcurrentPhysicalPaneRegistration(t *testing.T) {
+	registry := newTestRegistry()
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var group sync.WaitGroup
+
+	for _, id := range []PaneID{"pane-1", "pane-2"} {
+		group.Add(1)
+		go func(id PaneID) {
+			defer group.Done()
+			<-start
+			_, err := registry.RegisterPane(RegisterPaneRequest{
+				ID: id, SessionID: "session-a", ZellijPaneID: "terminal_2",
+			})
+			errs <- err
+		}(id)
+	}
+
+	close(start)
+	group.Wait()
+	close(errs)
+
+	var successes, duplicates int
+	for err := range errs {
+		if err == nil {
+			successes++
+		} else if errors.Is(err, ErrZellijPaneAlreadyRegistered) {
+			duplicates++
+		} else {
+			t.Fatalf("RegisterPane() error = %v", err)
+		}
+	}
+	if successes != 1 || duplicates != 1 {
+		t.Fatalf("successes/duplicates = %d/%d, want 1/1", successes, duplicates)
 	}
 }
 

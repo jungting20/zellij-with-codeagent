@@ -81,7 +81,10 @@ type RegisterPaneRequest struct {
 	Status       PaneStatus
 }
 
-var ErrInvalidRequest = errors.New("invalid registry request")
+var (
+	ErrInvalidRequest              = errors.New("invalid registry request")
+	ErrZellijPaneAlreadyRegistered = errors.New("zellij pane already registered")
+)
 
 // Validate performs stateless validation of the RegisterPaneRequest.
 func (req RegisterPaneRequest) Validate() error {
