@@ -55,6 +55,10 @@ type PaneService interface {
 	ClosePane(context.Context, ClosePaneRequest) (ClosePaneResponse, error)
 }
 
+type PaneClaimService interface {
+	ClaimPane(context.Context, ClaimPaneRequest) (ClaimPaneResponse, error)
+}
+
 type FocusService interface {
 	FocusPane(context.Context, FocusPaneRequest) (FocusPaneResponse, error)
 }
@@ -97,6 +101,7 @@ type SessionInspectionService interface {
 
 type RuntimeService interface {
 	PaneService
+	PaneClaimService
 	FocusService
 	RuntimeInspectionService
 	EventService
@@ -104,6 +109,21 @@ type RuntimeService interface {
 	CleanupService
 	ExecutionPlanService
 	SessionInspectionService
+}
+
+type ClaimPaneRequest struct {
+	ID            PaneID
+	TaskID        TaskID
+	AgentID       AgentID
+	Role          string
+	ZellijSession string
+	ZellijPaneID  ZellijPaneID
+	Command       []string
+	CWD           string
+}
+
+type ClaimPaneResponse struct {
+	Pane Pane
 }
 
 type CreatePaneRequest struct {
