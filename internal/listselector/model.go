@@ -19,9 +19,9 @@ type agent struct {
 }
 
 var agents = []agent{
-	{name: "agent", command: "zellij-agent", baseArgs: []string{"agent", "start", "agent"}},
-	{name: "antigravity", command: "zellij-agent", baseArgs: []string{"agent", "start", "agy"}, yoloArgs: []string{"--dangerously-skip-permissions"}},
-	{name: "codex", command: "zellij-agent", baseArgs: []string{"agent", "start", "codex"}, yoloArgs: []string{"--dangerously-bypass-approvals-and-sandbox"}},
+	{name: "agent", command: "zellij-agent", baseArgs: []string{"agent", "start", "cursor", "--"}},
+	{name: "antigravity", command: "zellij-agent", baseArgs: []string{"agent", "start", "gemini", "--"}},
+	{name: "codex", command: "zellij-agent", baseArgs: []string{"agent", "start", "codex", "--"}},
 	{name: "claude", command: "claude", yoloArgs: []string{"--dangerously-skip-permissions"}},
 }
 

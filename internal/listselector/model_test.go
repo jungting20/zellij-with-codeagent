@@ -16,9 +16,9 @@ func TestDefaultAgentCommands(t *testing.T) {
 		wantCommand string
 		wantArgs    []string
 	}{
-		{name: "agent", yolo: true, wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "agent"}},
-		{name: "antigravity", yolo: true, prompt: "fix it", wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "agy", "--dangerously-skip-permissions", "fix it"}},
-		{name: "codex", yolo: true, wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "codex", "--dangerously-bypass-approvals-and-sandbox"}},
+		{name: "agent", yolo: true, wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "cursor", "--"}},
+		{name: "antigravity", yolo: true, prompt: "fix it", wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "gemini", "--", "fix it"}},
+		{name: "codex", yolo: true, wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "codex", "--"}},
 		{name: "claude", yolo: false, prompt: "review", wantCommand: "claude", wantArgs: []string{"review"}},
 	}
 
