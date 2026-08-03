@@ -81,8 +81,11 @@ Use `zellij-agent ctl` as the thin command-line client for the local socket:
 
 ### Coding Agent Dashboard
 
-Run coding agents in a new pane of the current Zellij tab through the unified
-CLI. These commands include each tool's permission-bypass option by default:
+Run coding agents through the unified CLI. `agent start` registers the current
+Zellij context, runs the selected coding agent in the current terminal, and
+closes that pane when the agent exits. It rejects a pane that is already
+managed. These commands include each tool's permission-bypass option by
+default:
 
 ```bash
 ./bin/zellij-agent agent start codex
@@ -98,6 +101,9 @@ dedicated dashboard:
 ```bash
 ./bin/zellij-agent agent dashboard
 ```
+
+`ticket-worker start` is unchanged: it still creates ticket-manager and worker
+panes through execution plans and `CreatePane` requests.
 
 Use `j`/`k` or the arrow keys to select an agent, `Enter` to switch to its
 session and focus its pane, `R` to refresh, and `q` to quit. The dashboard
