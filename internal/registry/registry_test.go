@@ -66,8 +66,8 @@ func TestRegisterPaneRejectsDuplicateLogicalID(t *testing.T) {
 	}
 }
 
-func TestRegisterPaneRejectsActivePhysicalPaneDuplicate(t *testing.T) {
-	for _, status := range []PaneStatus{PaneStatusStarting, PaneStatusRunning} {
+func TestRegisterPaneRejectsNonterminalPhysicalPaneDuplicate(t *testing.T) {
+	for _, status := range []PaneStatus{PaneStatusStarting, PaneStatusRunning, PaneStatusError} {
 		t.Run(string(status), func(t *testing.T) {
 			registry := newTestRegistry()
 			if _, err := registry.RegisterPane(RegisterPaneRequest{
@@ -86,8 +86,8 @@ func TestRegisterPaneRejectsActivePhysicalPaneDuplicate(t *testing.T) {
 	}
 }
 
-func TestRegisterPaneAllowsPhysicalPaneReuseOutsideActiveScope(t *testing.T) {
-	for _, status := range []PaneStatus{PaneStatusClosed, PaneStatusExited, PaneStatusLost, PaneStatusError} {
+func TestRegisterPaneAllowsPhysicalPaneReuseForTerminalRecordOrDifferentSession(t *testing.T) {
+	for _, status := range []PaneStatus{PaneStatusClosed, PaneStatusExited, PaneStatusLost} {
 		t.Run(string(status), func(t *testing.T) {
 			registry := newTestRegistry()
 			if _, err := registry.RegisterPane(RegisterPaneRequest{

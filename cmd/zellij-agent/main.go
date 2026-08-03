@@ -148,7 +148,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  chrome   Start a Chrome network tracking tab")
 	fmt.Fprintln(w, "  dashboard")
 	fmt.Fprintln(w, "           Supervise the managed runtime in a live TUI")
-	fmt.Fprintln(w, "  agent    Start a managed coding agent in the current Zellij tab")
+	fmt.Fprintln(w, "  agent    Manage coding agents in the current Zellij pane through close-on-exit")
 	fmt.Fprintln(w, "  ticket-worker")
 	fmt.Fprintln(w, "           Manage a project-local SQLite ticket queue")
 	fmt.Fprintln(w, "  code-review")

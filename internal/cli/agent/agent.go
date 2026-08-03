@@ -317,7 +317,26 @@ func runAgentProcess(command []string, cwd string, stdin io.Reader, stdout, stde
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
-	return cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	wait := make(chan error, 1)
+	go func() {
+		wait <- cmd.Wait()
+	}()
+	for {
+		select {
+		case err := <-wait:
+			return err
+		case sig := <-signals:
+			if err := cmd.Process.Signal(sig); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				killErr := cmd.Process.Kill()
+				waitErr := <-wait
+				return errors.Join(fmt.Errorf("forward %s to coding agent process: %w", sig, err), killErr, waitErr)
+			}
+		}
+	}
 }
 
 type startOptions struct {

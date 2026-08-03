@@ -558,12 +558,9 @@ func restoreDaemonFactories(t *testing.T) {
 }
 
 type daemonFakeBackend struct {
-	mu            sync.Mutex
-	panes         []zellij.Pane
-	created       int
-	closeErr      error
-	createBlock   <-chan struct{}
-	createStarted chan struct{}
+	mu      sync.Mutex
+	panes   []zellij.Pane
+	created int
 }
 
 func newDaemonFakeBackend() *daemonFakeBackend {
@@ -577,18 +574,6 @@ func (b *daemonFakeBackend) CreateTab(context.Context, zellij.CreateTabRequest) 
 func (b *daemonFakeBackend) CloseTab(context.Context, zellij.CloseTabRequest) error { return nil }
 func (b *daemonFakeBackend) CreatePane(_ context.Context, req zellij.CreatePaneRequest) (zellij.PaneID, error) {
 	b.mu.Lock()
-	block := b.createBlock
-	started := b.createStarted
-	b.createBlock = nil
-	b.createStarted = nil
-	b.mu.Unlock()
-	if started != nil {
-		close(started)
-	}
-	if block != nil {
-		<-block
-	}
-	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.created++
 	id := zellij.PaneID(fmt.Sprintf("agent-pane-%d", b.created))
@@ -600,12 +585,6 @@ func (b *daemonFakeBackend) CreatePane(_ context.Context, req zellij.CreatePaneR
 	return id, nil
 }
 func (b *daemonFakeBackend) ClosePane(_ context.Context, req zellij.ClosePaneRequest) error {
-	b.mu.Lock()
-	err := b.closeErr
-	b.mu.Unlock()
-	if err != nil {
-		return err
-	}
 	b.removePane(req.PaneID)
 	return nil
 }
@@ -644,22 +623,6 @@ func (b *daemonFakeBackend) addPane(pane zellij.Pane) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.panes = append(b.panes, pane)
-}
-
-func (b *daemonFakeBackend) setCloseError(err error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.closeErr = err
-}
-
-func (b *daemonFakeBackend) blockNextCreate() (<-chan struct{}, chan struct{}) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	started := make(chan struct{})
-	release := make(chan struct{})
-	b.createStarted = started
-	b.createBlock = release
-	return started, release
 }
 
 type daemonFakeSubscriptionRunner struct{}

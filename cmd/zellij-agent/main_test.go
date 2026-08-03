@@ -25,7 +25,7 @@ func TestRunHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run() exit code = %d, want 0", code)
 	}
-	for _, want := range []string{"Usage: zellij-agent", "planner", "work", "chrome", "dashboard", "agent", "ticket-worker", "code-review", "debate-background"} {
+	for _, want := range []string{"Usage: zellij-agent", "planner", "work", "chrome", "dashboard", "agent", "current Zellij pane through close-on-exit", "ticket-worker", "code-review", "debate-background"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, missing %q", stdout.String(), want)
 		}

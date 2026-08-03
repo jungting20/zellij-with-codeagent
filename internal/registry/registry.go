@@ -531,8 +531,7 @@ func (r *Registry) validateActiveZellijPaneUniqueLocked(req RegisterPaneRequest)
 	}
 	for _, tab := range session.Tabs {
 		for _, pane := range tab.Panes {
-			if pane.ZellijPaneID == req.ZellijPaneID &&
-				(pane.Status == PaneStatusStarting || pane.Status == PaneStatusRunning) {
+			if pane.ZellijPaneID == req.ZellijPaneID && !isTerminalPaneStatus(pane.Status) {
 				return fmt.Errorf("%w: session %q pane %q", ErrZellijPaneAlreadyRegistered, req.SessionID, req.ZellijPaneID)
 			}
 		}
