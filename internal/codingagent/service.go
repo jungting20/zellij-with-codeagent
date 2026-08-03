@@ -122,8 +122,6 @@ type agentSnapshot struct {
 	owned     bool
 }
 
-const partialCleanupTimeout = 5 * time.Second
-
 // NewService returns nil when any required runtime, store, or monitor dependency
 // is nil, including an interface containing a typed-nil value.
 func NewService(opts ServiceOptions) *Service {
@@ -187,23 +185,19 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 		)
 	}
 
-	paneResponse, err := s.RuntimeService.CreatePane(ctx, runtime.CreatePaneRequest{
-		ID:                    created.PaneID,
-		AgentID:               runtime.AgentID(created.ID),
-		Role:                  "coding-agent",
-		Name:                  fmt.Sprintf("%s-%s", created.Kind, created.ID),
-		ZellijSession:         sourceSession,
-		SameTabAsZellijPaneID: sourcePaneID,
-		Command:               profile.BuildCommand(true, request.ExtraArgs),
-		CWD:                   cwd,
+	paneResponse, err := s.RuntimeService.ClaimPane(ctx, runtime.ClaimPaneRequest{
+		ID:            created.PaneID,
+		AgentID:       runtime.AgentID(created.ID),
+		Role:          "coding-agent",
+		ZellijSession: sourceSession,
+		ZellijPaneID:  sourcePaneID,
+		Command:       profile.BuildCommand(true, request.ExtraArgs),
+		CWD:           cwd,
 	})
 	if err != nil {
-		if errors.Is(err, runtime.ErrCleanupPartial) {
-			return StartAgentResponse{}, s.recoverPartialCreate(ctx, owner, err)
-		}
 		_, rollbackErr := s.cleanupOwnedRecord(owner, true)
 		return StartAgentResponse{}, errors.Join(
-			fmt.Errorf("create coding agent pane %q: %w", id, err),
+			fmt.Errorf("claim coding agent pane %q: %w", id, err),
 			rollbackErr,
 		)
 	}
@@ -513,50 +507,6 @@ func (s *Service) cleanupOwnedRecord(owner *agentOwnership, stopMonitor bool) (b
 	}
 	delete(s.owners, owner.record.ID)
 	return true, nil
-}
-
-func (s *Service) recoverPartialCreate(ctx context.Context, owner *agentOwnership, createErr error) error {
-	s.markOwnerState(owner, agentCleaning)
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), partialCleanupTimeout)
-	defer cancel()
-	cleanupResponse, cleanupErr := s.RuntimeService.Cleanup(cleanupCtx, runtime.CleanupRequest{PaneIDs: []runtime.PaneID{owner.record.PaneID}})
-	confirmation, confirmErr := s.RuntimeService.ListPanes(cleanupCtx)
-	paneRemains := false
-	if confirmErr == nil {
-		for _, pane := range confirmation.Panes {
-			if pane.ID == owner.record.PaneID {
-				paneRemains = true
-				break
-			}
-		}
-	}
-	cleanupSucceeded := cleanupErr == nil && len(cleanupResponse.Failed) == 0
-	if cleanupSucceeded && confirmErr == nil && !paneRemains {
-		_, rollbackErr := s.cleanupOwnedRecord(owner, true)
-		return errors.Join(
-			fmt.Errorf("create coding agent pane %q: %w", owner.record.ID, createErr),
-			rollbackErr,
-		)
-	}
-
-	s.markOwnerState(owner, agentCleanupUncertain)
-	diagnostics := []error{fmt.Errorf("create coding agent pane %q: %w", owner.record.ID, createErr)}
-	if cleanupErr != nil {
-		diagnostics = append(diagnostics, fmt.Errorf("retry runtime cleanup for pane %q: %w", owner.record.PaneID, cleanupErr))
-	} else if len(cleanupResponse.Failed) > 0 {
-		diagnostics = append(diagnostics, fmt.Errorf("%w: cleanup retry reported %d failure(s)", runtime.ErrCleanupPartial, len(cleanupResponse.Failed)))
-	}
-	for _, failure := range cleanupResponse.Failed {
-		if detail := strings.TrimSpace(failure.Error); detail != "" {
-			diagnostics = append(diagnostics, fmt.Errorf("runtime cleanup pane %q failed: %s", failure.Pane.ID, detail))
-		}
-	}
-	if confirmErr != nil {
-		diagnostics = append(diagnostics, fmt.Errorf("confirm runtime cleanup for pane %q: %w", owner.record.PaneID, confirmErr))
-	} else if paneRemains {
-		diagnostics = append(diagnostics, fmt.Errorf("%w: runtime pane %q remains after cleanup retry", runtime.ErrCleanupPartial, owner.record.PaneID))
-	}
-	return errors.Join(diagnostics...)
 }
 
 func (s *Service) markOwnerState(owner *agentOwnership, state agentLifecycle) {

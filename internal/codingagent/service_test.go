@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,31 +35,28 @@ func TestServiceStartAgentCreatesRegisteredMonitoredPane(t *testing.T) {
 	}
 	cwd := t.TempDir()
 	runtimeService := &serviceFakeRuntime{
-		createFn: func(_ context.Context, request runtime.CreatePaneRequest) (runtime.CreatePaneResponse, error) {
+		claimFn: func(_ context.Context, request runtime.ClaimPaneRequest) (runtime.ClaimPaneResponse, error) {
 			events = append(events, "runtime")
 			if _, err := store.Get("agent-1"); err != nil {
-				t.Fatalf("record must exist before CreatePane: %v", err)
+				t.Fatalf("record must exist before ClaimPane: %v", err)
 			}
-			want := runtime.CreatePaneRequest{
-				ID:                    "agent-1",
-				AgentID:               "agent-1",
-				Role:                  "coding-agent",
-				Name:                  "gemini-agent-1",
-				ZellijSession:         "physical-a",
-				SameTabAsZellijPaneID: "terminal_2",
-				Command:               []string{"agy", "--dangerously-skip-permissions", "--model", "gemini-3"},
-				CWD:                   cwd,
+			want := runtime.ClaimPaneRequest{
+				ID: "agent-1", AgentID: "agent-1", Role: "coding-agent",
+				ZellijSession: "physical-a", ZellijPaneID: "terminal_2",
+				Command: []string{"agy", "--dangerously-skip-permissions", "--model", "gemini-3"},
+				CWD:     cwd,
 			}
 			if !reflect.DeepEqual(request, want) {
-				t.Fatalf("CreatePane request = %#v, want %#v", request, want)
+				t.Fatalf("ClaimPane request = %#v, want %#v", request, want)
 			}
-			return runtime.CreatePaneResponse{Pane: runtime.Pane{
+			return runtime.ClaimPaneResponse{Pane: runtime.Pane{
 				ID:           request.ID,
 				AgentID:      request.AgentID,
 				Role:         request.Role,
+				SessionID:    runtime.SessionID(request.ZellijSession),
 				Command:      append([]string(nil), request.Command...),
 				CWD:          request.CWD,
-				ZellijPaneID: "terminal_9",
+				ZellijPaneID: request.ZellijPaneID,
 			}}, nil
 		},
 	}
@@ -94,7 +90,13 @@ func TestServiceStartAgentCreatesRegisteredMonitoredPane(t *testing.T) {
 	if !reflect.DeepEqual(response.Agent.Agent, wantRecord) {
 		t.Errorf("response record = %#v, want %#v", response.Agent.Agent, wantRecord)
 	}
-	if response.Agent.Pane.ID != "agent-1" || response.Agent.Pane.ZellijPaneID != "terminal_9" {
+	wantPane := runtime.Pane{
+		ID: "agent-1", AgentID: "agent-1", Role: "coding-agent",
+		SessionID: "physical-a", ZellijPaneID: "terminal_2",
+		Command: []string{"agy", "--dangerously-skip-permissions", "--model", "gemini-3"},
+		CWD:     cwd,
+	}
+	if !reflect.DeepEqual(response.Agent.Pane, wantPane) {
 		t.Errorf("response pane = %#v", response.Agent.Pane)
 	}
 	if !reflect.DeepEqual(events, []string{"monitor", "runtime"}) {
@@ -143,8 +145,8 @@ func TestServiceStartAgentRejectsInvalidRequestsBeforeRegistration(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(records) != 0 || len(monitor.started) != 0 || len(runtimeService.created) != 0 {
-				t.Fatalf("invalid request caused side effects: records=%d monitor=%d runtime=%d", len(records), len(monitor.started), len(runtimeService.created))
+			if len(records) != 0 || len(monitor.started) != 0 || len(runtimeService.claimed) != 0 {
+				t.Fatalf("invalid request caused side effects: records=%d monitor=%d claims=%d", len(records), len(monitor.started), len(runtimeService.claimed))
 			}
 		})
 	}
@@ -165,8 +167,8 @@ func TestServiceStartAgentRejectsDuplicateGeneratedID(t *testing.T) {
 	if !errors.Is(err, ErrDuplicateID) {
 		t.Fatalf("StartAgent() error = %v, want %v", err, ErrDuplicateID)
 	}
-	if len(monitor.started) != 0 || len(runtimeService.created) != 0 {
-		t.Fatalf("duplicate ID started dependencies: monitor=%d runtime=%d", len(monitor.started), len(runtimeService.created))
+	if len(monitor.started) != 0 || len(runtimeService.claimed) != 0 {
+		t.Fatalf("duplicate ID started dependencies: monitor=%d claims=%d", len(monitor.started), len(runtimeService.claimed))
 	}
 }
 
@@ -186,8 +188,8 @@ func TestServiceStartAgentManifestOrMonitorFailureDeletesRecordWithoutPane(t *te
 			if _, err := store.Get("agent-1"); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("store.Get() error = %v, want %v", err, ErrNotFound)
 			}
-			if len(runtimeService.created) != 0 {
-				t.Fatalf("CreatePane call count = %d, want 0", len(runtimeService.created))
+			if len(runtimeService.claimed) != 0 {
+				t.Fatalf("ClaimPane call count = %d, want 0", len(runtimeService.claimed))
 			}
 			if len(monitor.stopped) != 0 {
 				t.Fatalf("Monitor.Stop call count = %d, want 0", len(monitor.stopped))
@@ -196,11 +198,11 @@ func TestServiceStartAgentManifestOrMonitorFailureDeletesRecordWithoutPane(t *te
 	}
 }
 
-func TestServiceStartAgentRuntimeFailureStopsMonitorAndDeletesRecord(t *testing.T) {
+func TestServiceStartAgentClaimFailureStopsMonitorDeletesRecordAndLeavesSourcePaneUntouched(t *testing.T) {
 	store := NewMemoryStore(nil)
-	runtimeErr := errors.New("create pane failed")
+	runtimeErr := errors.New("claim pane failed")
 	monitor := &serviceFakeMonitor{}
-	runtimeService := &serviceFakeRuntime{createErr: runtimeErr}
+	runtimeService := &serviceFakeRuntime{claimErr: runtimeErr}
 	service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: monitor, NewAgentID: func() ID { return "agent-1" }})
 
 	_, err := service.StartAgent(context.Background(), validStartRequest(t, KindCursor))
@@ -213,20 +215,26 @@ func TestServiceStartAgentRuntimeFailureStopsMonitorAndDeletesRecord(t *testing.
 	if !reflect.DeepEqual(monitor.stopped, []ID{"agent-1"}) {
 		t.Fatalf("Monitor.Stop calls = %v, want [agent-1]", monitor.stopped)
 	}
+	if len(runtimeService.claimed) != 1 {
+		t.Fatalf("ClaimPane call count = %d, want 1", len(runtimeService.claimed))
+	}
+	if len(runtimeService.cleaned) != 0 {
+		t.Fatalf("claim failure cleaned source pane: cleanup=%d", len(runtimeService.cleaned))
+	}
 }
 
 func TestServiceStartAgentProvisioningRecordIsNotRemovedByConcurrentList(t *testing.T) {
 	store := NewMemoryStore(nil)
 	monitor := &serviceFakeMonitor{}
-	createEntered := make(chan struct{})
-	releaseCreate := make(chan struct{})
+	claimEntered := make(chan struct{})
+	releaseClaim := make(chan struct{})
 	listEntered := make(chan struct{})
 	releaseList := make(chan struct{})
 	runtimeService := &serviceFakeRuntime{
-		createFn: func(_ context.Context, request runtime.CreatePaneRequest) (runtime.CreatePaneResponse, error) {
-			close(createEntered)
-			<-releaseCreate
-			return runtime.CreatePaneResponse{Pane: runtime.Pane{ID: request.ID, Status: runtime.PaneStatusRunning}}, nil
+		claimFn: func(_ context.Context, request runtime.ClaimPaneRequest) (runtime.ClaimPaneResponse, error) {
+			close(claimEntered)
+			<-releaseClaim
+			return runtime.ClaimPaneResponse{Pane: runtime.Pane{ID: request.ID, Status: runtime.PaneStatusRunning}}, nil
 		},
 		listFn: func(context.Context) (runtime.ListPanesResponse, error) {
 			close(listEntered)
@@ -246,7 +254,7 @@ func TestServiceStartAgentProvisioningRecordIsNotRemovedByConcurrentList(t *test
 		_, err := service.StartAgent(context.Background(), startRequest)
 		startResult <- err
 	}()
-	<-createEntered
+	<-claimEntered
 
 	type listAgentResult struct {
 		response ListAgentsResponse
@@ -258,7 +266,7 @@ func TestServiceStartAgentProvisioningRecordIsNotRemovedByConcurrentList(t *test
 		listResult <- listAgentResult{response: response, err: err}
 	}()
 	<-listEntered
-	close(releaseCreate)
+	close(releaseClaim)
 	if err := <-startResult; err != nil {
 		t.Fatalf("StartAgent() error = %v", err)
 	}
@@ -280,6 +288,9 @@ func TestServiceStartAgentProvisioningRecordIsNotRemovedByConcurrentList(t *test
 	if _, err := store.Get("agent-1"); err != nil {
 		t.Fatalf("successful StartAgent record missing: %v", err)
 	}
+	if len(runtimeService.claimed) != 1 {
+		t.Fatalf("ClaimPane call count = %d, want 1", len(runtimeService.claimed))
+	}
 }
 
 func TestServiceListAgentStaleSnapshotDoesNotDeleteReusedID(t *testing.T) {
@@ -297,8 +308,8 @@ func TestServiceListAgentStaleSnapshotDoesNotDeleteReusedID(t *testing.T) {
 			<-releaseList
 			return runtime.ListPanesResponse{}, nil
 		},
-		createFn: func(_ context.Context, request runtime.CreatePaneRequest) (runtime.CreatePaneResponse, error) {
-			return runtime.CreatePaneResponse{Pane: runtime.Pane{ID: request.ID, Status: runtime.PaneStatusRunning}}, nil
+		claimFn: func(_ context.Context, request runtime.ClaimPaneRequest) (runtime.ClaimPaneResponse, error) {
+			return runtime.ClaimPaneResponse{Pane: runtime.Pane{ID: request.ID, Status: runtime.PaneStatusRunning}}, nil
 		},
 	}
 	monitor := &serviceFakeMonitor{}
@@ -336,196 +347,6 @@ func TestServiceListAgentStaleSnapshotDoesNotDeleteReusedID(t *testing.T) {
 	}
 	if len(monitor.stopped) != 0 {
 		t.Fatalf("stale cleanup stopped reused monitor: %v", monitor.stopped)
-	}
-}
-
-func TestServicePartialRecoveryReservationPreventsSameIDReuseUntilCleanupReturns(t *testing.T) {
-	store := NewMemoryStore(nil)
-	monitor := &serviceFakeMonitor{}
-	createCause := errors.New("initialization failed")
-	cleanupEntered := make(chan struct{})
-	releaseCleanup := make(chan struct{})
-	var stateMu sync.Mutex
-	createCalls := 0
-	newPaneOpen := false
-	closedNewPane := false
-	runtimeService := &serviceFakeRuntime{
-		createFn: func(_ context.Context, request runtime.CreatePaneRequest) (runtime.CreatePaneResponse, error) {
-			stateMu.Lock()
-			defer stateMu.Unlock()
-			createCalls++
-			if createCalls == 1 {
-				return runtime.CreatePaneResponse{}, errors.Join(createCause, runtime.ErrCleanupPartial)
-			}
-			newPaneOpen = true
-			return runtime.CreatePaneResponse{Pane: runtime.Pane{ID: request.ID, Status: runtime.PaneStatusRunning}}, nil
-		},
-		cleanupFn: func(context.Context, runtime.CleanupRequest) (runtime.CleanupResponse, error) {
-			close(cleanupEntered)
-			<-releaseCleanup
-			stateMu.Lock()
-			if newPaneOpen {
-				closedNewPane = true
-				newPaneOpen = false
-			}
-			stateMu.Unlock()
-			return runtime.CleanupResponse{Closed: []runtime.Pane{{ID: "agent-1"}}}, nil
-		},
-	}
-	service := NewService(ServiceOptions{
-		RuntimeService:   runtimeService,
-		Store:            store,
-		LifecycleMonitor: monitor,
-		NewAgentID:       func() ID { return "agent-1" },
-	})
-	firstResult := make(chan error, 1)
-	firstRequest := validStartRequest(t, KindCodex)
-	go func() {
-		_, err := service.StartAgent(context.Background(), firstRequest)
-		firstResult <- err
-	}()
-	<-cleanupEntered
-
-	if err := store.Delete("agent-1"); err != nil {
-		t.Fatalf("simulate close observer delete: %v", err)
-	}
-	monitor.Stop("agent-1")
-	if _, err := service.ListAgents(context.Background()); err != nil {
-		t.Fatalf("concurrent ListAgents() error = %v", err)
-	}
-	if _, err := service.StartAgent(context.Background(), validStartRequest(t, KindClaude)); !errors.Is(err, ErrDuplicateID) {
-		t.Fatalf("same-ID StartAgent during cleanup error = %v, want %v", err, ErrDuplicateID)
-	}
-
-	close(releaseCleanup)
-	if err := <-firstResult; !errors.Is(err, createCause) {
-		t.Fatalf("first StartAgent() error = %v, want %v", err, createCause)
-	}
-	stateMu.Lock()
-	wasClosed := closedNewPane
-	stateMu.Unlock()
-	if wasClosed {
-		t.Fatal("old cleanup closed a newly reused logical pane ID")
-	}
-	if _, err := service.StartAgent(context.Background(), validStartRequest(t, KindGemini)); err != nil {
-		t.Fatalf("same-ID StartAgent after cleanup completion error = %v", err)
-	}
-}
-
-func TestServiceStartAgentPartialRuntimeCleanupPolicy(t *testing.T) {
-	createCause := errors.New("pane initialization failed")
-	createErr := errors.Join(createCause, runtime.ErrCleanupPartial)
-
-	tests := []struct {
-		name          string
-		cleanup       runtime.CleanupResponse
-		cleanupErr    error
-		confirm       runtime.ListPanesResponse
-		confirmErr    error
-		wantPreserved bool
-		wantDiag      error
-		wantDetail    string
-	}{
-		{
-			name:    "successful retry and absent confirmation removes record",
-			cleanup: runtime.CleanupResponse{Closed: []runtime.Pane{{ID: "agent-1"}}},
-		},
-		{
-			name:          "failed retry even with absent logical pane preserves tracking",
-			cleanup:       runtime.CleanupResponse{Failed: []runtime.CleanupFailure{{Pane: runtime.Pane{ID: "agent-1"}, Error: "still open"}}},
-			cleanupErr:    runtime.ErrCleanupPartial,
-			wantPreserved: true,
-			wantDiag:      runtime.ErrCleanupPartial,
-			wantDetail:    "still open",
-		},
-		{
-			name:          "remaining pane after nominal retry preserves tracking",
-			cleanup:       runtime.CleanupResponse{Closed: []runtime.Pane{{ID: "agent-1"}}},
-			confirm:       runtime.ListPanesResponse{Panes: []runtime.Pane{{ID: "agent-1", Status: runtime.PaneStatusError}}},
-			wantPreserved: true,
-			wantDiag:      runtime.ErrCleanupPartial,
-		},
-		{
-			name:          "confirmation failure preserves tracking",
-			cleanup:       runtime.CleanupResponse{Closed: []runtime.Pane{{ID: "agent-1"}}},
-			confirmErr:    errors.New("runtime list unavailable"),
-			wantPreserved: true,
-			wantDiag:      errors.New("runtime list unavailable"),
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			store := NewMemoryStore(nil)
-			monitor := &serviceFakeMonitor{}
-			listCalls := 0
-			runtimeService := &serviceFakeRuntime{
-				createErr: createErr,
-				cleanupFn: func(ctx context.Context, request runtime.CleanupRequest) (runtime.CleanupResponse, error) {
-					deadline, ok := ctx.Deadline()
-					if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 6*time.Second {
-						t.Fatalf("Cleanup context deadline = %v, want bounded future deadline", deadline)
-					}
-					if !reflect.DeepEqual(request, runtime.CleanupRequest{PaneIDs: []runtime.PaneID{"agent-1"}}) {
-						t.Fatalf("Cleanup request = %#v", request)
-					}
-					return test.cleanup, test.cleanupErr
-				},
-				listFn: func(context.Context) (runtime.ListPanesResponse, error) {
-					listCalls++
-					if listCalls == 1 {
-						return test.confirm, test.confirmErr
-					}
-					return runtime.ListPanesResponse{}, nil
-				},
-			}
-			service := NewService(ServiceOptions{
-				RuntimeService:   runtimeService,
-				Store:            store,
-				LifecycleMonitor: monitor,
-				NewAgentID:       func() ID { return "agent-1" },
-			})
-
-			_, err := service.StartAgent(context.Background(), validStartRequest(t, KindCursor))
-			if !errors.Is(err, createCause) || !errors.Is(err, runtime.ErrCleanupPartial) {
-				t.Fatalf("StartAgent() error = %v, want original cause and ErrCleanupPartial", err)
-			}
-			if test.wantDiag != nil && !strings.Contains(err.Error(), test.wantDiag.Error()) {
-				t.Fatalf("StartAgent() error = %v, want diagnostic %q", err, test.wantDiag)
-			}
-			if test.wantDetail != "" && !strings.Contains(err.Error(), test.wantDetail) {
-				t.Fatalf("StartAgent() error = %v, want cleanup detail %q", err, test.wantDetail)
-			}
-			if len(runtimeService.cleaned) != 1 {
-				t.Fatalf("Cleanup call count = %d, want 1", len(runtimeService.cleaned))
-			}
-			_, getErr := store.Get("agent-1")
-			if test.wantPreserved {
-				if getErr != nil {
-					t.Fatalf("record not preserved: %v", getErr)
-				}
-				if len(monitor.stopped) != 0 {
-					t.Fatalf("preserved monitor stopped: %v", monitor.stopped)
-				}
-				response, listErr := service.ListAgents(context.Background())
-				if listErr != nil {
-					t.Fatalf("ListAgents() after uncertain cleanup error = %v", listErr)
-				}
-				if len(response.Agents) != 0 {
-					t.Fatalf("uncertain missing pane rows = %d, want 0", len(response.Agents))
-				}
-				if _, getErr := store.Get("agent-1"); getErr != nil {
-					t.Fatalf("ListAgents removed uncertain record: %v", getErr)
-				}
-			} else {
-				if !errors.Is(getErr, ErrNotFound) {
-					t.Fatalf("store.Get() error = %v, want %v", getErr, ErrNotFound)
-				}
-				if !reflect.DeepEqual(monitor.stopped, []ID{"agent-1"}) {
-					t.Fatalf("Monitor.Stop calls = %v, want [agent-1]", monitor.stopped)
-				}
-			}
-		})
 	}
 }
 
@@ -1253,9 +1074,9 @@ func TestServiceImplementsAgentAndRuntimeServices(t *testing.T) {
 
 type serviceFakeRuntime struct {
 	runtime.RuntimeService
-	createFn      func(context.Context, runtime.CreatePaneRequest) (runtime.CreatePaneResponse, error)
-	createErr     error
-	created       []runtime.CreatePaneRequest
+	claimFn       func(context.Context, runtime.ClaimPaneRequest) (runtime.ClaimPaneResponse, error)
+	claimErr      error
+	claimed       []runtime.ClaimPaneRequest
 	cleanupFn     func(context.Context, runtime.CleanupRequest) (runtime.CleanupResponse, error)
 	cleanupErr    error
 	cleaned       []runtime.CleanupRequest
@@ -1269,15 +1090,20 @@ type serviceFakeRuntime struct {
 	focusFn       func(context.Context, runtime.FocusPaneRequest) (runtime.FocusPaneResponse, error)
 }
 
-func (f *serviceFakeRuntime) CreatePane(ctx context.Context, request runtime.CreatePaneRequest) (runtime.CreatePaneResponse, error) {
-	f.created = append(f.created, request)
-	if f.createFn != nil {
-		return f.createFn(ctx, request)
+func (f *serviceFakeRuntime) ClaimPane(ctx context.Context, request runtime.ClaimPaneRequest) (runtime.ClaimPaneResponse, error) {
+	f.claimed = append(f.claimed, request)
+	if f.claimFn != nil {
+		return f.claimFn(ctx, request)
 	}
-	if f.createErr != nil {
-		return runtime.CreatePaneResponse{}, f.createErr
+	if f.claimErr != nil {
+		return runtime.ClaimPaneResponse{}, f.claimErr
 	}
-	return runtime.CreatePaneResponse{Pane: runtime.Pane{ID: request.ID}}, nil
+	return runtime.ClaimPaneResponse{Pane: runtime.Pane{
+		ID: request.ID, AgentID: request.AgentID, Role: request.Role,
+		SessionID:    runtime.SessionID(request.ZellijSession),
+		ZellijPaneID: request.ZellijPaneID,
+		Command:      append([]string(nil), request.Command...), CWD: request.CWD,
+	}}, nil
 }
 
 func (f *serviceFakeRuntime) Cleanup(ctx context.Context, request runtime.CleanupRequest) (runtime.CleanupResponse, error) {
@@ -1408,8 +1234,8 @@ func TestServiceStartAgentResolvesRelativeCWD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartAgent() error = %v", err)
 	}
-	if got := runtimeService.created[0].CWD; got != wantCWD {
-		t.Fatalf("CreatePane CWD = %q, want %q", got, wantCWD)
+	if got := runtimeService.claimed[0].CWD; got != wantCWD {
+		t.Fatalf("ClaimPane CWD = %q, want %q", got, wantCWD)
 	}
 }
 
