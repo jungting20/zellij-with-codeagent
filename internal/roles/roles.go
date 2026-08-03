@@ -27,6 +27,7 @@ const (
 	RoleDebateProposer    = "debate-proposer"
 	RoleDebateCritic      = "debate-critic"
 	RoleDebateJudge       = "debate-judge"
+	RoleAgentNext         = "agent-next"
 )
 
 var specs = []RoleSpec{
@@ -115,6 +116,15 @@ var specs = []RoleSpec{
 			{Name: "--agent", Required: false, Description: "Coding agent kind: codex, claude, gemini, or cursor. Defaults to codex."},
 			{Name: "--yolo", Required: false, Description: "Bypass coding agent permissions and sandboxing."},
 			{Name: "agent-args", Required: false, Description: "Arguments passed to the selected coding agent after --."},
+		},
+	},
+	{
+		Name:        RoleAgentNext,
+		Usage:       "agent-next [--socket PATH --timeout DURATION]",
+		Description: "Focuses the next managed coding agent through the daemon.",
+		Arguments: []ArgumentSpec{
+			{Name: "--socket", Required: false, Description: "agentd Unix socket path."},
+			{Name: "--timeout", Required: false, Description: "Daemon request timeout."},
 		},
 	},
 	{

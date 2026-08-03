@@ -169,3 +169,22 @@ func TestLookupTicketManager(t *testing.T) {
 		}
 	}
 }
+
+func TestLookupAgentNext(t *testing.T) {
+	spec, ok := Lookup(RoleAgentNext)
+	if !ok {
+		t.Fatal("Lookup(RoleAgentNext) ok = false, want true")
+	}
+	if spec.Usage != "agent-next [--socket PATH --timeout DURATION]" {
+		t.Fatalf("usage = %q, want agent-next usage", spec.Usage)
+	}
+	want := []string{"--socket", "--timeout"}
+	if len(spec.Arguments) != len(want) {
+		t.Fatalf("arguments = %#v, want %d optional arguments", spec.Arguments, len(want))
+	}
+	for i, name := range want {
+		if spec.Arguments[i].Name != name || spec.Arguments[i].Required {
+			t.Fatalf("arguments[%d] = %#v, want optional %s", i, spec.Arguments[i], name)
+		}
+	}
+}
