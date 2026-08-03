@@ -20,7 +20,6 @@ var (
 	ErrInvalidAgentCWD      = errors.New("invalid coding agent cwd")
 	ErrAgentSourceRequired  = errors.New("coding agent source Zellij context is required")
 	ErrAgentIDRequired      = errors.New("coding agent id is required")
-	ErrNoAgents             = errors.New("no managed coding agents")
 	ErrAgentRuntimeRequired = errors.New("coding agent runtime service is required")
 	ErrAgentMonitorRequired = errors.New("coding agent lifecycle monitor is required")
 )
@@ -62,7 +61,8 @@ type FocusNextAgentRequest struct {
 }
 
 type FocusNextAgentResponse struct {
-	Agent AgentWithPane
+	Focused bool
+	Agent   AgentWithPane
 }
 
 type AgentService interface {
@@ -263,9 +263,9 @@ func (s *Service) FocusNextAgent(ctx context.Context, request FocusNextAgentRequ
 	if err != nil {
 		return FocusNextAgentResponse{}, fmt.Errorf("list coding agents: %w", err)
 	}
-	record, err := nextAgentRecord(records, s.lastFocusedID)
-	if err != nil {
-		return FocusNextAgentResponse{}, err
+	record, ok := nextIdleAgentRecord(records, s.lastFocusedID)
+	if !ok {
+		return FocusNextAgentResponse{Focused: false}, nil
 	}
 	response, err := s.focusAgentLocked(ctx, FocusAgentRequest{
 		AgentID:             record.ID,
@@ -275,7 +275,7 @@ func (s *Service) FocusNextAgent(ctx context.Context, request FocusNextAgentRequ
 	if err != nil {
 		return FocusNextAgentResponse{}, err
 	}
-	return FocusNextAgentResponse{Agent: response.Agent}, nil
+	return FocusNextAgentResponse{Focused: true, Agent: response.Agent}, nil
 }
 
 func (s *Service) focusAgentLocked(ctx context.Context, request FocusAgentRequest) (FocusAgentResponse, error) {
@@ -313,16 +313,22 @@ func (s *Service) focusAgentLocked(ctx context.Context, request FocusAgentReques
 	return FocusAgentResponse{Agent: AgentWithPane{Agent: record, Pane: response.Pane}}, nil
 }
 
-func nextAgentRecord(records []Record, current ID) (Record, error) {
-	if len(records) == 0 {
-		return Record{}, ErrNoAgents
-	}
-	for index := range records {
-		if records[index].ID == current {
-			return records[(index+1)%len(records)], nil
+func nextIdleAgentRecord(records []Record, current ID) (Record, bool) {
+	idle := make([]Record, 0, len(records))
+	for _, record := range records {
+		if record.State == StateIdle {
+			idle = append(idle, record)
 		}
 	}
-	return records[0], nil
+	if len(idle) == 0 {
+		return Record{}, false
+	}
+	for index := range idle {
+		if idle[index].ID == current {
+			return idle[(index+1)%len(idle)], true
+		}
+	}
+	return idle[0], true
 }
 
 func (s *Service) ListSessions(ctx context.Context) ([]runtime.SessionRecord, error) {
