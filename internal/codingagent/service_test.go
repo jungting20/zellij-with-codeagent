@@ -1021,21 +1021,31 @@ func TestServiceFocusNextAgentFailedFocusDoesNotAdvanceCursor(t *testing.T) {
 	store := NewMemoryStore(nil)
 	seedFocusRecords(t, store)
 	focusFailure := errors.New("focus failed")
-	runtimeService := &serviceFakeRuntime{focusErr: focusFailure}
+	runtimeService := &serviceFakeRuntime{
+		focusResponse: runtime.FocusPaneResponse{Pane: runtime.Pane{ID: "pane-1", Status: runtime.PaneStatusRunning}},
+	}
 	service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
 	request := FocusNextAgentRequest{SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1"}
 
+	if _, err := service.FocusAgent(context.Background(), FocusAgentRequest{
+		AgentID: "agent-1", SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1",
+	}); err != nil {
+		t.Fatalf("FocusAgent() error = %v", err)
+	}
+	runtimeService.focusErr = focusFailure
 	if _, err := service.FocusNextAgent(context.Background(), request); !errors.Is(err, focusFailure) {
 		t.Fatalf("first FocusNextAgent() error = %v, want %v", err, focusFailure)
 	}
+	if service.lastFocusedID != "agent-1" {
+		t.Fatalf("cursor after failed FocusNextAgent() = %q, want agent-1", service.lastFocusedID)
+	}
 	runtimeService.focusErr = nil
-	runtimeService.focusResponse = runtime.FocusPaneResponse{Pane: runtime.Pane{ID: "pane-1", Status: runtime.PaneStatusRunning}}
 	response, err := service.FocusNextAgent(context.Background(), request)
 	if err != nil {
 		t.Fatalf("second FocusNextAgent() error = %v", err)
 	}
-	if !response.Focused || response.Agent.Agent.ID != "agent-1" {
-		t.Fatalf("second FocusNextAgent() response = %#v, want focused agent-1", response)
+	if !response.Focused || response.Agent.Agent.ID != "agent-2" {
+		t.Fatalf("second FocusNextAgent() response = %#v, want focused agent-2", response)
 	}
 }
 
