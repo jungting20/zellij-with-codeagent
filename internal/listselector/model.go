@@ -75,10 +75,15 @@ func NewModel() Model {
 
 // ResultError returns the child command error recorded by a completed selector.
 func ResultError(final tea.Model) error {
-	m, ok := final.(Model)
+	m, ok := final.(interface{ ResultError() error })
 	if !ok {
 		return nil
 	}
+	return m.ResultError()
+}
+
+// ResultError returns the child command error stored in the model.
+func (m Model) ResultError() error {
 	return m.commandErr
 }
 
