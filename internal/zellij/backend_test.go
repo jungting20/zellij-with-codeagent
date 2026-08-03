@@ -128,6 +128,36 @@ func TestSwitchSessionUsesSourceContextAndTargetPane(t *testing.T) {
 	}
 }
 
+func TestSwitchSessionFocusesPaneDirectlyWithinSourceSession(t *testing.T) {
+	runner := &fakeRunner{}
+	backend := NewBackend(Options{Runner: runner})
+
+	err := backend.SwitchSession(context.Background(), SwitchSessionRequest{
+		SourceSession: "shared-session",
+		SourcePaneID:  "terminal_2",
+		TargetSession: "shared-session",
+		TargetPaneID:  "terminal_12",
+	})
+	if err != nil {
+		t.Fatalf("SwitchSession() error = %v", err)
+	}
+
+	want := CommandSpec{
+		Name: "zellij",
+		Args: []string{
+			"--session", "shared-session",
+			"action", "focus-pane-id", "terminal_12",
+		},
+		Env: []string{
+			"ZELLIJ_SESSION_NAME=shared-session",
+			"ZELLIJ_PANE_ID=terminal_2",
+		},
+	}
+	if !reflect.DeepEqual(runner.commands, []CommandSpec{want}) {
+		t.Fatalf("commands = %#v, want %#v", runner.commands, []CommandSpec{want})
+	}
+}
+
 func TestSwitchSessionRejectsMissingContextBeforeRunningCommand(t *testing.T) {
 	tests := []struct {
 		name string
