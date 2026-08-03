@@ -53,11 +53,12 @@ daemon은 다른 pane의 shell 프로세스를 직접 교체할 수 없으며, �
 CLI wrapper가 자식 종료를 관찰한 뒤 기존 daemon `ClosePane` API를 호출해야
 요구한 pane 종료 동작을 보장할 수 있다.
 
-### 기존 coding-agent role 재사용 및 의미 유지
+### 기존 coding-agent role의 의미 유지
 
-이 기능은 이미 존재하는 기본 `coding-agent` role과 agent profile을 기반으로
-한다. ticket worker가 사용하는 `zellij-agent role coding-agent`는 계속 agent
-process를 실행하는 순수 wrapper로 유지하며, 스스로 현재 pane을 등록하지 않는다.
+이 기능에는 이미 기본 `coding-agent` role이 있으므로 새 role을 추가하지 않는다.
+`agent start`는 기존처럼 coding-agent service의 agent profile 명령을 사용하며,
+ticket worker가 사용하는 `zellij-agent role coding-agent`는 계속 agent process를
+실행하는 순수 wrapper로 유지한다. role은 스스로 현재 pane을 등록하지 않는다.
 현재 pane 등록 책임은 `zellij-agent agent start`와 daemon의 agent/runtime
 서비스에만 둔다.
 
