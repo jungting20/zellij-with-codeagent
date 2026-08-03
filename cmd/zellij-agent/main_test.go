@@ -51,7 +51,7 @@ func TestRunDispatchesAgentStart(t *testing.T) {
 	t.Setenv("ZELLIJ_PANE_ID", "terminal_2")
 	client := &fakeAgentClient{response: transport.StartAgentResponse{Agent: transport.AgentWithPane{
 		Agent: transport.Agent{ID: "agent-1", Kind: "codex", PaneID: "pane-1"},
-		Pane:  transport.Pane{ID: "pane-1"},
+		Pane:  transport.Pane{ID: "pane-1", Command: []string{"/usr/bin/true"}, CWD: cwd},
 	}}}
 	originalFactory := newAgentClient
 	newAgentClient = func(socketPath string, timeout time.Duration) agentcli.AgentClient {
@@ -69,8 +69,11 @@ func TestRunDispatchesAgentStart(t *testing.T) {
 	if client.request.Kind != "codex" || client.request.CWD != cwd || !reflect.DeepEqual(client.request.Args, []string{"--model", "gpt-5"}) {
 		t.Fatalf("StartAgent request = %#v", client.request)
 	}
-	if stdout.String() != "started agent=agent-1 kind=codex pane=pane-1\n" {
-		t.Fatalf("stdout=%q", stdout.String())
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q, want empty", stdout.String())
+	}
+	if client.closeCalls != 1 || client.closePaneID != "pane-1" {
+		t.Fatalf("ClosePane calls=%d pane=%q, want one close for pane-1", client.closeCalls, client.closePaneID)
 	}
 }
 
@@ -81,11 +84,19 @@ type fakeAgentClient struct {
 	nextResponse transport.FocusNextAgentResponse
 	socket       string
 	timeout      time.Duration
+	closePaneID  string
+	closeCalls   int
 }
 
 func (c *fakeAgentClient) StartAgent(_ context.Context, request transport.StartAgentRequest) (transport.StartAgentResponse, error) {
 	c.request = request
 	return c.response, nil
+}
+
+func (c *fakeAgentClient) ClosePane(_ context.Context, paneID string) (transport.ClosePaneResponse, error) {
+	c.closeCalls++
+	c.closePaneID = paneID
+	return transport.ClosePaneResponse{}, nil
 }
 
 func (c *fakeAgentClient) ListAgents(context.Context) (transport.ListAgentsResponse, error) {

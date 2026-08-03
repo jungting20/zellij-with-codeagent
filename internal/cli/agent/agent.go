@@ -2,10 +2,12 @@ package agentcli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"reflect"
@@ -28,22 +30,23 @@ const (
 
 type AgentClient interface {
 	StartAgent(context.Context, transport.StartAgentRequest) (transport.StartAgentResponse, error)
+	ClosePane(context.Context, string) (transport.ClosePaneResponse, error)
 	FocusNextAgent(context.Context, transport.FocusNextAgentRequest) (transport.FocusNextAgentResponse, error)
 	agentdashboard.Client
 }
 
 type ClientFactory func(socketPath string, timeout time.Duration) AgentClient
+type AgentRunner func(command []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) error
 
 type Config struct {
 	Getwd      func() (string, error)
 	Getenv     func(string) string
 	NewModel   func(context.Context, agentdashboard.Client, agentdashboard.Options) tea.Model
 	RunProgram func(context.Context, tea.Model, io.Reader, io.Writer) error
+	RunAgent   AgentRunner
 }
 
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient ClientFactory, cfg Config) int {
-	_ = stdin
-
 	if len(args) == 0 {
 		printUsage(stderr)
 		return 2
@@ -54,7 +57,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 		printUsage(stdout)
 		return 0
 	case "start":
-		return runStart(args[1:], stdout, stderr, newClient, cfg)
+		return runStart(args[1:], stdin, stdout, stderr, newClient, cfg)
 	case "next":
 		return runNext(args[1:], stdout, stderr, newClient, cfg)
 	case "dashboard":
@@ -199,7 +202,7 @@ func runProgram(ctx context.Context, model tea.Model, stdin io.Reader, stdout io
 	return err
 }
 
-func runStart(args []string, stdout, stderr io.Writer, newClient ClientFactory, cfg Config) int {
+func runStart(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient ClientFactory, cfg Config) int {
 	if len(args) == 1 && isHelp(args[0]) {
 		printStartUsage(stdout)
 		return 0
@@ -265,7 +268,6 @@ func runStart(args []string, stdout, stderr io.Writer, newClient ClientFactory, 
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
-	defer cancel()
 	response, err := client.StartAgent(ctx, transport.StartAgentRequest{
 		Kind:               kind,
 		CWD:                cwd,
@@ -273,6 +275,7 @@ func runStart(args []string, stdout, stderr io.Writer, newClient ClientFactory, 
 		SourceSession:      session,
 		SourceZellijPaneID: paneID,
 	})
+	cancel()
 	if err != nil {
 		fmt.Fprintf(stderr, "agent start failed via socket %s: %v\n", opts.socket, err)
 		return 1
@@ -282,8 +285,39 @@ func runStart(args []string, stdout, stderr io.Writer, newClient ClientFactory, 
 	if startedPaneID == "" {
 		startedPaneID = response.Agent.Pane.ID
 	}
-	fmt.Fprintf(stdout, "started agent=%s kind=%s pane=%s\n", response.Agent.Agent.ID, kind, startedPaneID)
+
+	runner := cfg.RunAgent
+	if runner == nil {
+		runner = runAgentProcess
+	}
+	runErr := runner(response.Agent.Pane.Command, response.Agent.Pane.CWD, stdin, stdout, stderr)
+
+	closeCtx, cancelClose := context.WithTimeout(context.Background(), opts.timeout)
+	_, closeErr := client.ClosePane(closeCtx, startedPaneID)
+	cancelClose()
+
+	if runErr != nil {
+		fmt.Fprintf(stderr, "coding agent process failed: %v\n", runErr)
+	}
+	if closeErr != nil {
+		fmt.Fprintf(stderr, "close coding agent pane %s failed via socket %s: %v\n", startedPaneID, opts.socket, closeErr)
+	}
+	if runErr != nil || closeErr != nil {
+		return 1
+	}
 	return 0
+}
+
+func runAgentProcess(command []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if len(command) == 0 || strings.TrimSpace(command[0]) == "" {
+		return errors.New("coding agent command is required")
+	}
+	cmd := exec.Command(command[0], command[1:]...)
+	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = cwd, stdin, stdout, stderr
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	return cmd.Run()
 }
 
 type startOptions struct {
@@ -398,7 +432,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: zellij-agent agent <command> [options]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
-	fmt.Fprintln(w, "  start   Start a coding agent in the current Zellij tab")
+	fmt.Fprintln(w, "  start   Manage a coding agent in the current Zellij pane")
 	fmt.Fprintln(w, "  next    Focus the next managed coding agent")
 	fmt.Fprintln(w, "  dashboard  Show and focus managed coding agents")
 	fmt.Fprintln(w)
@@ -445,6 +479,8 @@ func printStartUsage(w io.Writer) {
 func printStartSummary(w io.Writer) {
 	fmt.Fprintln(w, "Start kinds: codex, claude, gemini, cursor")
 	fmt.Fprintln(w, "CWD default: current working directory")
+	fmt.Fprintln(w, "Start claims and manages the current Zellij pane.")
+	fmt.Fprintln(w, "Start closes the managed pane when the agent exits.")
 	fmt.Fprintln(w, "Use -- passthrough to pass remaining arguments unchanged.")
 	fmt.Fprintln(w, "Profiles add their permission-bypass defaults before passthrough arguments:")
 	fmt.Fprintln(w, "  codex   codex --dangerously-bypass-approvals-and-sandbox")

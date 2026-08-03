@@ -211,15 +211,32 @@ func (stubModel) View() string                          { return "" }
 
 func TestRunStartSendsValidatedRequest(t *testing.T) {
 	cwd := t.TempDir()
-	client := &testClient{response: started("agent-1", "gemini", "agent-1")}
+	command := []string{"agy", "--dangerously-skip-permissions", "--model", "gemini-3"}
+	client := &testClient{response: started("agent-1", "gemini", "agent-1", command, cwd)}
+	stdin := strings.NewReader("interactive input")
 	var stdout, stderr bytes.Buffer
+	var gotCommand []string
+	var gotCWD string
+	var gotStdin io.Reader
+	var gotStdout, gotStderr io.Writer
 
 	code := Run(
 		[]string{"start", "gemini", "--cwd", cwd, "--socket", "/tmp/agents.sock", "--timeout", "3s", "--", "--model", "gemini-3"},
-		strings.NewReader(""), &stdout, &stderr, testFactory(client),
+		stdin, &stdout, &stderr, testFactory(client),
 		Config{
 			Getwd:  func() (string, error) { return "/unused", nil },
 			Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "2"}),
+			RunAgent: func(command []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) error {
+				select {
+				case <-client.startContext.Done():
+				default:
+					t.Fatal("registration context is not canceled before runner starts")
+				}
+				gotCommand = append([]string(nil), command...)
+				gotCWD = cwd
+				gotStdin, gotStdout, gotStderr = stdin, stdout, stderr
+				return nil
+			},
 		},
 	)
 
@@ -239,17 +256,124 @@ func TestRunStartSendsValidatedRequest(t *testing.T) {
 	if client.socket != "/tmp/agents.sock" || client.timeout != 3*time.Second {
 		t.Fatalf("client options = socket %q timeout %s", client.socket, client.timeout)
 	}
-	if stdout.String() != "started agent=agent-1 kind=gemini pane=agent-1\n" {
-		t.Fatalf("stdout = %q", stdout.String())
+	if !reflect.DeepEqual(gotCommand, command) || gotCWD != cwd {
+		t.Fatalf("runner command=%#v cwd=%q, want command=%#v cwd=%q", gotCommand, gotCWD, command, cwd)
+	}
+	if gotStdin != stdin || gotStdout != &stdout || gotStderr != &stderr {
+		t.Fatalf("runner stdio was not passed through unchanged")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no start status output", stdout.String())
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	if client.closeCalls != 1 || client.closePaneID != "agent-1" {
+		t.Fatalf("ClosePane calls=%d pane=%q, want one close for agent-1", client.closeCalls, client.closePaneID)
+	}
+	if !client.closeHasDeadline || !client.closeDeadline.After(client.closeCalledAt) || client.closeContextErr != nil {
+		t.Fatalf("close context deadline=%s calledAt=%s hasDeadline=%t err=%v", client.closeDeadline, client.closeCalledAt, client.closeHasDeadline, client.closeContextErr)
+	}
+}
+
+func TestRunStartDoesNotRunOrCloseWhenRegistrationFails(t *testing.T) {
+	client := &testClient{err: errors.New("daemon unavailable")}
+	runCalls := 0
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"start", "codex"}, strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
+		Getwd:  func() (string, error) { return t.TempDir(), nil },
+		Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}),
+		RunAgent: func([]string, string, io.Reader, io.Writer, io.Writer) error {
+			runCalls++
+			return nil
+		},
+	})
+
+	if code != 1 || runCalls != 0 || client.closeCalls != 0 {
+		t.Fatalf("code=%d runCalls=%d closeCalls=%d stderr=%q", code, runCalls, client.closeCalls, stderr.String())
+	}
+}
+
+func TestRunStartClosesClaimedPaneAfterRunnerError(t *testing.T) {
+	cwd := t.TempDir()
+	client := &testClient{response: started("agent-1", "codex", "logical-pane-1", []string{"codex"}, cwd)}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"start", "codex"}, strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
+		Getwd:  func() (string, error) { return cwd, nil },
+		Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}),
+		RunAgent: func([]string, string, io.Reader, io.Writer, io.Writer) error {
+			return errors.New("agent exited with status 7")
+		},
+	})
+
+	if code != 1 || !strings.Contains(stderr.String(), "agent exited with status 7") {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if client.closeCalls != 1 || client.closePaneID != "logical-pane-1" {
+		t.Fatalf("ClosePane calls=%d pane=%q", client.closeCalls, client.closePaneID)
+	}
+}
+
+func TestRunStartClosesClaimedPaneAfterDefaultRunnerFailures(t *testing.T) {
+	cwd := t.TempDir()
+	tests := []struct {
+		name    string
+		command []string
+	}{
+		{name: "empty command"},
+		{name: "empty executable", command: []string{"  "}},
+		{name: "startup failure", command: []string{filepath.Join(cwd, "missing-agent")}},
+		{name: "nonzero exit", command: []string{"/usr/bin/false"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &testClient{response: started("agent-1", "codex", "logical-pane-1", tt.command, cwd)}
+			var stdout, stderr bytes.Buffer
+
+			code := Run([]string{"start", "codex"}, strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
+				Getwd:  func() (string, error) { return cwd, nil },
+				Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}),
+			})
+
+			if code != 1 || stderr.Len() == 0 {
+				t.Fatalf("code=%d stderr=%q", code, stderr.String())
+			}
+			if client.closeCalls != 1 || client.closePaneID != "logical-pane-1" {
+				t.Fatalf("ClosePane calls=%d pane=%q", client.closeCalls, client.closePaneID)
+			}
+		})
+	}
+}
+
+func TestRunStartReportsCloseError(t *testing.T) {
+	cwd := t.TempDir()
+	client := &testClient{
+		response: started("agent-1", "codex", "logical-pane-1", []string{"codex"}, cwd),
+		closeErr: errors.New("close unavailable"),
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"start", "codex"}, strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
+		Getwd:  func() (string, error) { return cwd, nil },
+		Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}),
+		RunAgent: func([]string, string, io.Reader, io.Writer, io.Writer) error {
+			return nil
+		},
+	})
+
+	if code != 1 || !strings.Contains(stderr.String(), "close unavailable") {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if client.closeCalls != 1 || client.closePaneID != "logical-pane-1" {
+		t.Fatalf("ClosePane calls=%d pane=%q", client.closeCalls, client.closePaneID)
 	}
 }
 
 func TestRunStartDefaultsCWDFromConfig(t *testing.T) {
 	cwd := t.TempDir()
-	client := &testClient{response: started("agent-1", "codex", "pane-1")}
+	client := &testClient{response: started("agent-1", "codex", "pane-1", []string{"/usr/bin/true"}, cwd)}
 	var stdout, stderr bytes.Buffer
 
 	code := Run([]string{"start", "codex"}, strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
@@ -314,7 +438,7 @@ func TestRunStartRequiresInjectedRuntimeDependencies(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := &testClient{response: started("agent-1", "codex", "pane-1")}
+			client := &testClient{response: started("agent-1", "codex", "pane-1", []string{"/usr/bin/true"}, cwd)}
 			var stdout, stderr bytes.Buffer
 			code := Run(tt.args, strings.NewReader(""), &stdout, &stderr, testFactory(client), tt.cfg)
 			if code != tt.wantCode || !strings.Contains(stderr.String(), tt.wantError) {
@@ -362,7 +486,7 @@ func TestRunStartAcceptsOnlyExactKinds(t *testing.T) {
 	}
 	for _, kind := range []string{"codex", "claude", "gemini", "cursor"} {
 		t.Run(kind, func(t *testing.T) {
-			client := &testClient{response: started("agent-1", kind, "pane-1")}
+			client := &testClient{response: started("agent-1", kind, "pane-1", []string{"/usr/bin/true"}, cwd)}
 			var stdout, stderr bytes.Buffer
 			code := Run([]string{"start", kind}, strings.NewReader(""), &stdout, &stderr, testFactory(client), cfg)
 			if code != 0 || client.request.Kind != kind || client.request.SourceSession != "session-a" || client.request.SourceZellijPaneID != "terminal_2" {
@@ -388,7 +512,7 @@ func TestRunStartParsesStrictOptionsAndPassthrough(t *testing.T) {
 	if err := os.Symlink(cwd, link); err != nil {
 		t.Fatal(err)
 	}
-	client := &testClient{response: started("agent-1", "gemini", "pane-1")}
+	client := &testClient{response: started("agent-1", "gemini", "pane-1", []string{"/usr/bin/true"}, cwd)}
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
 		"start", "gemini", "--timeout=1s", "--socket=/first.sock", "--cwd", link,
@@ -435,7 +559,7 @@ func TestRunStartRejectsInvalidInputBeforeCallingClient(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := &testClient{response: started("agent-1", "codex", "pane-1")}
+			client := &testClient{response: started("agent-1", "codex", "pane-1", []string{"/usr/bin/true"}, cwd)}
 			var stdout, stderr bytes.Buffer
 			env := map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}
 			for key, value := range tt.env {
@@ -479,7 +603,7 @@ func TestRunHelpDocumentsStartContract(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("Run(%#v) exit code = %d, stderr=%q", args, code, stderr.String())
 		}
-		for _, want := range []string{"codex", "claude", "gemini", "cursor", "agy", "default: current working directory", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-skip-permissions", "agent --yolo --trust", "-- passthrough"} {
+		for _, want := range []string{"codex", "claude", "gemini", "cursor", "agy", "default: current working directory", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-skip-permissions", "agent --yolo --trust", "-- passthrough", "current Zellij pane", "closes the managed pane when the agent exits"} {
 			if !strings.Contains(stdout.String(), want) {
 				t.Fatalf("Run(%#v) help = %q, missing %q", args, stdout.String(), want)
 			}
@@ -493,27 +617,45 @@ func TestRunHelpDocumentsStartContract(t *testing.T) {
 }
 
 type testClient struct {
-	request         transport.StartAgentRequest
-	response        transport.StartAgentResponse
-	err             error
-	calls           int
-	nextRequest     transport.FocusNextAgentRequest
-	nextResponse    transport.FocusNextAgentResponse
-	nextErr         error
-	nextCalls       int
-	socket          string
-	timeout         time.Duration
-	deadline        time.Time
-	hasDeadline     bool
-	nextDeadline    time.Time
-	nextHasDeadline bool
+	request          transport.StartAgentRequest
+	response         transport.StartAgentResponse
+	err              error
+	calls            int
+	nextRequest      transport.FocusNextAgentRequest
+	nextResponse     transport.FocusNextAgentResponse
+	nextErr          error
+	nextCalls        int
+	socket           string
+	timeout          time.Duration
+	deadline         time.Time
+	hasDeadline      bool
+	nextDeadline     time.Time
+	nextHasDeadline  bool
+	startContext     context.Context
+	closePaneID      string
+	closeCalls       int
+	closeErr         error
+	closeDeadline    time.Time
+	closeHasDeadline bool
+	closeCalledAt    time.Time
+	closeContextErr  error
 }
 
 func (c *testClient) StartAgent(ctx context.Context, request transport.StartAgentRequest) (transport.StartAgentResponse, error) {
 	c.calls++
 	c.request = request
+	c.startContext = ctx
 	c.deadline, c.hasDeadline = ctx.Deadline()
 	return c.response, c.err
+}
+
+func (c *testClient) ClosePane(ctx context.Context, paneID string) (transport.ClosePaneResponse, error) {
+	c.closeCalls++
+	c.closePaneID = paneID
+	c.closeCalledAt = time.Now()
+	c.closeDeadline, c.closeHasDeadline = ctx.Deadline()
+	c.closeContextErr = ctx.Err()
+	return transport.ClosePaneResponse{}, c.closeErr
 }
 
 func (c *testClient) ListAgents(context.Context) (transport.ListAgentsResponse, error) {
@@ -554,9 +696,9 @@ func focusedNext(id, kind, agentPaneID, paneID string) transport.FocusNextAgentR
 	}}
 }
 
-func started(id, kind, pane string) transport.StartAgentResponse {
+func started(id, kind, pane string, command []string, cwd string) transport.StartAgentResponse {
 	return transport.StartAgentResponse{Agent: transport.AgentWithPane{
 		Agent: transport.Agent{ID: id, Kind: kind, PaneID: pane},
-		Pane:  transport.Pane{ID: pane},
+		Pane:  transport.Pane{ID: pane, Command: append([]string(nil), command...), CWD: cwd},
 	}}
 }
