@@ -123,8 +123,8 @@ keeps one in-memory cursor shared by all clients, so a next request from any
 session advances the same sequence.
 
 The bundled local Zellij binding is global: press `Alt+o` repeatedly to cycle
-through all managed agents. Outside this shortcut, `Tab` keeps its normal
-application behavior.
+through all managed agents, or press `Alt+p` to cycle only through idle agents.
+Outside these shortcuts, `Tab` keeps its normal application behavior.
 
 Coding-agent records are in-memory. A pane close notification removes its
 record immediately. In addition, the daemon reconciles Zellij every two
