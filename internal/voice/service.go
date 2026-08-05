@@ -25,6 +25,7 @@ var (
 
 type Notification struct {
 	RequestID string
+	Message   string
 	Prefix    string
 	TicketID  int64
 	Summary   string
@@ -216,6 +217,9 @@ func (s *Service) evictOldestRecentLocked() {
 }
 
 func formatMessage(notification Notification) string {
+	if notification.Message != "" {
+		return normalizeSummary(notification.Message)
+	}
 	base := fmt.Sprintf("%s %d 완료", strings.TrimSpace(notification.Prefix), notification.TicketID)
 	summary := normalizeSummary(notification.Summary)
 	if summary == "" {

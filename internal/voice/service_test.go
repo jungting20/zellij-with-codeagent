@@ -34,6 +34,20 @@ func TestServiceFormatsMessage(t *testing.T) {
 			n:    Notification{Prefix: "ticket-manager", TicketID: 42, Summary: strings.Repeat("가", MaxSpokenSummaryRunes+1)},
 			want: "ticket-manager 42 완료. " + strings.Repeat("가", MaxSpokenSummaryRunes),
 		},
+		{
+			name: "direct agent message",
+			n: Notification{
+				Message:  "  Codex\tagent-3\x00 작업이\n완료되었습니다  ",
+				Prefix:   "ignored",
+				TicketID: 99,
+			},
+			want: "Codex agent-3 작업이 완료되었습니다",
+		},
+		{
+			name: "truncates direct message to 120 runes",
+			n:    Notification{Message: strings.Repeat("나", MaxSpokenSummaryRunes+1)},
+			want: strings.Repeat("나", MaxSpokenSummaryRunes),
+		},
 	}
 
 	for _, tt := range tests {
