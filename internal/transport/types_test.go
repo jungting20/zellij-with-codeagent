@@ -15,9 +15,10 @@ import (
 func TestAgentStartRequestRoundTripPreservesSourceAndArguments(t *testing.T) {
 	payload := []byte(`{
 		"kind": "codex",
-		"cwd": "/workspace/project",
-		"args": ["--model", "gpt-5"],
-		"source_session": "physical-a",
+			"cwd": "/workspace/project",
+			"args": ["--model", "gpt-5"],
+			"notify_on_idle": true,
+			"source_session": "physical-a",
 		"source_zellij_pane_id": "terminal_2"
 	}`)
 	var request StartAgentRequest
@@ -25,7 +26,7 @@ func TestAgentStartRequestRoundTripPreservesSourceAndArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	converted := request.ToCodingAgent()
-	if converted.Kind != codingagent.KindCodex || converted.CWD != "/workspace/project" || converted.SourceZellijSession != "physical-a" || converted.SourceZellijPaneID != "terminal_2" {
+	if converted.Kind != codingagent.KindCodex || converted.CWD != "/workspace/project" || !converted.NotifyOnIdle || converted.SourceZellijSession != "physical-a" || converted.SourceZellijPaneID != "terminal_2" {
 		t.Fatalf("StartAgentRequest.ToCodingAgent() = %#v", converted)
 	}
 	request.Args[0] = "mutated"
@@ -36,7 +37,7 @@ func TestAgentStartRequestRoundTripPreservesSourceAndArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"kind":"codex"`, `"cwd":"/workspace/project"`, `"args":["--model","gpt-5"]`, `"source_session":"physical-a"`, `"source_zellij_pane_id":"terminal_2"`} {
+	for _, field := range []string{`"kind":"codex"`, `"cwd":"/workspace/project"`, `"args":["--model","gpt-5"]`, `"notify_on_idle":true`, `"source_session":"physical-a"`, `"source_zellij_pane_id":"terminal_2"`} {
 		if !strings.Contains(string(encoded), field) {
 			t.Fatalf("marshaled payload = %s, missing %s", encoded, field)
 		}

@@ -22,6 +22,7 @@ type Record struct {
 	Kind           Kind
 	PaneID         runtime.PaneID
 	State          State
+	NotifyOnIdle   bool
 	StateReason    string
 	MatchedRule    string
 	CreatedAt      time.Time

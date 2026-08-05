@@ -33,6 +33,7 @@ type StartAgentRequest struct {
 	Kind                Kind
 	CWD                 string
 	ExtraArgs           []string
+	NotifyOnIdle        bool
 	SourceZellijSession string
 	SourceZellijPaneID  runtime.ZellijPaneID
 }
@@ -170,6 +171,7 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 		Kind:           request.Kind,
 		PaneID:         runtime.PaneID(id),
 		State:          StateUnknown,
+		NotifyOnIdle:   request.NotifyOnIdle,
 		CreatedAt:      now,
 		StateChangedAt: now,
 	}

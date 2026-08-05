@@ -272,6 +272,7 @@ func runStart(args []string, stdin io.Reader, stdout, stderr io.Writer, newClien
 		Kind:               kind,
 		CWD:                cwd,
 		Args:               append([]string(nil), extra...),
+		NotifyOnIdle:       opts.notifyOnIdle,
 		SourceSession:      session,
 		SourceZellijPaneID: paneID,
 	})
@@ -340,9 +341,10 @@ func runAgentProcess(command []string, cwd string, stdin io.Reader, stdout, stde
 }
 
 type startOptions struct {
-	cwd     string
-	socket  string
-	timeout time.Duration
+	cwd          string
+	socket       string
+	timeout      time.Duration
+	notifyOnIdle bool
 }
 
 func parseStartOptions(args []string) (startOptions, error) {
@@ -351,6 +353,11 @@ func parseStartOptions(args []string) (startOptions, error) {
 		arg := args[index]
 		name, value, hasValue := strings.Cut(arg, "=")
 		switch name {
+		case "--notify-idle":
+			if hasValue {
+				return startOptions{}, fmt.Errorf("--notify-idle does not accept a value")
+			}
+			opts.notifyOnIdle = true
 		case "--cwd", "--socket", "--timeout":
 			if !hasValue {
 				if index+1 >= len(args) || strings.HasPrefix(args[index+1], "--") {
@@ -489,6 +496,8 @@ func printStartUsage(w io.Writer) {
 	fmt.Fprintf(w, "  --socket PATH\n    agentd Unix socket path (default %q)\n", cli.DefaultSocketPath)
 	fmt.Fprintln(w, "  --timeout DURATION")
 	fmt.Fprintln(w, "    request timeout (default 10s; must be greater than 0)")
+	fmt.Fprintln(w, "  --notify-idle")
+	fmt.Fprintln(w, "    announce non-idle to idle state transitions")
 	fmt.Fprintln(w, "  -- passthrough")
 	fmt.Fprintln(w, "    pass remaining arguments unchanged to the selected agent profile")
 	fmt.Fprintln(w)

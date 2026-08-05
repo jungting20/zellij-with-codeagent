@@ -72,6 +72,7 @@ func TestServiceStartAgentCreatesRegisteredMonitoredPane(t *testing.T) {
 		Kind:                KindGemini,
 		CWD:                 cwd,
 		ExtraArgs:           []string{"--model", "gemini-3"},
+		NotifyOnIdle:        true,
 		SourceZellijSession: "physical-a",
 		SourceZellijPaneID:  "terminal_2",
 	})
@@ -84,6 +85,7 @@ func TestServiceStartAgentCreatesRegisteredMonitoredPane(t *testing.T) {
 		Kind:           KindGemini,
 		PaneID:         "agent-1",
 		State:          StateUnknown,
+		NotifyOnIdle:   true,
 		CreatedAt:      now,
 		StateChangedAt: now,
 	}

@@ -221,7 +221,7 @@ func TestRunStartSendsValidatedRequest(t *testing.T) {
 	var gotStdout, gotStderr io.Writer
 
 	code := Run(
-		[]string{"start", "gemini", "--cwd", cwd, "--socket", "/tmp/agents.sock", "--timeout", "3s", "--", "--model", "gemini-3"},
+		[]string{"start", "gemini", "--cwd", cwd, "--socket", "/tmp/agents.sock", "--timeout", "3s", "--notify-idle", "--", "--model", "gemini-3"},
 		stdin, &stdout, &stderr, testFactory(client),
 		Config{
 			Getwd:  func() (string, error) { return "/unused", nil },
@@ -247,6 +247,7 @@ func TestRunStartSendsValidatedRequest(t *testing.T) {
 		Kind:               "gemini",
 		CWD:                cwd,
 		Args:               []string{"--model", "gemini-3"},
+		NotifyOnIdle:       true,
 		SourceSession:      "session-a",
 		SourceZellijPaneID: "terminal_2",
 	}
@@ -273,6 +274,27 @@ func TestRunStartSendsValidatedRequest(t *testing.T) {
 	}
 	if !client.closeHasDeadline || !client.closeDeadline.After(client.closeCalledAt) || client.closeContextErr != nil {
 		t.Fatalf("close context deadline=%s calledAt=%s hasDeadline=%t err=%v", client.closeDeadline, client.closeCalledAt, client.closeHasDeadline, client.closeContextErr)
+	}
+}
+
+func TestRunStartDisablesIdleNotificationByDefault(t *testing.T) {
+	cwd := t.TempDir()
+	client := &testClient{response: started("agent-1", "codex", "agent-1", []string{"codex"}, cwd)}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"start", "codex"}, strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
+		Getwd:  func() (string, error) { return cwd, nil },
+		Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}),
+		RunAgent: func([]string, string, io.Reader, io.Writer, io.Writer) error {
+			return nil
+		},
+	})
+
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if client.request.NotifyOnIdle {
+		t.Fatalf("NotifyOnIdle = true, want false by default")
 	}
 }
 

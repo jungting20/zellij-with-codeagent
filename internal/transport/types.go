@@ -100,6 +100,7 @@ type StartAgentRequest struct {
 	Kind               string   `json:"kind"`
 	CWD                string   `json:"cwd"`
 	Args               []string `json:"args,omitempty"`
+	NotifyOnIdle       bool     `json:"notify_on_idle,omitempty"`
 	SourceSession      string   `json:"source_session"`
 	SourceZellijPaneID string   `json:"source_zellij_pane_id"`
 }
@@ -307,6 +308,7 @@ func (req StartAgentRequest) ToCodingAgent() codingagent.StartAgentRequest {
 		Kind:                codingagent.Kind(req.Kind),
 		CWD:                 req.CWD,
 		ExtraArgs:           cloneStrings(req.Args),
+		NotifyOnIdle:        req.NotifyOnIdle,
 		SourceZellijSession: req.SourceSession,
 		SourceZellijPaneID:  rt.ZellijPaneID(req.SourceZellijPaneID),
 	}
@@ -317,6 +319,7 @@ func StartAgentRequestFromCodingAgent(req codingagent.StartAgentRequest) StartAg
 		Kind:               string(req.Kind),
 		CWD:                req.CWD,
 		Args:               cloneStrings(req.ExtraArgs),
+		NotifyOnIdle:       req.NotifyOnIdle,
 		SourceSession:      req.SourceZellijSession,
 		SourceZellijPaneID: string(req.SourceZellijPaneID),
 	}
