@@ -175,10 +175,10 @@ func TestLookupAgentNext(t *testing.T) {
 	if !ok {
 		t.Fatal("Lookup(RoleAgentNext) ok = false, want true")
 	}
-	if spec.Usage != "agent-next [--socket PATH --timeout DURATION]" {
+	if spec.Usage != "agent-next [--socket PATH --timeout DURATION --idle-only]" {
 		t.Fatalf("usage = %q, want agent-next usage", spec.Usage)
 	}
-	want := []string{"--socket", "--timeout"}
+	want := []string{"--socket", "--timeout", "--idle-only"}
 	if len(spec.Arguments) != len(want) {
 		t.Fatalf("arguments = %#v, want %d optional arguments", spec.Arguments, len(want))
 	}

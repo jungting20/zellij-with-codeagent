@@ -184,17 +184,19 @@ idle → working → blocked → idle
 ```
 
 In either attached session, press `Alt+o` repeatedly. Confirm navigation
-visits only the two idle agents in their creation order and wraps from the
-second idle agent back to the first. The cursor is daemon-wide and in-memory,
-so repeat the check from the other session and confirm it advances the same
-idle-only sequence.
+visits all four agents in creation order and wraps from the fourth agent back
+to the first. The cursor is daemon-wide and in-memory, so repeat the check from
+the other session and confirm it advances the same sequence.
 
-Change one of those idle agents to `working`, then press `Alt+o` again. Confirm
-the remaining idle agent is selected. Change every agent to a non-idle state,
-record the current focus, and then invoke both `Alt+o` and
-`zellij-agent agent next`. Confirm each leaves focus unchanged and produces no
-visible CLI error or output. Finally, press `Tab` in a normal application pane;
-it must retain the application's normal Tab behavior.
+Run `zellij-agent agent next --idle-only` repeatedly and confirm it visits only
+the two idle agents and wraps. Change one of those idle agents to `working` and
+confirm the remaining idle agent is selected. Change every agent to a non-idle
+state, record the current focus, and invoke
+`zellij-agent agent next --idle-only`; confirm it leaves focus unchanged and
+produces no visible output.
+Then invoke `zellij-agent agent next` and confirm it still advances through all
+managed agents. Finally, press `Tab` in a normal application pane; it must
+retain the application's normal Tab behavior.
 
 ## Runtime Dashboard Smoke
 

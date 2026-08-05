@@ -49,14 +49,14 @@ func TestServerAgentRoutes(t *testing.T) {
 	}
 
 	next := httptest.NewRecorder()
-	server.ServeHTTP(next, httptest.NewRequest(http.MethodPost, "/v1/agents/next", strings.NewReader(`{"source_session":"physical-b","source_zellij_pane_id":"terminal_8"}`)))
+	server.ServeHTTP(next, httptest.NewRequest(http.MethodPost, "/v1/agents/next", strings.NewReader(`{"source_session":"physical-b","source_zellij_pane_id":"terminal_8","idle_only":true}`)))
 	if next.Code != http.StatusOK {
 		t.Fatalf("next status = %d, want 200; body=%s", next.Code, next.Body.String())
 	}
 	if service.agentNextCalls != 1 {
 		t.Fatalf("FocusNextAgent calls = %d, want 1", service.agentNextCalls)
 	}
-	if service.agentNextReq.SourceZellijSession != "physical-b" || service.agentNextReq.SourceZellijPaneID != "terminal_8" {
+	if service.agentNextReq.SourceZellijSession != "physical-b" || service.agentNextReq.SourceZellijPaneID != "terminal_8" || !service.agentNextReq.IdleOnly {
 		t.Fatalf("FocusNextAgent request = %#v", service.agentNextReq)
 	}
 	var nextResponse FocusNextAgentResponse

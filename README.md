@@ -116,14 +116,15 @@ shows the detected agent state (`idle`, `working`, `blocked`, or `unknown`),
 agent kind, project, and time in the current state.
 
 To cycle directly between managed agents, run `zellij-agent agent next` from
-an attached Zellij pane. It visits only agents whose detected state is `idle`,
-retains creation-order wraparound within that filtered set, and silently does
-nothing when no idle agents exist. The daemon keeps one in-memory cursor shared
-by all clients, so a next request from any session advances the same sequence.
+an attached Zellij pane. By default it visits every managed agent in creation
+order. Add `--idle-only` to visit only agents whose detected state is `idle`;
+that filtered mode silently does nothing when no idle agents exist. The daemon
+keeps one in-memory cursor shared by all clients, so a next request from any
+session advances the same sequence.
 
 The bundled local Zellij binding is global: press `Alt+o` repeatedly to cycle
-through idle agents. Outside this shortcut, `Tab` keeps its normal application
-behavior.
+through all managed agents. Outside this shortcut, `Tab` keeps its normal
+application behavior.
 
 Coding-agent records are in-memory. A pane close notification removes its
 record immediately. In addition, the daemon reconciles Zellij every two

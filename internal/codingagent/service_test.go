@@ -714,9 +714,26 @@ func TestServiceFocusNextAgentSelectsOnlyIdleAgents(t *testing.T) {
 	seedRecordsWithStates(t, store, []State{StateWorking, StateIdle, StateBlocked, StateIdle})
 	runtimeService := successfulFocusRuntime()
 	service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
-	request := FocusNextAgentRequest{SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1"}
+	request := FocusNextAgentRequest{SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1", IdleOnly: true}
 
 	for call, wantID := range []ID{"agent-2", "agent-4", "agent-2"} {
+		response, err := service.FocusNextAgent(context.Background(), request)
+		if err != nil {
+			t.Fatalf("FocusNextAgent() call %d error = %v", call+1, err)
+		}
+		if !response.Focused || response.Agent.Agent.ID != wantID {
+			t.Fatalf("FocusNextAgent() call %d response = %#v, want focused %q", call+1, response, wantID)
+		}
+	}
+}
+
+func TestServiceFocusNextAgentDefaultsToAllStates(t *testing.T) {
+	store := NewMemoryStore(nil)
+	seedRecordsWithStates(t, store, []State{StateWorking, StateIdle, StateBlocked, StateUnknown})
+	service := NewService(ServiceOptions{RuntimeService: successfulFocusRuntime(), Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
+	request := FocusNextAgentRequest{SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1"}
+
+	for call, wantID := range []ID{"agent-1", "agent-2", "agent-3", "agent-4", "agent-1"} {
 		response, err := service.FocusNextAgent(context.Background(), request)
 		if err != nil {
 			t.Fatalf("FocusNextAgent() call %d error = %v", call+1, err)
@@ -786,7 +803,7 @@ func TestServiceFocusNextAgentDoesNothingWithoutIdleAgents(t *testing.T) {
 	service.lastFocusedID = "agent-2"
 
 	response, err := service.FocusNextAgent(context.Background(), FocusNextAgentRequest{
-		SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1",
+		SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1", IdleOnly: true,
 	})
 	if err != nil || response.Focused || response.Agent.Agent.ID != "" {
 		t.Fatalf("FocusNextAgent() response=%#v error=%v, want successful no-op", response, err)
@@ -818,7 +835,7 @@ func TestServiceFocusNextAgentRepeatedlySelectsOnlyIdleAgent(t *testing.T) {
 	seedRecordsWithStates(t, store, []State{StateWorking, StateIdle, StateBlocked})
 	runtimeService := successfulFocusRuntime()
 	service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
-	request := FocusNextAgentRequest{SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1"}
+	request := FocusNextAgentRequest{SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1", IdleOnly: true}
 
 	for call := 1; call <= 2; call++ {
 		response, err := service.FocusNextAgent(context.Background(), request)
@@ -852,7 +869,7 @@ func TestServiceFocusNextAgentRestartsWhenCursorAgentBecomesWorking(t *testing.T
 	}
 
 	response, err := service.FocusNextAgent(context.Background(), FocusNextAgentRequest{
-		SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1",
+		SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1", IdleOnly: true,
 	})
 	if err != nil {
 		t.Fatalf("FocusNextAgent() error = %v", err)

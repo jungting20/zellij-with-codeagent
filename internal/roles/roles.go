@@ -120,11 +120,12 @@ var specs = []RoleSpec{
 	},
 	{
 		Name:        RoleAgentNext,
-		Usage:       "agent-next [--socket PATH --timeout DURATION]",
+		Usage:       "agent-next [--socket PATH --timeout DURATION --idle-only]",
 		Description: "Focuses the next managed coding agent through the daemon.",
 		Arguments: []ArgumentSpec{
 			{Name: "--socket", Required: false, Description: "agentd Unix socket path."},
 			{Name: "--timeout", Required: false, Description: "Daemon request timeout."},
+			{Name: "--idle-only", Required: false, Description: "Cycle only through idle agents."},
 		},
 	},
 	{

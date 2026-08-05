@@ -65,7 +65,7 @@ func TestRunNextFocusesNextAgentWithZellijContext(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := Run(
-		[]string{"next", "--socket", "/tmp/next.sock", "--timeout", "3s"},
+		[]string{"next", "--socket", "/tmp/next.sock", "--timeout", "3s", "--idle-only"},
 		strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
 			Getenv: mapGetenv(map[string]string{
 				"ZELLIJ_SESSION_NAME": " session-b ",
@@ -80,7 +80,7 @@ func TestRunNextFocusesNextAgentWithZellijContext(t *testing.T) {
 	if client.socket != "/tmp/next.sock" || client.timeout != 3*time.Second {
 		t.Fatalf("client socket=%q timeout=%s", client.socket, client.timeout)
 	}
-	want := transport.FocusNextAgentRequest{SourceSession: "session-b", SourceZellijPaneID: "terminal_8"}
+	want := transport.FocusNextAgentRequest{SourceSession: "session-b", SourceZellijPaneID: "terminal_8", IdleOnly: true}
 	if !reflect.DeepEqual(client.nextRequest, want) {
 		t.Fatalf("FocusNextAgent request=%#v, want %#v", client.nextRequest, want)
 	}
@@ -108,6 +108,9 @@ func TestRunNextFallsBackToPaneID(t *testing.T) {
 	}
 	if client.nextCalls != 1 {
 		t.Fatalf("FocusNextAgent calls=%d, want 1", client.nextCalls)
+	}
+	if client.nextRequest.IdleOnly {
+		t.Fatal("FocusNextAgent request IdleOnly = true, want false by default")
 	}
 }
 

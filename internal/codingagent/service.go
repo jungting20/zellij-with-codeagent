@@ -59,6 +59,7 @@ type FocusAgentResponse struct {
 type FocusNextAgentRequest struct {
 	SourceZellijSession string
 	SourceZellijPaneID  runtime.ZellijPaneID
+	IdleOnly            bool
 }
 
 type FocusNextAgentResponse struct {
@@ -259,7 +260,7 @@ func (s *Service) FocusNextAgent(ctx context.Context, request FocusNextAgentRequ
 	if err != nil {
 		return FocusNextAgentResponse{}, fmt.Errorf("list coding agents: %w", err)
 	}
-	record, ok := nextIdleAgentRecord(records, s.lastFocusedID)
+	record, ok := nextAgentRecord(records, s.lastFocusedID, request.IdleOnly)
 	if !ok {
 		return FocusNextAgentResponse{Focused: false}, nil
 	}
@@ -309,22 +310,22 @@ func (s *Service) focusAgentLocked(ctx context.Context, request FocusAgentReques
 	return FocusAgentResponse{Agent: AgentWithPane{Agent: record, Pane: response.Pane}}, nil
 }
 
-func nextIdleAgentRecord(records []Record, current ID) (Record, bool) {
-	idle := make([]Record, 0, len(records))
+func nextAgentRecord(records []Record, current ID, idleOnly bool) (Record, bool) {
+	eligible := make([]Record, 0, len(records))
 	for _, record := range records {
-		if record.State == StateIdle {
-			idle = append(idle, record)
+		if !idleOnly || record.State == StateIdle {
+			eligible = append(eligible, record)
 		}
 	}
-	if len(idle) == 0 {
+	if len(eligible) == 0 {
 		return Record{}, false
 	}
-	for index := range idle {
-		if idle[index].ID == current {
-			return idle[(index+1)%len(idle)], true
+	for index := range eligible {
+		if eligible[index].ID == current {
+			return eligible[(index+1)%len(eligible)], true
 		}
 	}
-	return idle[0], true
+	return eligible[0], true
 }
 
 func (s *Service) ListSessions(ctx context.Context) ([]runtime.SessionRecord, error) {

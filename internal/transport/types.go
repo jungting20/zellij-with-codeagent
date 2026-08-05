@@ -125,6 +125,7 @@ type FocusAgentResponse struct {
 type FocusNextAgentRequest struct {
 	SourceSession      string `json:"source_session"`
 	SourceZellijPaneID string `json:"source_zellij_pane_id"`
+	IdleOnly           bool   `json:"idle_only,omitempty"`
 }
 
 type FocusNextAgentResponse struct {
@@ -337,6 +338,7 @@ func (req FocusNextAgentRequest) ToCodingAgent() codingagent.FocusNextAgentReque
 	return codingagent.FocusNextAgentRequest{
 		SourceZellijSession: req.SourceSession,
 		SourceZellijPaneID:  rt.ZellijPaneID(req.SourceZellijPaneID),
+		IdleOnly:            req.IdleOnly,
 	}
 }
 
