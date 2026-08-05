@@ -92,7 +92,12 @@ default:
 ./bin/zellij-agent agent start claude --cwd /path/to/project
 ./bin/zellij-agent agent start gemini -- --model gemini-3
 ./bin/zellij-agent agent start cursor
+./bin/zellij-agent agent start codex --notify-idle -- "Implement the requested change."
 ```
+
+Pass `--notify-idle` before `--` to opt in to a native voice notification for
+that agent. The daemon announces the agent when its detected state changes
+from any non-idle state to `idle`. Starts without this option remain silent.
 
 The configured executables are `codex`, `claude`, `agy` for Gemini, and
 `agent` for Cursor. Only agents started through this runtime appear in the

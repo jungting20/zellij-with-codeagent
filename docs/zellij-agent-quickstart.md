@@ -61,6 +61,19 @@ Expected health output:
 agentd ok (dev)
 ```
 
+### Optional: Start An Agent With An Idle Voice Notification
+
+From a pane attached to Zellij, opt in for one agent with:
+
+```bash
+./bin/zellij-agent agent start codex --notify-idle -- "Implement the requested change."
+```
+
+`--notify-idle` must appear before `--`; arguments after `--` are passed to the
+coding agent. The daemon speaks once whenever this managed agent changes from a
+non-idle state to `idle`. Agents started without the option do not produce this
+notification.
+
 ## 5. Submit A JSON Plan With ctl
 
 Create a normal JSON request envelope:
