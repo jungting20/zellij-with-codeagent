@@ -106,11 +106,12 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) in
 				fmt.Fprintf(stderr, "close voice service: %v\n", err)
 			}
 		}()
-		service, err := newRuntimeService()
+		bundle, err := newRuntimeBundle()
 		if err != nil {
 			fmt.Fprintf(stderr, "construct daemon service: %v\n", err)
 			return 1
 		}
+		service := bundle.service
 		server, err := newDaemonTransportServer(transport.ServerOptions{
 			Service:            service,
 			VoiceNotifications: voiceQueueAdapter{service: voiceService},
@@ -123,6 +124,12 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		}
 		fmt.Fprintf(stdout, "agentd serving on unix socket %s\n", socketPath)
 		serveCtx, cancelServe := context.WithCancel(ctx)
+		idleEvents, unsubscribeIdleEvents := bundle.bus.Subscribe(serveCtx)
+		idleVoiceDone := make(chan struct{})
+		go func() {
+			defer close(idleVoiceDone)
+			runAgentIdleVoiceLoop(serveCtx, idleEvents, bundle.store, voiceService, stderr)
+		}()
 		reconcileDone := make(chan struct{})
 		go func() {
 			defer close(reconcileDone)
@@ -132,7 +139,9 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		}()
 		serveErr := server.ListenAndServe(serveCtx)
 		cancelServe()
+		unsubscribeIdleEvents()
 		<-reconcileDone
+		<-idleVoiceDone
 		if serveErr != nil && serveErr != context.Canceled && serveErr != context.DeadlineExceeded {
 			fmt.Fprintf(stderr, "agentd serve failed: %v\n", serveErr)
 			return 1
@@ -322,7 +331,21 @@ func validateLegacyDaemonCommand(command, socketPath string) error {
 	return nil
 }
 
+type daemonRuntimeBundle struct {
+	service transport.ServerRuntime
+	bus     *eventbus.Bus
+	store   codingagent.Store
+}
+
 func newRuntimeService() (transport.ServerRuntime, error) {
+	bundle, err := newRuntimeBundle()
+	if err != nil {
+		return nil, err
+	}
+	return bundle.service, nil
+}
+
+func newRuntimeBundle() (*daemonRuntimeBundle, error) {
 	bus := newDaemonEventBus()
 	if bus == nil {
 		return nil, errors.New("construct daemon service: event bus is nil")
@@ -371,7 +394,7 @@ func newRuntimeService() (transport.ServerRuntime, error) {
 	if service == nil {
 		return nil, errors.New("construct daemon service: coding agent service is nil")
 	}
-	return service, nil
+	return &daemonRuntimeBundle{service: service, bus: bus, store: store}, nil
 }
 
 func isNilDaemonDependency(value any) bool {

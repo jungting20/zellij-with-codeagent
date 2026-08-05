@@ -259,6 +259,31 @@ func TestNewRuntimeServiceAssemblesSharedRuntimeAgentStoreAndEventBus(t *testing
 	}
 }
 
+func TestNewRuntimeBundleExposesSharedStoreAndEventBus(t *testing.T) {
+	backend := newDaemonFakeBackend()
+	store := codingagent.NewMemoryStore(time.Now)
+	bus := eventbus.New()
+	restoreDaemonFactories(t)
+	newDaemonEventBus = func() *eventbus.Bus { return bus }
+	newDaemonStore = func(func() time.Time) codingagent.Store { return store }
+	newDaemonBackend = func() daemonBackend { return backend }
+	newDaemonSubscriptionRunner = func() agentruntime.SubscriptionRunner { return daemonFakeSubscriptionRunner{} }
+
+	bundle, err := newRuntimeBundle()
+	if err != nil {
+		t.Fatalf("newRuntimeBundle() error = %v", err)
+	}
+	if bundle.service == nil {
+		t.Fatal("newRuntimeBundle() service is nil")
+	}
+	if bundle.bus != bus {
+		t.Fatalf("newRuntimeBundle() bus = %p, want %p", bundle.bus, bus)
+	}
+	if bundle.store != store {
+		t.Fatalf("newRuntimeBundle() store = %#v, want shared store %#v", bundle.store, store)
+	}
+}
+
 func TestNewRuntimeServiceTreatsNilAgentServiceAsConstructionError(t *testing.T) {
 	restoreDaemonFactories(t)
 	newDaemonAgentService = func(codingagent.ServiceOptions) *codingagent.Service { return nil }
@@ -448,6 +473,69 @@ func TestRunContextServeStartupFailureStopsAndJoinsReconcileLoop(t *testing.T) {
 	}
 }
 
+func TestRunContextServeDeliversIdleVoiceFromSharedEventBus(t *testing.T) {
+	restoreDaemonFactories(t)
+	restoreDaemonServeSeams(t)
+	store := codingagent.NewMemoryStore(time.Now)
+	bus := eventbus.New()
+	voiceService := &fakeDaemonVoiceService{enqueueStatus: voice.EnqueueStatusQueued}
+	newDaemonStore = func(func() time.Time) codingagent.Store { return store }
+	newDaemonEventBus = func() *eventbus.Bus { return bus }
+	newDaemonBackend = func() daemonBackend { return newDaemonFakeBackend() }
+	newDaemonSubscriptionRunner = func() agentruntime.SubscriptionRunner { return daemonFakeSubscriptionRunner{} }
+	originalVoiceFactory := newDaemonVoiceService
+	newDaemonVoiceService = func(io.Writer) daemonVoiceService { return voiceService }
+	t.Cleanup(func() { newDaemonVoiceService = originalVoiceFactory })
+
+	changedAt := time.Unix(7, 11)
+	_, err := store.Create(codingagent.Record{
+		ID: "agent-9", Kind: codingagent.KindClaude, PaneID: "pane-9",
+		State: codingagent.StateIdle, NotifyOnIdle: true, StateChangedAt: changedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newDaemonTransportServer = func(transport.ServerOptions) (daemonServeServer, error) {
+		return daemonServeServerFunc(func(context.Context) error {
+			bus.Publish(eventbus.Event{
+				Type: eventbus.TypeAgentStateChanged, AgentID: "agent-9",
+				PreviousState: string(codingagent.StateWorking), AgentState: string(codingagent.StateIdle),
+			})
+			deadline := time.Now().Add(time.Second)
+			for voiceService.enqueueCalls() == 0 && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if voiceService.enqueueCalls() == 0 {
+				t.Error("idle voice notification was not enqueued")
+			}
+			return context.Canceled
+		}), nil
+	}
+
+	code := RunContext(context.Background(), []string{"serve", "--socket", filepath.Join(t.TempDir(), "agentd.sock")}, io.Discard, io.Discard)
+
+	if code != 0 {
+		t.Fatalf("RunContext() code = %d, want 0", code)
+	}
+	if got, want := voiceService.notification(), (voice.Notification{
+		RequestID: "agent-idle:agent-9:7000000011",
+		Message:   "Claude agent-9 작업이 완료되었습니다",
+	}); got != want {
+		t.Fatalf("notification = %#v, want %#v", got, want)
+	}
+	if got := voiceService.closeCalls(); got != 1 {
+		t.Fatalf("voice Close() calls = %d, want 1 after idle loop shutdown", got)
+	}
+	bus.Publish(eventbus.Event{
+		Type: eventbus.TypeAgentStateChanged, AgentID: "agent-9",
+		PreviousState: string(codingagent.StateWorking), AgentState: string(codingagent.StateIdle),
+	})
+	time.Sleep(10 * time.Millisecond)
+	if got := voiceService.enqueueCalls(); got != 1 {
+		t.Fatalf("enqueue calls after RunContext returned = %d, want 1", got)
+	}
+}
+
 func restoreDaemonServeSeams(t *testing.T) {
 	t.Helper()
 	serverFactory := newDaemonTransportServer
@@ -467,6 +555,10 @@ type daemonFakeServeServer struct {
 	serveErr error
 	once     sync.Once
 }
+
+type daemonServeServerFunc func(context.Context) error
+
+func (f daemonServeServerFunc) ListenAndServe(ctx context.Context) error { return f(ctx) }
 
 func (s *daemonFakeServeServer) ListenAndServe(ctx context.Context) error {
 	s.once.Do(func() { close(s.started) })
