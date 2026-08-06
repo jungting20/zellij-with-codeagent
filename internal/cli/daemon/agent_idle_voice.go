@@ -46,10 +46,11 @@ func handleAgentIdleVoiceEvent(
 	queue agentIdleVoiceQueue,
 	log io.Writer,
 ) {
-	if event.Type != eventbus.TypeAgentStateChanged ||
-		event.AgentID == "" ||
-		event.PreviousState == string(codingagent.StateIdle) ||
-		event.AgentState != string(codingagent.StateIdle) {
+	initialDetection := event.PreviousState == string(codingagent.StateUnknown) &&
+		event.AgentState != string(codingagent.StateUnknown)
+	idleTransition := event.PreviousState != string(codingagent.StateIdle) &&
+		event.AgentState == string(codingagent.StateIdle)
+	if event.Type != eventbus.TypeAgentStateChanged || event.AgentID == "" || (!initialDetection && !idleTransition) {
 		return
 	}
 
@@ -73,9 +74,15 @@ func handleAgentIdleVoiceEvent(
 		displayName = "Agent"
 	}
 
+	requestKind := "agent-idle"
+	message := fmt.Sprintf("%s %s 작업이 완료되었습니다", displayName, record.ID)
+	if initialDetection {
+		requestKind = "agent-started"
+		message = fmt.Sprintf("%s %s 실행되었습니다", displayName, record.ID)
+	}
 	_, err = queue.Enqueue(voice.Notification{
-		RequestID: fmt.Sprintf("agent-idle:%s:%d", record.ID, record.StateChangedAt.UnixNano()),
-		Message:   fmt.Sprintf("%s %s 작업이 완료되었습니다", displayName, record.ID),
+		RequestID: fmt.Sprintf("%s:%s:%d", requestKind, record.ID, record.StateChangedAt.UnixNano()),
+		Message:   message,
 	})
 	if err != nil {
 		logAgentIdleVoiceError(log, "agent idle voice enqueue %s failed: %v\n", event.AgentID, err)

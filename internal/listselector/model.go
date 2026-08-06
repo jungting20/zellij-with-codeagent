@@ -22,7 +22,7 @@ var agents = []agent{
 	{name: "agent", command: "zellij-agent", baseArgs: []string{"agent", "start", "cursor", "--"}},
 	{name: "antigravity", command: "zellij-agent", baseArgs: []string{"agent", "start", "gemini", "--"}},
 	{name: "codex", command: "zellij-agent", baseArgs: []string{"agent", "start", "codex", "--"}},
-	{name: "claude", command: "claude", yoloArgs: []string{"--dangerously-skip-permissions"}},
+	{name: "claude", command: "zellij-agent", baseArgs: []string{"agent", "start", "claude", "--"}, yoloArgs: []string{"--dangerously-skip-permissions"}},
 }
 
 type focusArea int
@@ -30,6 +30,7 @@ type focusArea int
 const (
 	focusAgents focusArea = iota
 	focusPrompt
+	focusVoice
 	focusYolo
 )
 
@@ -44,6 +45,7 @@ type Model struct {
 	focus      focusArea
 	prompt     textinput.Model
 	yolo       bool
+	voice      bool
 	status     string
 	commandErr error
 }
@@ -69,7 +71,7 @@ func NewModel() Model {
 		focus:  focusAgents,
 		prompt: input,
 		yolo:   true,
-		status: "Use Tab to move focus. Enter runs from prompt or yolo.",
+		status: "Use Tab to move focus. Enter runs from any option.",
 	}
 }
 
@@ -120,6 +122,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		case focusYolo:
 			return m.updateYolo(msg)
+		case focusVoice:
+			return m.updateVoice(msg)
 		}
 	case commandDoneMsg:
 		m.commandErr = msg.err
@@ -130,11 +134,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) focusNext() {
-	m.setFocus((m.focus + 1) % 3)
+	m.setFocus((m.focus + 1) % 4)
 }
 
 func (m *Model) focusPrev() {
-	m.setFocus((m.focus + 2) % 3)
+	m.setFocus((m.focus + 3) % 4)
 }
 
 func (m *Model) setFocus(next focusArea) {
@@ -173,7 +177,22 @@ func (m Model) updateYolo(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.runSelectedAgent()
 	case "up", "k":
+		m.setFocus(focusVoice)
+	}
+
+	return m, nil
+}
+
+func (m Model) updateVoice(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case " ":
+		m.voice = !m.voice
+	case "enter":
+		return m.runSelectedAgent()
+	case "up", "k":
 		m.setFocus(focusPrompt)
+	case "down", "j":
+		m.setFocus(focusYolo)
 	}
 
 	return m, nil
@@ -183,6 +202,9 @@ func (m Model) selectedCommand() (string, []string) {
 	selected := m.agents[m.cursor]
 	args := make([]string, 0, len(selected.baseArgs)+len(selected.yoloArgs)+1)
 	args = append(args, selected.baseArgs...)
+	if m.voice {
+		args = insertBeforePassthrough(args, "--notify-idle")
+	}
 	if m.yolo {
 		args = append(args, selected.yoloArgs...)
 	}
@@ -190,6 +212,18 @@ func (m Model) selectedCommand() (string, []string) {
 		args = append(args, prompt)
 	}
 	return selected.command, args
+}
+
+func insertBeforePassthrough(args []string, option string) []string {
+	for index, arg := range args {
+		if arg == "--" {
+			args = append(args, "")
+			copy(args[index+1:], args[index:])
+			args[index] = option
+			return args
+		}
+	}
+	return append(args, option)
 }
 
 func (m Model) runSelectedAgent() (tea.Model, tea.Cmd) {
@@ -218,6 +252,8 @@ func (m Model) View() string {
 	b.WriteString("\n")
 	b.WriteString(sectionStyle.Render(m.renderPrompt()))
 	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render(m.renderVoice()))
+	b.WriteString("\n")
 	b.WriteString(sectionStyle.Render(m.renderYolo()))
 
 	if m.status != "" {
@@ -226,6 +262,20 @@ func (m Model) View() string {
 	}
 
 	return b.String()
+}
+
+func (m Model) renderVoice() string {
+	label := "Voice mode"
+	if m.focus == focusVoice {
+		label = focusedStyle.Render(label)
+	}
+
+	box := "[ ]"
+	if m.voice {
+		box = "[x]"
+	}
+
+	return fmt.Sprintf("%s\n%s %s", label, box, mutedStyle.Render("notify when agent becomes idle"))
 }
 
 func (m Model) renderAgents() string {

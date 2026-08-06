@@ -3,6 +3,7 @@ package listselector
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -12,20 +13,22 @@ func TestDefaultAgentCommands(t *testing.T) {
 	tests := []struct {
 		name        string
 		yolo        bool
+		voice       bool
 		prompt      string
 		wantCommand string
 		wantArgs    []string
 	}{
 		{name: "agent", yolo: true, wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "cursor", "--"}},
-		{name: "antigravity", yolo: true, prompt: "fix it", wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "gemini", "--", "fix it"}},
+		{name: "antigravity", yolo: true, voice: true, prompt: "fix it", wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "gemini", "--notify-idle", "--", "fix it"}},
 		{name: "codex", yolo: true, wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "codex", "--"}},
-		{name: "claude", yolo: false, prompt: "review", wantCommand: "claude", wantArgs: []string{"review"}},
+		{name: "claude", yolo: false, voice: true, prompt: "review", wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "claude", "--notify-idle", "--", "review"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := NewModel()
 			m.yolo = tt.yolo
+			m.voice = tt.voice
 			m.prompt.SetValue(tt.prompt)
 			for index, item := range m.agents {
 				if item.name == tt.name {
@@ -65,11 +68,33 @@ func TestNewModelDefaults(t *testing.T) {
 	if !m.yolo {
 		t.Fatal("yolo = false, want true")
 	}
+	if m.voice {
+		t.Fatal("voice = true, want false")
+	}
 	if m.prompt.Placeholder != "Initial prompt, optional" {
 		t.Fatalf("placeholder = %q", m.prompt.Placeholder)
 	}
 	if m.prompt.CharLimit != 2048 {
 		t.Fatalf("char limit = %d, want 2048", m.prompt.CharLimit)
+	}
+}
+
+func TestVoiceModeFocusAndToggle(t *testing.T) {
+	m := NewModel()
+	m.setFocus(focusVoice)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = updated.(Model)
+	if !m.voice {
+		t.Fatal("voice = false after space, want true")
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "Voice mode") || !strings.Contains(view, "[x] notify when agent becomes idle") {
+		t.Fatalf("View() missing enabled voice checkbox: %q", view)
+	}
+	if strings.Index(view, "Voice mode") > strings.Index(view, "Yolo mode") {
+		t.Fatalf("View() renders Voice mode after Yolo mode: %q", view)
 	}
 }
 
