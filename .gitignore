@@ -16,3 +16,6 @@ tmp/
 # Local feature worktrees.
 .worktrees/
 .zellij-agent/ticket-worker/
+
+# Local Rust build output for the agent-next bridge plugin.
+/plugins/agent-next-bridge/target/
