@@ -66,7 +66,7 @@ func ErrorFor(err error) (APIError, int) {
 		return APIError{Code: CodeQueueFull, Message: err.Error(), Retryable: true}, http.StatusServiceUnavailable
 	case errors.Is(err, codingagent.ErrNotFound), errors.Is(err, rt.ErrPaneNotFound), errors.Is(err, rt.ErrSessionNotFound), errors.Is(err, rt.ErrTabNotFound):
 		return APIError{Code: CodeNotFound, Message: err.Error()}, http.StatusNotFound
-	case errors.Is(err, codingagent.ErrInvalidAgentKind), errors.Is(err, codingagent.ErrInvalidAgentCWD), errors.Is(err, codingagent.ErrAgentSourceRequired), errors.Is(err, codingagent.ErrAgentIDRequired), errors.Is(err, codingagent.ErrInvalidRecord), errors.Is(err, codingagent.ErrInvalidState), errors.Is(err, rt.ErrMissingPaneID), errors.Is(err, rt.ErrInvalidExecutionPlan), errors.Is(err, rt.ErrInvalidMessage), errors.Is(err, rt.ErrInvalidPaneTarget), errors.Is(err, rt.ErrZellijSessionRequired):
+	case errors.Is(err, codingagent.ErrInvalidAgentKind), errors.Is(err, codingagent.ErrInvalidAgentCWD), errors.Is(err, codingagent.ErrInvalidAccessMode), errors.Is(err, codingagent.ErrAgentSourceRequired), errors.Is(err, codingagent.ErrAgentIDRequired), errors.Is(err, codingagent.ErrInvalidRecord), errors.Is(err, codingagent.ErrInvalidState), errors.Is(err, rt.ErrMissingPaneID), errors.Is(err, rt.ErrInvalidExecutionPlan), errors.Is(err, rt.ErrInvalidMessage), errors.Is(err, rt.ErrInvalidPaneTarget), errors.Is(err, rt.ErrZellijSessionRequired):
 		return APIError{Code: CodeBadRequest, Message: err.Error()}, http.StatusBadRequest
 	case errors.Is(err, rt.ErrCleanupPartial):
 		return APIError{Code: CodeCleanupPartial, Message: err.Error(), Retryable: true}, http.StatusConflict

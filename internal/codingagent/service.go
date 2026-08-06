@@ -31,7 +31,9 @@ type AgentWithPane struct {
 
 type StartAgentRequest struct {
 	Kind                Kind
+	AccessMode          AccessMode
 	CWD                 string
+	Prompt              string
 	ExtraArgs           []string
 	NotifyOnIdle        bool
 	SourceZellijSession string
@@ -153,6 +155,14 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 	if !ok {
 		return StartAgentResponse{}, fmt.Errorf("%w: %q", ErrInvalidAgentKind, request.Kind)
 	}
+	accessMode, err := ParseAccessMode(string(request.AccessMode))
+	if err != nil {
+		return StartAgentResponse{}, err
+	}
+	command, err := profile.BuildManagedCommand(accessMode, request.Prompt, request.ExtraArgs)
+	if err != nil {
+		return StartAgentResponse{}, err
+	}
 	cwd, err := resolveAgentCWD(request.CWD)
 	if err != nil {
 		return StartAgentResponse{}, err
@@ -170,6 +180,7 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 	record := Record{
 		ID:             id,
 		Kind:           request.Kind,
+		AccessMode:     accessMode,
 		PaneID:         runtime.PaneID(id),
 		State:          StateUnknown,
 		NotifyOnIdle:   request.NotifyOnIdle,
@@ -194,7 +205,7 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 		Role:          "coding-agent",
 		ZellijSession: sourceSession,
 		ZellijPaneID:  sourcePaneID,
-		Command:       profile.BuildCommand(true, request.ExtraArgs),
+		Command:       command,
 		CWD:           cwd,
 	})
 	if err != nil {

@@ -135,6 +135,9 @@ func validateRecord(record Record) error {
 	if _, ok := LookupProfile(record.Kind); !ok {
 		return fmt.Errorf("%w: unsupported kind %q", ErrInvalidRecord, record.Kind)
 	}
+	if _, err := ParseAccessMode(string(record.AccessMode)); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidRecord, err)
+	}
 	if !validState(record.State) {
 		return fmt.Errorf("%w: %q", ErrInvalidState, record.State)
 	}

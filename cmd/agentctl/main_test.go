@@ -46,7 +46,7 @@ func TestRunHelp(t *testing.T) {
 
 func TestRunHealth(t *testing.T) {
 	client := &fakeAgentClient{
-		healthResponse: transport.HealthResponse{Status: "ok", Version: "test"},
+		healthResponse: transport.HealthResponse{Status: "ok", Version: "test", Capabilities: []string{transport.CapabilityAgentAccessReadOnlyV1}},
 	}
 	var stdout, stderr bytes.Buffer
 
@@ -60,6 +60,9 @@ func TestRunHealth(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "agentd ok (test)") {
 		t.Fatalf("stdout = %q, want health summary", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), transport.CapabilityAgentAccessReadOnlyV1) {
+		t.Fatalf("stdout = %q, want capability", stdout.String())
 	}
 }
 

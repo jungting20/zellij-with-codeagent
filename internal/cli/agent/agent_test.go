@@ -15,6 +15,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"zellij-with-codeagent/internal/agentdashboard"
+	"zellij-with-codeagent/internal/codingagent"
+	"zellij-with-codeagent/internal/runtime"
 	"zellij-with-codeagent/internal/transport"
 )
 
@@ -277,6 +279,50 @@ func TestRunStartSendsValidatedRequest(t *testing.T) {
 	}
 	if !client.closeHasDeadline || !client.closeDeadline.After(client.closeCalledAt) || client.closeContextErr != nil {
 		t.Fatalf("close context deadline=%s calledAt=%s hasDeadline=%t err=%v", client.closeDeadline, client.closeCalledAt, client.closeHasDeadline, client.closeContextErr)
+	}
+}
+
+func TestRunStartPassesServiceGeneratedReadOnlyCommandToRunner(t *testing.T) {
+	cwd := t.TempDir()
+	runtimeService := &serviceCommandRuntime{}
+	service := codingagent.NewService(codingagent.ServiceOptions{
+		RuntimeService:   runtimeService,
+		Store:            codingagent.NewMemoryStore(nil),
+		LifecycleMonitor: serviceCommandMonitor{},
+		NewAgentID:       func() codingagent.ID { return "agent-1" },
+	})
+	client := &serviceBackedClient{service: service}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"start", "codex", "--access", "read-only", "--", "Verify M1"}, strings.NewReader(""), &stdout, &stderr, serviceBackedClientFactory(client), Config{
+		Getwd:  func() (string, error) { return cwd, nil },
+		Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}),
+		RunAgent: func(command []string, gotCWD string, _ io.Reader, _, _ io.Writer) error {
+			want := []string{"codex", "--sandbox", "read-only", "--ask-for-approval", "never", "Verify M1"}
+			if !reflect.DeepEqual(command, want) || gotCWD != cwd {
+				t.Fatalf("runner command=%#v cwd=%q, want %#v %q", command, gotCWD, want, cwd)
+			}
+			for _, arg := range command {
+				if arg == "--dangerously-bypass-approvals-and-sandbox" {
+					t.Fatalf("read-only command includes bypass argument: %#v", command)
+				}
+			}
+			return nil
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if client.request.Access != "read-only" {
+		t.Fatalf("StartAgent access = %q, want read-only", client.request.Access)
+	}
+	if client.request.Prompt != "Verify M1" || len(client.request.Args) != 0 || client.healthCalls != 1 {
+		t.Fatalf("read-only request=%#v healthCalls=%d", client.request, client.healthCalls)
+	}
+	want := []string{"codex", "--sandbox", "read-only", "--ask-for-approval", "never", "Verify M1"}
+	if len(runtimeService.claimed) != 1 || !reflect.DeepEqual(runtimeService.claimed[0].Command, want) {
+		t.Fatalf("ClaimPane command = %#v, want %#v", runtimeService.claimed, want)
 	}
 }
 
@@ -579,6 +625,11 @@ func TestRunStartRejectsInvalidInputBeforeCallingClient(t *testing.T) {
 		{name: "missing session", args: []string{"start", "codex"}, env: map[string]string{"ZELLIJ_SESSION_NAME": "", "ZELLIJ_PANE_ID": "terminal_2"}, want: "ZELLIJ_SESSION_NAME is required"},
 		{name: "missing pane", args: []string{"start", "codex"}, env: map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": ""}, want: "ZELLIJ_PANE_ID is required"},
 		{name: "non-positive timeout", args: []string{"start", "codex", "--timeout", "0s"}, want: "--timeout must be greater than 0"},
+		{name: "unknown access", args: []string{"start", "codex", "--access", "other"}, want: "invalid coding agent access mode"},
+		{name: "missing access", args: []string{"start", "codex", "--access"}, want: "--access requires a value"},
+		{name: "read-only non-codex", args: []string{"start", "gemini", "--access=read-only"}, want: "read-only access is supported only by Codex"},
+		{name: "read-only multiple prompts", args: []string{"start", "codex", "--access=read-only", "--", "one", "two"}, want: "read-only access accepts at most one prompt"},
+		{name: "read-only option prompt", args: []string{"start", "codex", "--access=read-only", "--", "--config"}, want: "read-only prompt must not begin with '-'"},
 		{name: "unexpected positional", args: []string{"start", "codex", "extra"}, want: "unexpected start argument before --: extra"},
 		{name: "unknown option", args: []string{"start", "codex", "--model", "gemini-3"}, want: "unknown start option: --model"},
 	}
@@ -621,6 +672,18 @@ func TestRunStartReportsClientError(t *testing.T) {
 	}
 }
 
+func TestRunStartReadOnlyFailsClosedWithoutDaemonCapability(t *testing.T) {
+	cwd := t.TempDir()
+	client := &testClient{healthConfigured: true, healthResponse: transport.HealthResponse{Status: "ok"}}
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"start", "codex", "--access=read-only", "--", "Verify M1"}, strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
+		Getwd: func() (string, error) { return cwd, nil }, Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}),
+	})
+	if code != 1 || client.healthCalls != 1 || client.calls != 0 || !strings.Contains(stderr.String(), "drain/restart daemon") {
+		t.Fatalf("code=%d health=%d starts=%d stderr=%q", code, client.healthCalls, client.calls, stderr.String())
+	}
+}
+
 func TestRunHelpDocumentsStartContract(t *testing.T) {
 	for _, args := range [][]string{{"--help"}, {"start", "--help"}} {
 		var stdout, stderr bytes.Buffer
@@ -628,7 +691,7 @@ func TestRunHelpDocumentsStartContract(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("Run(%#v) exit code = %d, stderr=%q", args, code, stderr.String())
 		}
-		for _, want := range []string{"codex", "claude", "gemini", "cursor", "agy", "default: current working directory", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-skip-permissions", "agent --yolo --trust", "-- passthrough", "current Zellij pane", "closes the managed pane when the agent exits"} {
+		for _, want := range []string{"codex", "claude", "gemini", "cursor", "agy", "default: current working directory", "--access full|read-only", "zellij-agent agent start codex --access full -- \"Implement M1\"", "zellij-agent agent start codex --access read-only -- \"Verify M1\"", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-skip-permissions", "agent --yolo --trust", "-- passthrough", "current Zellij pane", "closes the managed pane when the agent exits"} {
 			if !strings.Contains(stdout.String(), want) {
 				t.Fatalf("Run(%#v) help = %q, missing %q", args, stdout.String(), want)
 			}
@@ -664,6 +727,18 @@ type testClient struct {
 	closeHasDeadline bool
 	closeCalledAt    time.Time
 	closeContextErr  error
+	healthResponse   transport.HealthResponse
+	healthErr        error
+	healthCalls      int
+	healthConfigured bool
+}
+
+func (c *testClient) Health(context.Context) (transport.HealthResponse, error) {
+	c.healthCalls++
+	if c.healthConfigured {
+		return c.healthResponse, c.healthErr
+	}
+	return transport.HealthResponse{Status: "ok", Capabilities: []string{transport.CapabilityAgentAccessReadOnlyV1}}, c.healthErr
 }
 
 func (c *testClient) StartAgent(ctx context.Context, request transport.StartAgentRequest) (transport.StartAgentResponse, error) {
@@ -708,6 +783,73 @@ func testFactory(client *testClient) ClientFactory {
 		client.timeout = timeout
 		return client
 	}
+}
+
+type serviceCommandRuntime struct {
+	runtime.RuntimeService
+	claimed []runtime.ClaimPaneRequest
+}
+
+func (r *serviceCommandRuntime) ClaimPane(_ context.Context, request runtime.ClaimPaneRequest) (runtime.ClaimPaneResponse, error) {
+	r.claimed = append(r.claimed, request)
+	return runtime.ClaimPaneResponse{Pane: runtime.Pane{
+		ID:           request.ID,
+		AgentID:      request.AgentID,
+		Role:         request.Role,
+		SessionID:    runtime.SessionID(request.ZellijSession),
+		ZellijPaneID: request.ZellijPaneID,
+		Command:      append([]string(nil), request.Command...),
+		CWD:          request.CWD,
+	}}, nil
+}
+
+type serviceCommandMonitor struct{}
+
+func (serviceCommandMonitor) Start(codingagent.Record) error { return nil }
+func (serviceCommandMonitor) Stop(codingagent.ID)            {}
+
+type serviceBackedClient struct {
+	service     *codingagent.Service
+	request     transport.StartAgentRequest
+	healthCalls int
+}
+
+func (c *serviceBackedClient) Health(context.Context) (transport.HealthResponse, error) {
+	c.healthCalls++
+	return transport.HealthResponse{Status: "ok", Capabilities: []string{transport.CapabilityAgentAccessReadOnlyV1}}, nil
+}
+
+func (c *serviceBackedClient) StartAgent(ctx context.Context, request transport.StartAgentRequest) (transport.StartAgentResponse, error) {
+	c.request = request
+	response, err := c.service.StartAgent(ctx, request.ToCodingAgent())
+	if err != nil {
+		return transport.StartAgentResponse{}, err
+	}
+	return transport.StartAgentFromCodingAgent(response), nil
+}
+
+func (c *serviceBackedClient) ClosePane(_ context.Context, paneID string) (transport.ClosePaneResponse, error) {
+	return transport.ClosePaneResponse{Pane: transport.Pane{ID: paneID}}, nil
+}
+
+func (*serviceBackedClient) ListAgents(context.Context) (transport.ListAgentsResponse, error) {
+	return transport.ListAgentsResponse{}, nil
+}
+
+func (*serviceBackedClient) FocusAgent(context.Context, string, transport.FocusAgentRequest) (transport.FocusAgentResponse, error) {
+	return transport.FocusAgentResponse{}, nil
+}
+
+func (*serviceBackedClient) FocusNextAgent(context.Context, transport.FocusNextAgentRequest) (transport.FocusNextAgentResponse, error) {
+	return transport.FocusNextAgentResponse{}, nil
+}
+
+func (*serviceBackedClient) StreamEvents(context.Context) (*transport.EventStream, error) {
+	return &transport.EventStream{}, nil
+}
+
+func serviceBackedClientFactory(client *serviceBackedClient) ClientFactory {
+	return func(string, time.Duration) AgentClient { return client }
 }
 
 func mapGetenv(values map[string]string) func(string) string {

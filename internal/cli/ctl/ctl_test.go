@@ -100,9 +100,28 @@ func TestRunDebateRejectsMissingZellijSessionAfterValidation(t *testing.T) {
 	}
 }
 
+func TestRunCleanupPairsOwnershipTokensByPosition(t *testing.T) {
+	client := &ctlTestClient{}
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"cleanup", "--pane", "pane-1", "--ownership-token", "token-1", "--pane", "pane-2", "--ownership-token", "token-2"}, strings.NewReader(""), &stdout, &stderr, ctlTestFactory(client))
+	if code != 0 || len(client.cleanup.Targets) != 2 || client.cleanup.Targets[1].PaneID != "pane-2" || client.cleanup.Targets[1].OwnershipToken != "token-2" {
+		t.Fatalf("code=%d cleanup=%#v stderr=%q", code, client.cleanup, stderr.String())
+	}
+}
+
+func TestRunCleanupRejectsUnpairedOwnershipToken(t *testing.T) {
+	client := &ctlTestClient{}
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"cleanup", "--pane", "pane-1", "--ownership-token", "token-1", "--pane", "pane-2"}, strings.NewReader(""), &stdout, &stderr, ctlTestFactory(client))
+	if code != 2 || !strings.Contains(stderr.String(), "equal non-zero") || len(client.cleanup.Targets) != 0 {
+		t.Fatalf("code=%d cleanup=%#v stderr=%q", code, client.cleanup, stderr.String())
+	}
+}
+
 type ctlTestClient struct {
 	requestID string
 	payload   transport.ExecutionPlanPayload
+	cleanup   transport.CleanupRequest
 }
 
 func (*ctlTestClient) Health(context.Context) (transport.HealthResponse, error) {
@@ -128,7 +147,8 @@ func (*ctlTestClient) RecentEvents(context.Context, int, ...string) (transport.R
 	return transport.RecentEventsResponse{}, nil
 }
 func (*ctlTestClient) StreamEvents(context.Context) (*transport.EventStream, error) { return nil, nil }
-func (*ctlTestClient) Cleanup(context.Context, transport.CleanupRequest) (transport.CleanupResponse, error) {
+func (c *ctlTestClient) Cleanup(_ context.Context, request transport.CleanupRequest) (transport.CleanupResponse, error) {
+	c.cleanup = request
 	return transport.CleanupResponse{}, nil
 }
 

@@ -53,19 +53,24 @@ func (s *Service) ClaimPane(ctx context.Context, req ClaimPaneRequest) (ClaimPan
 	}
 
 	match := matches[0]
+	ownershipToken, err := s.newOwnershipToken()
+	if err != nil {
+		return ClaimPaneResponse{}, fmt.Errorf("generate pane ownership token: %w", err)
+	}
 	tabID := registry.ZellijTabID(match.TabID)
 	record, err := s.registry.RegisterPane(registry.RegisterPaneRequest{
-		ID:           registry.PaneID(req.ID),
-		SessionID:    registry.SessionID(req.ZellijSession),
-		TabID:        registry.TabID(strconv.Itoa(match.TabID)),
-		TaskID:       registry.TaskID(req.TaskID),
-		AgentID:      registry.AgentID(req.AgentID),
-		ZellijPaneID: registry.ZellijPaneID(req.ZellijPaneID),
-		ZellijTabID:  &tabID,
-		TabName:      match.TabName,
-		Role:         req.Role,
-		Command:      cloneStrings(req.Command),
-		CWD:          req.CWD,
+		ID:             registry.PaneID(req.ID),
+		OwnershipToken: registry.OwnershipToken(ownershipToken),
+		SessionID:      registry.SessionID(req.ZellijSession),
+		TabID:          registry.TabID(strconv.Itoa(match.TabID)),
+		TaskID:         registry.TaskID(req.TaskID),
+		AgentID:        registry.AgentID(req.AgentID),
+		ZellijPaneID:   registry.ZellijPaneID(req.ZellijPaneID),
+		ZellijTabID:    &tabID,
+		TabName:        match.TabName,
+		Role:           req.Role,
+		Command:        cloneStrings(req.Command),
+		CWD:            req.CWD,
 	})
 	if err != nil {
 		if errors.Is(err, registry.ErrZellijPaneAlreadyRegistered) {

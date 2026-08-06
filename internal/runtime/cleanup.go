@@ -12,11 +12,24 @@ import (
 func (s *Service) Cleanup(ctx context.Context, req CleanupRequest) (CleanupResponse, error) {
 	records := s.registry.ListPanes()
 	requested := requestedPaneIDs(req.PaneIDs)
-	requestedOnly := len(requested) > 0
+	targets := requestedCleanupTargets(req.Targets)
+	qualifiedOnly := len(targets) > 0
+	requestedOnly := len(requested) > 0 && !qualifiedOnly
 	response := CleanupResponse{}
 
 	for _, record := range records {
-		if !cleanupMatches(record, req, requested, requestedOnly) {
+		if qualifiedOnly {
+			target, ok := targets[PaneID(record.ID)]
+			if !ok {
+				continue
+			}
+			delete(targets, PaneID(record.ID))
+			if target.OwnershipToken == "" || target.OwnershipToken != OwnershipToken(record.OwnershipToken) {
+				response.Skipped = append(response.Skipped, paneFromRecord(record))
+				continue
+			}
+		}
+		if !qualifiedOnly && !cleanupMatches(record, req, requested, requestedOnly) {
 			continue
 		}
 		delete(requested, PaneID(record.ID))
@@ -74,6 +87,11 @@ func (s *Service) Cleanup(ctx context.Context, req CleanupRequest) (CleanupRespo
 		released.StatusMessage = "closed by runtime cleanup"
 		response.Closed = append(response.Closed, paneFromRecord(released))
 	}
+	if qualifiedOnly {
+		for id := range targets {
+			response.Failed = append(response.Failed, CleanupFailure{Pane: Pane{ID: id}, Error: ErrPaneNotFound.Error()})
+		}
+	}
 
 	if requestedOnly {
 		for id := range requested {
@@ -88,6 +106,16 @@ func (s *Service) Cleanup(ctx context.Context, req CleanupRequest) (CleanupRespo
 		return response, fmt.Errorf("%w: %d pane(s) failed", ErrCleanupPartial, len(response.Failed))
 	}
 	return response, nil
+}
+
+func requestedCleanupTargets(targets []CleanupTarget) map[PaneID]CleanupTarget {
+	requested := make(map[PaneID]CleanupTarget, len(targets))
+	for _, target := range targets {
+		if target.PaneID != "" {
+			requested[target.PaneID] = target
+		}
+	}
+	return requested
 }
 
 func (s *Service) releaseCleanupRecord(record registry.PaneRecord) (registry.PaneRecord, error) {

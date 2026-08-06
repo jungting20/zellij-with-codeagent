@@ -99,6 +99,8 @@ type ListPanesResponse struct {
 type StartAgentRequest struct {
 	Kind               string   `json:"kind"`
 	CWD                string   `json:"cwd"`
+	Access             string   `json:"access,omitempty"`
+	Prompt             string   `json:"prompt,omitempty"`
 	Args               []string `json:"args,omitempty"`
 	NotifyOnIdle       bool     `json:"notify_on_idle,omitempty"`
 	SourceSession      string   `json:"source_session"`
@@ -136,6 +138,7 @@ type FocusNextAgentResponse struct {
 type Agent struct {
 	ID             string    `json:"id"`
 	Kind           string    `json:"kind"`
+	Access         string    `json:"access"`
 	PaneID         string    `json:"pane_id"`
 	State          string    `json:"state"`
 	StateReason    string    `json:"state_reason,omitempty"`
@@ -202,9 +205,15 @@ type ReconcileResponse struct {
 }
 
 type CleanupRequest struct {
-	PaneIDs []string `json:"pane_ids,omitempty"`
-	TaskID  string   `json:"task_id,omitempty"`
-	Role    string   `json:"role,omitempty"`
+	PaneIDs []string        `json:"pane_ids,omitempty"`
+	Targets []CleanupTarget `json:"targets,omitempty"`
+	TaskID  string          `json:"task_id,omitempty"`
+	Role    string          `json:"role,omitempty"`
+}
+
+type CleanupTarget struct {
+	PaneID         string `json:"pane_id"`
+	OwnershipToken string `json:"ownership_token"`
 }
 
 type CleanupResponse struct {
@@ -219,9 +228,12 @@ type CleanupFailure struct {
 }
 
 type HealthResponse struct {
-	Status  string `json:"status"`
-	Version string `json:"version,omitempty"`
+	Status       string   `json:"status"`
+	Version      string   `json:"version,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
 }
+
+const CapabilityAgentAccessReadOnlyV1 = "agent_access_read_only_v1"
 
 type ShutdownResponse struct {
 	Status string `json:"status"`
@@ -271,22 +283,23 @@ type ExecutionPlanTabResponse struct {
 }
 
 type Pane struct {
-	ID            string    `json:"id"`
-	SessionID     string    `json:"session_id,omitempty"`
-	TabID         string    `json:"tab_id,omitempty"`
-	TaskID        string    `json:"task_id,omitempty"`
-	AgentID       string    `json:"agent_id,omitempty"`
-	ZellijPaneID  string    `json:"zellij_pane_id,omitempty"`
-	ZellijTabID   *int      `json:"zellij_tab_id,omitempty"`
-	TabName       string    `json:"tab_name,omitempty"`
-	Role          string    `json:"role,omitempty"`
-	Command       []string  `json:"command,omitempty"`
-	CWD           string    `json:"cwd,omitempty"`
-	Status        string    `json:"status"`
-	LastOutput    string    `json:"last_output,omitempty"`
-	StatusMessage string    `json:"status_message,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	OwnershipToken string    `json:"ownership_token,omitempty"`
+	SessionID      string    `json:"session_id,omitempty"`
+	TabID          string    `json:"tab_id,omitempty"`
+	TaskID         string    `json:"task_id,omitempty"`
+	AgentID        string    `json:"agent_id,omitempty"`
+	ZellijPaneID   string    `json:"zellij_pane_id,omitempty"`
+	ZellijTabID    *int      `json:"zellij_tab_id,omitempty"`
+	TabName        string    `json:"tab_name,omitempty"`
+	Role           string    `json:"role,omitempty"`
+	Command        []string  `json:"command,omitempty"`
+	CWD            string    `json:"cwd,omitempty"`
+	Status         string    `json:"status"`
+	LastOutput     string    `json:"last_output,omitempty"`
+	StatusMessage  string    `json:"status_message,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type Event struct {
@@ -308,6 +321,8 @@ func (req StartAgentRequest) ToCodingAgent() codingagent.StartAgentRequest {
 	return codingagent.StartAgentRequest{
 		Kind:                codingagent.Kind(req.Kind),
 		CWD:                 req.CWD,
+		AccessMode:          codingagent.AccessMode(req.Access),
+		Prompt:              req.Prompt,
 		ExtraArgs:           cloneStrings(req.Args),
 		NotifyOnIdle:        req.NotifyOnIdle,
 		SourceZellijSession: req.SourceSession,
@@ -316,14 +331,19 @@ func (req StartAgentRequest) ToCodingAgent() codingagent.StartAgentRequest {
 }
 
 func StartAgentRequestFromCodingAgent(req codingagent.StartAgentRequest) StartAgentRequest {
-	return StartAgentRequest{
+	converted := StartAgentRequest{
 		Kind:               string(req.Kind),
 		CWD:                req.CWD,
+		Prompt:             req.Prompt,
 		Args:               cloneStrings(req.ExtraArgs),
 		NotifyOnIdle:       req.NotifyOnIdle,
 		SourceSession:      req.SourceZellijSession,
 		SourceZellijPaneID: string(req.SourceZellijPaneID),
 	}
+	if req.AccessMode == codingagent.AccessReadOnly {
+		converted.Access = string(req.AccessMode)
+	}
+	return converted
 }
 
 func (req FocusAgentRequest) ToCodingAgent(id string) codingagent.FocusAgentRequest {
@@ -346,6 +366,7 @@ func AgentFromCodingAgent(record codingagent.Record) Agent {
 	return Agent{
 		ID:             string(record.ID),
 		Kind:           string(record.Kind),
+		Access:         string(record.AccessMode),
 		PaneID:         string(record.PaneID),
 		State:          string(record.State),
 		StateReason:    record.StateReason,
@@ -430,8 +451,15 @@ func (req CleanupRequest) ToRuntime() rt.CleanupRequest {
 			paneIDs = append(paneIDs, rt.PaneID(id))
 		}
 	}
+	targets := make([]rt.CleanupTarget, 0, len(req.Targets))
+	for _, target := range req.Targets {
+		if target.PaneID != "" {
+			targets = append(targets, rt.CleanupTarget{PaneID: rt.PaneID(target.PaneID), OwnershipToken: rt.OwnershipToken(target.OwnershipToken)})
+		}
+	}
 	return rt.CleanupRequest{
 		PaneIDs: paneIDs,
+		Targets: targets,
 		TaskID:  rt.TaskID(req.TaskID),
 		Role:    req.Role,
 	}
@@ -448,22 +476,23 @@ func PaneFromRuntime(pane rt.Pane) Pane {
 		tabID = &value
 	}
 	return Pane{
-		ID:            string(pane.ID),
-		SessionID:     string(pane.SessionID),
-		TabID:         string(pane.TabID),
-		TaskID:        string(pane.TaskID),
-		AgentID:       string(pane.AgentID),
-		ZellijPaneID:  string(pane.ZellijPaneID),
-		ZellijTabID:   tabID,
-		TabName:       pane.TabName,
-		Role:          string(pane.Role),
-		Command:       cloneStrings(pane.Command),
-		CWD:           pane.CWD,
-		Status:        string(pane.Status),
-		LastOutput:    pane.LastOutput,
-		StatusMessage: pane.StatusMessage,
-		CreatedAt:     pane.CreatedAt,
-		UpdatedAt:     pane.UpdatedAt,
+		ID:             string(pane.ID),
+		OwnershipToken: string(pane.OwnershipToken),
+		SessionID:      string(pane.SessionID),
+		TabID:          string(pane.TabID),
+		TaskID:         string(pane.TaskID),
+		AgentID:        string(pane.AgentID),
+		ZellijPaneID:   string(pane.ZellijPaneID),
+		ZellijTabID:    tabID,
+		TabName:        pane.TabName,
+		Role:           string(pane.Role),
+		Command:        cloneStrings(pane.Command),
+		CWD:            pane.CWD,
+		Status:         string(pane.Status),
+		LastOutput:     pane.LastOutput,
+		StatusMessage:  pane.StatusMessage,
+		CreatedAt:      pane.CreatedAt,
+		UpdatedAt:      pane.UpdatedAt,
 	}
 }
 
@@ -740,22 +769,23 @@ func PaneFromRuntimeRecord(pane rt.PaneRecord) Pane {
 		tabID = &value
 	}
 	return Pane{
-		ID:            string(pane.ID),
-		SessionID:     string(pane.SessionID),
-		TabID:         string(pane.TabID),
-		TaskID:        string(pane.TaskID),
-		AgentID:       string(pane.AgentID),
-		ZellijPaneID:  string(pane.ZellijPaneID),
-		ZellijTabID:   tabID,
-		TabName:       pane.TabName,
-		Role:          string(pane.Role),
-		Command:       cloneStrings(pane.Command),
-		CWD:           pane.CWD,
-		Status:        string(pane.Status),
-		LastOutput:    pane.LastOutput,
-		StatusMessage: pane.StatusMessage,
-		CreatedAt:     pane.CreatedAt,
-		UpdatedAt:     pane.UpdatedAt,
+		ID:             string(pane.ID),
+		OwnershipToken: string(pane.OwnershipToken),
+		SessionID:      string(pane.SessionID),
+		TabID:          string(pane.TabID),
+		TaskID:         string(pane.TaskID),
+		AgentID:        string(pane.AgentID),
+		ZellijPaneID:   string(pane.ZellijPaneID),
+		ZellijTabID:    tabID,
+		TabName:        pane.TabName,
+		Role:           string(pane.Role),
+		Command:        cloneStrings(pane.Command),
+		CWD:            pane.CWD,
+		Status:         string(pane.Status),
+		LastOutput:     pane.LastOutput,
+		StatusMessage:  pane.StatusMessage,
+		CreatedAt:      pane.CreatedAt,
+		UpdatedAt:      pane.UpdatedAt,
 	}
 }
 

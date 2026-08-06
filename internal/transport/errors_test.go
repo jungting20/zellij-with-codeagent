@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"zellij-with-codeagent/internal/codingagent"
 	rt "zellij-with-codeagent/internal/runtime"
 )
 
@@ -21,6 +22,16 @@ func TestErrorForPaneNotFound(t *testing.T) {
 
 func TestErrorForInvalidPaneTarget(t *testing.T) {
 	apiErr, status := ErrorFor(errors.Join(rt.ErrInvalidPaneTarget, errors.New("target modes conflict")))
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+	if apiErr.Code != CodeBadRequest || apiErr.Retryable {
+		t.Fatalf("api error = %#v, want non-retryable bad_request", apiErr)
+	}
+}
+
+func TestErrorForInvalidAccessMode(t *testing.T) {
+	apiErr, status := ErrorFor(codingagent.ErrInvalidAccessMode)
 	if status != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", status, http.StatusBadRequest)
 	}

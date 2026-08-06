@@ -20,6 +20,7 @@ import (
 
 	"zellij-with-codeagent/internal/agentdashboard"
 	"zellij-with-codeagent/internal/cli"
+	"zellij-with-codeagent/internal/codingagent"
 	"zellij-with-codeagent/internal/transport"
 )
 
@@ -29,6 +30,7 @@ const (
 )
 
 type AgentClient interface {
+	Health(context.Context) (transport.HealthResponse, error)
 	StartAgent(context.Context, transport.StartAgentRequest) (transport.StartAgentResponse, error)
 	ClosePane(context.Context, string) (transport.ClosePaneResponse, error)
 	FocusNextAgent(context.Context, transport.FocusNextAgentRequest) (transport.FocusNextAgentResponse, error)
@@ -230,6 +232,24 @@ func runStart(args []string, stdin io.Reader, stdout, stderr io.Writer, newClien
 		fmt.Fprintln(stderr, "--timeout must be greater than 0")
 		return 2
 	}
+	if opts.access == string(codingagent.AccessReadOnly) && kind != string(codingagent.KindCodex) {
+		fmt.Fprintln(stderr, "read-only access is supported only by Codex")
+		return 2
+	}
+	var prompt string
+	if opts.access == string(codingagent.AccessReadOnly) {
+		if len(extra) > 1 {
+			fmt.Fprintln(stderr, "read-only access accepts at most one prompt after --")
+			return 2
+		}
+		if len(extra) == 1 {
+			if strings.HasPrefix(extra[0], "-") {
+				fmt.Fprintln(stderr, "read-only prompt must not begin with '-'")
+				return 2
+			}
+			prompt = extra[0]
+		}
+	}
 	if cfg.Getwd == nil {
 		fmt.Fprintln(stderr, "agent start configuration error: Getwd is required")
 		return 1
@@ -268,12 +288,33 @@ func runStart(args []string, stdin io.Reader, stdout, stderr io.Writer, newClien
 		fmt.Fprintln(stderr, "agent start client is not configured")
 		return 1
 	}
+	if opts.access == string(codingagent.AccessReadOnly) {
+		healthCtx, healthCancel := context.WithTimeout(context.Background(), opts.timeout)
+		health, healthErr := client.Health(healthCtx)
+		healthCancel()
+		if healthErr != nil {
+			fmt.Fprintf(stderr, "agent start capability check failed via socket %s: %v\n", opts.socket, healthErr)
+			return 1
+		}
+		if !containsString(health.Capabilities, transport.CapabilityAgentAccessReadOnlyV1) {
+			fmt.Fprintln(stderr, "installed CLI and running daemon differ; drain/restart daemon before read-only start")
+			return 1
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	access := ""
+	requestArgs := append([]string(nil), extra...)
+	if opts.access == string(codingagent.AccessReadOnly) {
+		access = opts.access
+		requestArgs = nil
+	}
 	response, err := client.StartAgent(ctx, transport.StartAgentRequest{
 		Kind:               kind,
 		CWD:                cwd,
-		Args:               append([]string(nil), extra...),
+		Access:             access,
+		Prompt:             prompt,
+		Args:               requestArgs,
 		NotifyOnIdle:       opts.notifyOnIdle,
 		SourceSession:      session,
 		SourceZellijPaneID: paneID,
@@ -311,6 +352,15 @@ func runStart(args []string, stdin io.Reader, stdout, stderr io.Writer, newClien
 	return 0
 }
 
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func runAgentProcess(command []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(command) == 0 || strings.TrimSpace(command[0]) == "" {
 		return errors.New("coding agent command is required")
@@ -346,11 +396,12 @@ type startOptions struct {
 	cwd          string
 	socket       string
 	timeout      time.Duration
+	access       string
 	notifyOnIdle bool
 }
 
 func parseStartOptions(args []string) (startOptions, error) {
-	opts := startOptions{socket: cli.DefaultSocketPath, timeout: defaultTimeout}
+	opts := startOptions{socket: cli.DefaultSocketPath, timeout: defaultTimeout, access: string(codingagent.AccessFull)}
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		name, value, hasValue := strings.Cut(arg, "=")
@@ -360,7 +411,7 @@ func parseStartOptions(args []string) (startOptions, error) {
 				return startOptions{}, fmt.Errorf("--notify-idle does not accept a value")
 			}
 			opts.notifyOnIdle = true
-		case "--cwd", "--socket", "--timeout":
+		case "--cwd", "--socket", "--timeout", "--access":
 			if !hasValue {
 				if index+1 >= len(args) || strings.HasPrefix(args[index+1], "--") {
 					return startOptions{}, fmt.Errorf("%s requires a value", name)
@@ -379,6 +430,12 @@ func parseStartOptions(args []string) (startOptions, error) {
 					return startOptions{}, fmt.Errorf("invalid --timeout %q: %w", value, err)
 				}
 				opts.timeout = parsed
+			case "--access":
+				access, err := codingagent.ParseAccessMode(value)
+				if err != nil {
+					return startOptions{}, err
+				}
+				opts.access = string(access)
 			}
 		default:
 			if strings.HasPrefix(arg, "-") {
@@ -492,7 +549,7 @@ func printDashboardUsage(w io.Writer) {
 }
 
 func printStartUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: zellij-agent agent start <codex|claude|gemini|cursor> [--cwd DIR --socket PATH --timeout DURATION] [-- extra arguments]")
+	fmt.Fprintln(w, "Usage: zellij-agent agent start <codex|claude|gemini|cursor> [--cwd DIR --socket PATH --timeout DURATION --access full|read-only] [-- full-access arguments | read-only-prompt]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Options:")
 	fmt.Fprintln(w, "  --cwd DIR")
@@ -500,10 +557,12 @@ func printStartUsage(w io.Writer) {
 	fmt.Fprintf(w, "  --socket PATH\n    agentd Unix socket path (default %q)\n", cli.DefaultSocketPath)
 	fmt.Fprintln(w, "  --timeout DURATION")
 	fmt.Fprintln(w, "    request timeout (default 10s; must be greater than 0)")
+	fmt.Fprintln(w, "  --access full|read-only")
+	fmt.Fprintln(w, "    default: full; read-only is supported only by Codex")
 	fmt.Fprintln(w, "  --notify-idle")
 	fmt.Fprintln(w, "    announce non-idle to idle state transitions")
 	fmt.Fprintln(w, "  -- passthrough")
-	fmt.Fprintln(w, "    pass remaining arguments unchanged to the selected agent profile")
+	fmt.Fprintln(w, "    full access passes remaining arguments unchanged; read-only accepts zero or one non-option prompt")
 	fmt.Fprintln(w)
 	printStartSummary(w)
 }
@@ -514,7 +573,11 @@ func printStartSummary(w io.Writer) {
 	fmt.Fprintln(w, "Start claims and manages the current Zellij pane.")
 	fmt.Fprintln(w, "Start closes the managed pane when the agent exits.")
 	fmt.Fprintln(w, "Use -- passthrough to pass remaining arguments unchanged.")
-	fmt.Fprintln(w, "Profiles add their permission-bypass defaults before passthrough arguments:")
+	fmt.Fprintln(w, "Access: --access full|read-only (default full; read-only is Codex only).")
+	fmt.Fprintln(w, "Examples:")
+	fmt.Fprintln(w, "  zellij-agent agent start codex --access full -- \"Implement M1\"")
+	fmt.Fprintln(w, "  zellij-agent agent start codex --access read-only -- \"Verify M1\"")
+	fmt.Fprintln(w, "Full-access profiles add their permission-bypass defaults before passthrough arguments:")
 	fmt.Fprintln(w, "  codex   codex --dangerously-bypass-approvals-and-sandbox")
 	fmt.Fprintln(w, "  claude  claude --dangerously-skip-permissions")
 	fmt.Fprintln(w, "  gemini  agy --dangerously-skip-permissions")

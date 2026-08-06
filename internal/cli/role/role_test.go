@@ -40,6 +40,40 @@ func TestRunDispatchesCodingAgentRole(t *testing.T) {
 	}
 }
 
+func TestRunDispatchesLoopProjectRoles(t *testing.T) {
+	repo := newTemporaryGitRepository(t)
+	runnerSkill := t.TempDir()
+	if err := os.WriteFile(filepath.Join(runnerSkill, "SKILL.md"), []byte("# runner\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(SKILL.md) error = %v", err)
+	}
+	binDir := t.TempDir()
+	argsPath := filepath.Join(t.TempDir(), "args")
+	writeFakeProvider(t, filepath.Join(binDir, "zellij-agent"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \""+argsPath+"\"\n")
+	t.Setenv("PATH", binDir)
+
+	for _, tt := range []struct {
+		role   string
+		access string
+	}{
+		{role: roles.RoleLoopProjectWorker, access: "full"},
+		{role: roles.RoleLoopProjectVerifier, access: "read-only"},
+	} {
+		t.Run(tt.role, func(t *testing.T) {
+			if code := Run([]string{tt.role, "--repository", repo, "--runner-skill", runnerSkill, "--orchestrator-pane", "orchestrator-1"}); code != 0 {
+				t.Fatalf("Run(%s) = %d, want 0", tt.role, code)
+			}
+			got, err := os.ReadFile(argsPath)
+			if err != nil {
+				t.Fatalf("ReadFile(args) error = %v", err)
+			}
+			wantPrefix := "agent\nstart\ncodex\n--cwd\n" + repo + "\n--access\n" + tt.access + "\n--\n"
+			if !strings.HasPrefix(string(got), wantPrefix) {
+				t.Fatalf("zellij-agent args = %q, want prefix %q", got, wantPrefix)
+			}
+		})
+	}
+}
+
 func TestRunDispatchesAgentNext(t *testing.T) {
 	binDir := t.TempDir()
 	argsPath := filepath.Join(t.TempDir(), "args")

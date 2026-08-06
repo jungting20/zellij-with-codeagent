@@ -16,7 +16,8 @@ func TestAgentStartRequestRoundTripPreservesSourceAndArguments(t *testing.T) {
 	payload := []byte(`{
 		"kind": "codex",
 			"cwd": "/workspace/project",
-			"args": ["--model", "gpt-5"],
+			"access": "read-only",
+			"prompt": "Verify M1",
 			"notify_on_idle": true,
 			"source_session": "physical-a",
 		"source_zellij_pane_id": "terminal_2"
@@ -26,21 +27,55 @@ func TestAgentStartRequestRoundTripPreservesSourceAndArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	converted := request.ToCodingAgent()
-	if converted.Kind != codingagent.KindCodex || converted.CWD != "/workspace/project" || !converted.NotifyOnIdle || converted.SourceZellijSession != "physical-a" || converted.SourceZellijPaneID != "terminal_2" {
+	if converted.Kind != codingagent.KindCodex || converted.CWD != "/workspace/project" || converted.AccessMode != codingagent.AccessReadOnly || !converted.NotifyOnIdle || converted.SourceZellijSession != "physical-a" || converted.SourceZellijPaneID != "terminal_2" {
 		t.Fatalf("StartAgentRequest.ToCodingAgent() = %#v", converted)
 	}
-	request.Args[0] = "mutated"
-	if !reflect.DeepEqual(converted.ExtraArgs, []string{"--model", "gpt-5"}) {
-		t.Fatalf("converted args = %#v, want cloned args", converted.ExtraArgs)
+	if converted.Prompt != "Verify M1" || len(converted.ExtraArgs) != 0 {
+		t.Fatalf("converted prompt/args = %q/%#v", converted.Prompt, converted.ExtraArgs)
 	}
 	encoded, err := json.Marshal(StartAgentRequestFromCodingAgent(converted))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"kind":"codex"`, `"cwd":"/workspace/project"`, `"args":["--model","gpt-5"]`, `"notify_on_idle":true`, `"source_session":"physical-a"`, `"source_zellij_pane_id":"terminal_2"`} {
+	for _, field := range []string{`"kind":"codex"`, `"cwd":"/workspace/project"`, `"access":"read-only"`, `"prompt":"Verify M1"`, `"notify_on_idle":true`, `"source_session":"physical-a"`, `"source_zellij_pane_id":"terminal_2"`} {
 		if !strings.Contains(string(encoded), field) {
 			t.Fatalf("marshaled payload = %s, missing %s", encoded, field)
 		}
+	}
+	if strings.Contains(string(encoded), `"args"`) {
+		t.Fatalf("read-only payload = %s, want args omitted", encoded)
+	}
+}
+
+func TestFullAgentStartJSONOmitsAccessAndPrompt(t *testing.T) {
+	encoded, err := json.Marshal(StartAgentRequestFromCodingAgent(codingagent.StartAgentRequest{
+		Kind: codingagent.KindCodex, AccessMode: codingagent.AccessFull, CWD: "/workspace", ExtraArgs: []string{"--model", "custom"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, absent := range []string{`"access"`, `"prompt"`} {
+		if strings.Contains(string(encoded), absent) {
+			t.Fatalf("full payload = %s, want %s omitted", encoded, absent)
+		}
+	}
+	if !strings.Contains(string(encoded), `"args":["--model","custom"]`) {
+		t.Fatalf("full payload = %s, want args preserved", encoded)
+	}
+}
+
+func TestHealthResponseRoundTripsReadOnlyCapability(t *testing.T) {
+	want := HealthResponse{Status: "ok", Capabilities: []string{CapabilityAgentAccessReadOnlyV1}}
+	payload, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got HealthResponse
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("round trip = %#v, want %#v", got, want)
 	}
 }
 
@@ -51,7 +86,8 @@ func TestAgentResponseConversionPreservesRecordTimestampsAndPane(t *testing.T) {
 	response := codingagent.ListAgentsResponse{Agents: []codingagent.AgentWithPane{{
 		Agent: codingagent.Record{
 			ID: "agent-1", Kind: codingagent.KindClaude, PaneID: "agent-1",
-			State: codingagent.StateBlocked, StateReason: "approval required", MatchedRule: "permission",
+			AccessMode: codingagent.AccessReadOnly,
+			State:      codingagent.StateBlocked, StateReason: "approval required", MatchedRule: "permission",
 			CreatedAt: createdAt, StateChangedAt: changedAt,
 		},
 		Pane: rt.Pane{ID: "agent-1", ZellijPaneID: "terminal_7", CWD: "/workspace/project", Status: rt.PaneStatusRunning, CreatedAt: createdAt, UpdatedAt: updatedAt},
@@ -62,7 +98,7 @@ func TestAgentResponseConversionPreservesRecordTimestampsAndPane(t *testing.T) {
 		t.Fatalf("agents = %#v", converted.Agents)
 	}
 	agent := converted.Agents[0]
-	if agent.Agent.ID != "agent-1" || agent.Agent.Kind != "claude" || agent.Agent.State != "blocked" || agent.Agent.StateReason != "approval required" || agent.Agent.MatchedRule != "permission" {
+	if agent.Agent.ID != "agent-1" || agent.Agent.Kind != "claude" || agent.Agent.Access != "read-only" || agent.Agent.State != "blocked" || agent.Agent.StateReason != "approval required" || agent.Agent.MatchedRule != "permission" {
 		t.Fatalf("agent = %#v", agent.Agent)
 	}
 	if !agent.Agent.CreatedAt.Equal(createdAt) || !agent.Agent.StateChangedAt.Equal(changedAt) || agent.Pane.ZellijPaneID != "terminal_7" || !agent.Pane.UpdatedAt.Equal(updatedAt) {
@@ -162,6 +198,17 @@ func TestCleanupRequestToRuntimeFiltersEmptyPaneIDs(t *testing.T) {
 	}
 	if converted.TaskID != "task-1" || converted.Role != "coder" {
 		t.Fatalf("CleanupRequest.ToRuntime() = %#v, want task and role preserved", converted)
+	}
+}
+
+func TestCleanupRequestPreservesOwnershipTargets(t *testing.T) {
+	converted := (CleanupRequest{Targets: []CleanupTarget{{PaneID: "pane-1", OwnershipToken: "opaque-token"}}}).ToRuntime()
+	if len(converted.Targets) != 1 || converted.Targets[0].PaneID != "pane-1" || converted.Targets[0].OwnershipToken != "opaque-token" {
+		t.Fatalf("converted targets = %#v", converted.Targets)
+	}
+	pane := PaneFromRuntime(rt.Pane{ID: "pane-1", OwnershipToken: "opaque-token"})
+	if pane.OwnershipToken != "opaque-token" {
+		t.Fatalf("pane token = %q", pane.OwnershipToken)
 	}
 }
 

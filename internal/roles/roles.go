@@ -14,20 +14,22 @@ type RoleSpec struct {
 }
 
 const (
-	RoleCoder             = "coder"
-	RoleEditor            = "editor"
-	RoleLSP               = "lsp"
-	RoleNetworkTracker    = "network-tracker"
-	RoleConsoleTracker    = "console-tracker"
-	RoleTabNetwork        = "tab-network"
-	RoleTabWatcher        = "tab-watcher"
-	RoleCodingAgent       = "coding-agent"
-	RoleTicketManager     = "ticket-manager"
-	RoleDebateCoordinator = "debate-coordinator"
-	RoleDebateProposer    = "debate-proposer"
-	RoleDebateCritic      = "debate-critic"
-	RoleDebateJudge       = "debate-judge"
-	RoleAgentNext         = "agent-next"
+	RoleCoder               = "coder"
+	RoleEditor              = "editor"
+	RoleLSP                 = "lsp"
+	RoleNetworkTracker      = "network-tracker"
+	RoleConsoleTracker      = "console-tracker"
+	RoleTabNetwork          = "tab-network"
+	RoleTabWatcher          = "tab-watcher"
+	RoleCodingAgent         = "coding-agent"
+	RoleTicketManager       = "ticket-manager"
+	RoleDebateCoordinator   = "debate-coordinator"
+	RoleDebateProposer      = "debate-proposer"
+	RoleDebateCritic        = "debate-critic"
+	RoleDebateJudge         = "debate-judge"
+	RoleAgentNext           = "agent-next"
+	RoleLoopProjectWorker   = "loop-project-worker"
+	RoleLoopProjectVerifier = "loop-project-verifier"
 )
 
 var specs = []RoleSpec{
@@ -126,6 +128,26 @@ var specs = []RoleSpec{
 			{Name: "--socket", Required: false, Description: "agentd Unix socket path."},
 			{Name: "--timeout", Required: false, Description: "Daemon request timeout."},
 			{Name: "--idle-only", Required: false, Description: "Cycle only through idle agents."},
+		},
+	},
+	{
+		Name:        RoleLoopProjectWorker,
+		Usage:       "loop-project-worker --repository PATH --runner-skill PATH --orchestrator-pane PANE_ID",
+		Description: "Starts a full-access Codex worker for a loop project assignment.",
+		Arguments: []ArgumentSpec{
+			{Name: "--repository", Required: true, Description: "Absolute path to the target Git repository."},
+			{Name: "--runner-skill", Required: true, Description: "Absolute path to the loop project runner skill."},
+			{Name: "--orchestrator-pane", Required: true, Description: "Logical pane ID of the loop project orchestrator."},
+		},
+	},
+	{
+		Name:        RoleLoopProjectVerifier,
+		Usage:       "loop-project-verifier --repository PATH --runner-skill PATH --orchestrator-pane PANE_ID",
+		Description: "Starts a read-only Codex verifier for a loop project assignment.",
+		Arguments: []ArgumentSpec{
+			{Name: "--repository", Required: true, Description: "Absolute path to the target Git repository."},
+			{Name: "--runner-skill", Required: true, Description: "Absolute path to the loop project runner skill."},
+			{Name: "--orchestrator-pane", Required: true, Description: "Logical pane ID of the loop project orchestrator."},
 		},
 	},
 	{

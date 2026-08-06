@@ -22,17 +22,18 @@ var (
 )
 
 type (
-	PaneID        = registry.PaneID
-	TaskID        = registry.TaskID
-	AgentID       = registry.AgentID
-	ZellijPaneID  = registry.ZellijPaneID
-	ZellijTabID   = registry.ZellijTabID
-	PaneStatus    = registry.PaneStatus
-	SessionID     = registry.SessionID
-	TabID         = registry.TabID
-	SessionRecord = registry.SessionRecord
-	TabRecord     = registry.TabRecord
-	PaneRecord    = registry.PaneRecord
+	PaneID         = registry.PaneID
+	OwnershipToken = registry.OwnershipToken
+	TaskID         = registry.TaskID
+	AgentID        = registry.AgentID
+	ZellijPaneID   = registry.ZellijPaneID
+	ZellijTabID    = registry.ZellijTabID
+	PaneStatus     = registry.PaneStatus
+	SessionID      = registry.SessionID
+	TabID          = registry.TabID
+	SessionRecord  = registry.SessionRecord
+	TabRecord      = registry.TabRecord
+	PaneRecord     = registry.PaneRecord
 )
 
 const (
@@ -304,8 +305,14 @@ type ReconcileResponse struct {
 
 type CleanupRequest struct {
 	PaneIDs []PaneID
+	Targets []CleanupTarget
 	TaskID  TaskID
 	Role    string
+}
+
+type CleanupTarget struct {
+	PaneID         PaneID
+	OwnershipToken OwnershipToken
 }
 
 type CleanupFailure struct {
@@ -320,20 +327,21 @@ type CleanupResponse struct {
 }
 
 type Pane struct {
-	ID            PaneID
-	SessionID     SessionID
-	TabID         TabID
-	TaskID        TaskID
-	AgentID       AgentID
-	ZellijPaneID  ZellijPaneID
-	ZellijTabID   *ZellijTabID
-	TabName       string
-	Role          string
-	Command       []string
-	CWD           string
-	Status        PaneStatus
-	LastOutput    string
-	StatusMessage string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID             PaneID
+	OwnershipToken OwnershipToken
+	SessionID      SessionID
+	TabID          TabID
+	TaskID         TaskID
+	AgentID        AgentID
+	ZellijPaneID   ZellijPaneID
+	ZellijTabID    *ZellijTabID
+	TabName        string
+	Role           string
+	Command        []string
+	CWD            string
+	Status         PaneStatus
+	LastOutput     string
+	StatusMessage  string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }

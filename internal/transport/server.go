@@ -107,7 +107,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/health":
-		writeJSON(w, http.StatusOK, HealthResponse{Status: "ok", Version: s.version})
+		writeJSON(w, http.StatusOK, HealthResponse{Status: "ok", Version: s.version, Capabilities: []string{CapabilityAgentAccessReadOnlyV1}})
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/shutdown":
 		writeJSON(w, http.StatusOK, ShutdownResponse{Status: "stopping"})
 		s.shutdownOnce.Do(func() { close(s.shutdown) })

@@ -25,12 +25,19 @@ func TestServerAgentRoutes(t *testing.T) {
 	server := newTestServer(t, service)
 
 	start := httptest.NewRecorder()
-	server.ServeHTTP(start, httptest.NewRequest(http.MethodPost, "/v1/agents", strings.NewReader(`{"kind":"codex","cwd":"/workspace/project","args":["--model","gpt-5"],"source_session":"physical-a","source_zellij_pane_id":"terminal_2"}`)))
+	server.ServeHTTP(start, httptest.NewRequest(http.MethodPost, "/v1/agents", strings.NewReader(`{"kind":"codex","cwd":"/workspace/project","access":"read-only","args":["--model","gpt-5"],"source_session":"physical-a","source_zellij_pane_id":"terminal_2"}`)))
 	if start.Code != http.StatusCreated {
 		t.Fatalf("start status = %d, want 201; body=%s", start.Code, start.Body.String())
 	}
-	if service.agentStartReq.Kind != codingagent.KindCodex || service.agentStartReq.CWD != "/workspace/project" || service.agentStartReq.SourceZellijSession != "physical-a" || service.agentStartReq.SourceZellijPaneID != "terminal_2" {
+	if service.agentStartReq.Kind != codingagent.KindCodex || service.agentStartReq.CWD != "/workspace/project" || service.agentStartReq.AccessMode != codingagent.AccessReadOnly || service.agentStartReq.SourceZellijSession != "physical-a" || service.agentStartReq.SourceZellijPaneID != "terminal_2" {
 		t.Fatalf("StartAgent request = %#v", service.agentStartReq)
+	}
+	var startResponse StartAgentResponse
+	if err := json.Unmarshal(start.Body.Bytes(), &startResponse); err != nil {
+		t.Fatalf("decode start response: %v", err)
+	}
+	if startResponse.Agent.Agent.Access != "read-only" {
+		t.Fatalf("start response access = %q, want read-only", startResponse.Agent.Agent.Access)
 	}
 
 	list := httptest.NewRecorder()
@@ -221,6 +228,7 @@ func TestServerAgentErrorsMapToStableHTTPResponses(t *testing.T) {
 		{name: "not found", err: fmt.Errorf("lookup: %w", codingagent.ErrNotFound), wantStatus: http.StatusNotFound, wantCode: CodeNotFound},
 		{name: "invalid kind", err: fmt.Errorf("validate: %w", codingagent.ErrInvalidAgentKind), wantStatus: http.StatusBadRequest, wantCode: CodeBadRequest},
 		{name: "invalid cwd", err: fmt.Errorf("validate: %w", codingagent.ErrInvalidAgentCWD), wantStatus: http.StatusBadRequest, wantCode: CodeBadRequest},
+		{name: "invalid access", err: fmt.Errorf("validate: %w", codingagent.ErrInvalidAccessMode), wantStatus: http.StatusBadRequest, wantCode: CodeBadRequest},
 		{name: "source required", err: fmt.Errorf("validate: %w", codingagent.ErrAgentSourceRequired), wantStatus: http.StatusBadRequest, wantCode: CodeBadRequest},
 		{name: "internal", err: errors.New("backend unavailable"), wantStatus: http.StatusInternalServerError, wantCode: CodeRuntimeError},
 	}
@@ -776,7 +784,9 @@ func (f *fakeRuntimeService) StartAgent(_ context.Context, req codingagent.Start
 	if f.agentStartErr != nil {
 		return codingagent.StartAgentResponse{}, f.agentStartErr
 	}
-	return fakeAgentResponse(req.Kind, "agent-1"), nil
+	response := fakeAgentResponse(req.Kind, "agent-1")
+	response.Agent.Agent.AccessMode = req.AccessMode
+	return response, nil
 }
 
 func (f *fakeRuntimeService) ListAgents(context.Context) (codingagent.ListAgentsResponse, error) {
@@ -1169,6 +1179,9 @@ func TestServerHealth(t *testing.T) {
 	}
 	if !bytes.Contains(response.Body.Bytes(), []byte(`"status":"ok"`)) {
 		t.Fatalf("body = %s, want ok status", response.Body.String())
+	}
+	if !bytes.Contains(response.Body.Bytes(), []byte(`"capabilities":["agent_access_read_only_v1"]`)) {
+		t.Fatalf("body = %s, want read-only capability", response.Body.String())
 	}
 }
 

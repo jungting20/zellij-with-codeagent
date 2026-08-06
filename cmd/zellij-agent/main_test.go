@@ -125,6 +125,10 @@ type fakeAgentClient struct {
 	closeCalls   int
 }
 
+func (*fakeAgentClient) Health(context.Context) (transport.HealthResponse, error) {
+	return transport.HealthResponse{Status: "ok", Capabilities: []string{transport.CapabilityAgentAccessReadOnlyV1}}, nil
+}
+
 func (c *fakeAgentClient) StartAgent(_ context.Context, request transport.StartAgentRequest) (transport.StartAgentResponse, error) {
 	c.request = request
 	return c.response, nil
