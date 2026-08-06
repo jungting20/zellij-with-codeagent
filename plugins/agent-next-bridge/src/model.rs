@@ -1,4 +1,4 @@
-use zellij_tile::prelude::PaneId;
+use zellij_tile::prelude::{get_focused_pane, PaneId, PaneManifest};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Navigation {
@@ -128,10 +128,15 @@ pub fn source_pane_id(focused: PaneId, last_terminal: Option<u32>) -> Result<Str
     }
 }
 
+pub fn focused_terminal_in_tab(tab_index: usize, pane_manifest: &PaneManifest) -> Option<u32> {
+    get_focused_pane(tab_index, pane_manifest).map(|pane| pane.id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zellij_tile::prelude::PaneId;
+    use std::collections::HashMap;
+    use zellij_tile::prelude::{PaneId, PaneInfo, PaneManifest};
 
     #[test]
     fn parses_supported_navigation_messages() {
@@ -184,6 +189,34 @@ mod tests {
             model.resolve_source_pane(PaneId::Plugin(2)),
             Ok("terminal_7".into())
         );
+    }
+
+    #[test]
+    fn focused_terminal_is_scoped_to_current_tab() {
+        let pane_manifest = PaneManifest {
+            panes: HashMap::from([
+                (
+                    0,
+                    vec![PaneInfo {
+                        id: 7,
+                        is_focused: true,
+                        ..Default::default()
+                    }],
+                ),
+                (
+                    1,
+                    vec![PaneInfo {
+                        id: 9,
+                        is_plugin: true,
+                        is_focused: true,
+                        ..Default::default()
+                    }],
+                ),
+            ]),
+        };
+
+        assert_eq!(focused_terminal_in_tab(1, &pane_manifest), None);
+        assert_eq!(focused_terminal_in_tab(0, &pane_manifest), Some(7));
     }
 
     #[test]

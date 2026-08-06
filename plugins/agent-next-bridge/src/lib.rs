@@ -5,7 +5,7 @@ mod model;
 use std::collections::BTreeMap;
 
 #[cfg(target_family = "wasm")]
-use model::{command_argv, parse_navigation, BridgeModel};
+use model::{command_argv, focused_terminal_in_tab, parse_navigation, BridgeModel};
 #[cfg(target_family = "wasm")]
 use zellij_tile::prelude::*;
 
@@ -63,13 +63,10 @@ impl ZellijPlugin for AgentNextBridge {
                 self.flush_ready();
             }
             Event::PaneUpdate(pane_manifest) => {
-                if let Some(pane) = pane_manifest
-                    .panes
-                    .values()
-                    .flatten()
-                    .find(|pane| pane.is_focused && !pane.is_plugin)
-                {
-                    self.model.set_last_terminal(Some(pane.id));
+                if let Ok((tab_index, _)) = get_focused_pane_info() {
+                    if let Some(pane_id) = focused_terminal_in_tab(tab_index, &pane_manifest) {
+                        self.model.set_last_terminal(Some(pane_id));
+                    }
                 }
             }
             Event::PermissionRequestResult(status) => {
