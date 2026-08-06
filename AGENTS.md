@@ -13,6 +13,14 @@ This is a Go module for a Zellij-backed agent runtime. Command entrypoints live 
 - `./bin/zellij-agent daemon serve`: starts the local JSON HTTP transport on the default Unix socket, `/tmp/agentd.sock`.
 - `./scripts/smoke-agentctl.sh`: runs the daemon/client smoke flow; requires built binaries, Zellij, and Neovim.
 
+## Agent Next Bridge Plugin
+
+- The pane-less `Alt+o`/`Alt+p` Zellij bridge source lives in `plugins/agent-next-bridge/`. Its WASI entrypoint is `plugins/agent-next-bridge/src/main.rs`, and its pure behavior model is `plugins/agent-next-bridge/src/model.rs`.
+- Build, test, and atomically install the plugin with `cargo test --manifest-path plugins/agent-next-bridge/Cargo.toml` followed by `./scripts/install-agent-next-bridge.sh`.
+- The installer writes the runtime artifact to `~/.config/zellij/plugins/agent-next-bridge.wasm`. Keep Zellij configuration pointed at that installed artifact; do not reference a worktree `target/` path.
+- The plugin must remain a `wasm32-wasip1` executable binary exporting `_start`. Building it as a `cdylib`/`rlib` causes Zellij to fail with `could not find exported function`.
+- The bridge must invoke the public `zellij-agent agent next` CLI and must not create a transient pane or bypass the daemon/runtime boundary.
+
 ## Coding Style & Naming Conventions
 
 Use standard Go formatting: run `gofmt` on edited Go files and keep imports organized by `go fmt`/`goimports` conventions. Package names are short lowercase nouns, and tests sit beside production files with `_test.go` suffixes. Prefer explicit daemon-owned identifiers such as `PaneID`, `task_id`, and `request_id` when crossing package or transport boundaries. Keep shell scripts strict with `set -euo pipefail`, matching existing scripts.
