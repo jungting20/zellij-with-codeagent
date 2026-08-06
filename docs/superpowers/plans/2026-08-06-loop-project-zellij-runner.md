@@ -45,19 +45,19 @@
 - `docs/zellij-agent-quickstart.md`: read-only start와 loop 역할 사용법
 - `/Users/in05908_mac/.config/pi/docs/agent-roles.md`: 외부 role 요약 동기화
 
-### 스킬 소스와 설치본
+### 전역 스킬 소스와 설치본
 
-- `.agents/skills/loop-project-zellij-runner/`: 저장소에서 버전 관리하는 canonical skill source
-- `/Users/in05908_mac/.agents/skills/loop-project-zellij-runner/`: 검증 후 설치되는 byte-identical skill
-- `.agents/skills/loop-project-zellij-runner/SKILL.md`: orchestration state machine
-- `.agents/skills/loop-project-zellij-runner/references/pane-protocol.md`: bootstrap, assignment, signal, ACK, cleanup 계약
-- `.agents/skills/loop-project-zellij-runner/references/milestone-dispatch.md`: visible worker pane dispatch
-- `.agents/skills/loop-project-zellij-runner/references/verifier-dispatch.md`: read-only verifier pane dispatch
-- `.agents/skills/loop-project-zellij-runner/references/runtime-contracts.md`: 기존 공식 상태 계약
-- `.agents/skills/loop-project-zellij-runner/references/execution-logging.md`: 기존 append-only evidence 계약
-- `.agents/skills/loop-project-zellij-runner/scripts/`: validator와 append helper
-- `.agents/skills/loop-project-zellij-runner/tests/`: 계약, validator, pane protocol tests
-- `.agents/skills/loop-project-zellij-runner/evals/evals.json`: READY, REJECT, recovery 시나리오
+- `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/`: 전역 skills Git 저장소의 격리 worktree에서 버전 관리하는 canonical skill source
+- `/Users/in05908_mac/.agents/skills/loop-project-zellij-runner/`: 검증 후 전역 skills 저장소의 활성 경로에 반영되는 skill
+- `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/SKILL.md`: orchestration state machine
+- `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/references/pane-protocol.md`: bootstrap, assignment, signal, ACK, cleanup 계약
+- `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/references/milestone-dispatch.md`: visible worker pane dispatch
+- `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/references/verifier-dispatch.md`: read-only verifier pane dispatch
+- `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/references/runtime-contracts.md`: 기존 공식 상태 계약
+- `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/references/execution-logging.md`: 기존 append-only evidence 계약
+- `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/scripts/`: validator와 append helper
+- `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/tests/`: 계약, validator, pane protocol tests
+- `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/evals/evals.json`: READY, REJECT, recovery 시나리오
 
 ---
 
@@ -393,21 +393,21 @@ git commit -m "feat: 읽기 전용 에이전트 실행 경로 연결"
 ### Task 4: 새 스킬의 상태·증거 기반 구성 생성
 
 **Files:**
-- Create: `.agents/skills/loop-project-zellij-runner/SKILL.md`
-- Create: `.agents/skills/loop-project-zellij-runner/references/runtime-contracts.md`
-- Create: `.agents/skills/loop-project-zellij-runner/references/execution-logging.md`
-- Create: `.agents/skills/loop-project-zellij-runner/scripts/__init__.py`
-- Create: `.agents/skills/loop-project-zellij-runner/scripts/append_checkpoint.py`
-- Create: `.agents/skills/loop-project-zellij-runner/scripts/validate_runtime.py`
-- Create: `.agents/skills/loop-project-zellij-runner/tests/__init__.py`
-- Create: `.agents/skills/loop-project-zellij-runner/tests/fixtures.py`
-- Create: `.agents/skills/loop-project-zellij-runner/tests/test_append_checkpoint.py`
-- Create: `.agents/skills/loop-project-zellij-runner/tests/test_validate_runtime.py`
-- Create: `.agents/skills/loop-project-zellij-runner/tests/test_contract_parity.py`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/SKILL.md`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/references/runtime-contracts.md`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/references/execution-logging.md`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/scripts/__init__.py`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/scripts/append_checkpoint.py`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/scripts/validate_runtime.py`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/tests/__init__.py`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/tests/fixtures.py`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/tests/test_append_checkpoint.py`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/tests/test_validate_runtime.py`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/tests/test_contract_parity.py`
 
 **Interfaces:**
 - Consumes: authoritative source `/Users/in05908_mac/.agents/skills/loop-project-runner`
-- Produces: new canonical skill source rooted at `.agents/skills/loop-project-zellij-runner`
+- Produces: new canonical skill source rooted at `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner`
 
 - [ ] **Step 1: validator와 logging parity 테스트 작성**
 
@@ -428,7 +428,7 @@ dispatch 때문에 바뀌지 않도록 고정한다.
 
 - [ ] **Step 2: parity 테스트 실패 확인**
 
-Run: `python3 -m unittest discover -s .agents/skills/loop-project-zellij-runner/tests -v`
+Run: `python3 -m unittest discover -s /Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/tests -v`
 
 Expected: 대상 파일이 없어 FAIL.
 
@@ -442,10 +442,10 @@ Run:
 ```bash
 shasum -a 256 \
   /Users/in05908_mac/.agents/skills/loop-project-runner/references/runtime-contracts.md \
-  .agents/skills/loop-project-zellij-runner/references/runtime-contracts.md
+  /Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/references/runtime-contracts.md
 shasum -a 256 \
   /Users/in05908_mac/.agents/skills/loop-project-runner/references/execution-logging.md \
-  .agents/skills/loop-project-zellij-runner/references/execution-logging.md
+  /Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/references/execution-logging.md
 ```
 
 Expected: 각 source/target hash pair가 동일함.
@@ -468,15 +468,15 @@ pane, verifier별 fresh read-only pane, 저장소 문서 handoff와 공식 상�
 
 - [ ] **Step 5: 기존 validator test 실행**
 
-Run: `python3 -m unittest discover -s .agents/skills/loop-project-zellij-runner/tests -v`
+Run: `python3 -m unittest discover -s /Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/tests -v`
 
 Expected: copied validator, append helper와 parity tests PASS.
 
 - [ ] **Step 6: 상태·증거 기반 커밋**
 
 ```bash
-git add .agents/skills/loop-project-zellij-runner
-git commit -m "feat: Zellij 루프 실행 스킬 기반 추가"
+git -C /Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner add loop-project-zellij-runner
+git -C /Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner commit -m "feat: Zellij 루프 실행 스킬 기반 추가"
 ```
 
 ---
@@ -484,14 +484,14 @@ git commit -m "feat: Zellij 루프 실행 스킬 기반 추가"
 ### Task 5: Visible pane dispatch와 제어 프로토콜 완성
 
 **Files:**
-- Create: `.agents/skills/loop-project-zellij-runner/references/pane-protocol.md`
-- Create: `.agents/skills/loop-project-zellij-runner/references/milestone-dispatch.md`
-- Create: `.agents/skills/loop-project-zellij-runner/references/verifier-dispatch.md`
-- Create: `.agents/skills/loop-project-zellij-runner/references/recovery.md`
-- Create: `.agents/skills/loop-project-zellij-runner/tests/test_pane_protocol.py`
-- Create: `.agents/skills/loop-project-zellij-runner/tests/test_context_efficiency_contract.py`
-- Create: `.agents/skills/loop-project-zellij-runner/evals/evals.json`
-- Modify: `.agents/skills/loop-project-zellij-runner/SKILL.md`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/references/pane-protocol.md`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/references/milestone-dispatch.md`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/references/verifier-dispatch.md`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/references/recovery.md`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/tests/test_pane_protocol.py`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/tests/test_context_efficiency_contract.py`
+- Create: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/evals/evals.json`
+- Modify: `/Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/SKILL.md`
 
 **Interfaces:**
 - Consumes: `zellij-agent role loop-project-worker`, `zellij-agent role loop-project-verifier`
@@ -609,7 +609,7 @@ implementation이나 self-verification으로 fallback하지 않는다.
 
 - [ ] **Step 7: skill tests 실행**
 
-Run: `python3 -m unittest discover -s .agents/skills/loop-project-zellij-runner/tests -v`
+Run: `python3 -m unittest discover -s /Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/tests -v`
 
 Expected: contract, validator, append helper와 pane protocol tests PASS.
 
@@ -621,8 +621,8 @@ message는 거부됨.
 - [ ] **Step 8: visible runner 스킬 커밋**
 
 ```bash
-git add .agents/skills/loop-project-zellij-runner
-git commit -m "feat: Zellij pane 루프 실행 프로토콜 추가"
+git -C /Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner add loop-project-zellij-runner
+git -C /Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner commit -m "feat: Zellij pane 루프 실행 프로토콜 추가"
 ```
 
 ---
@@ -633,7 +633,7 @@ git commit -m "feat: Zellij pane 루프 실행 프로토콜 추가"
 - Modify only if verification reveals an in-scope defect: files owned by Tasks 1-5
 - Install: `bin/zellij-agent`
 - Install: `/Users/in05908_mac/.config/custom-cli/zellij-agent`
-- Install: `/Users/in05908_mac/.agents/skills/loop-project-zellij-runner/`
+- Integrate: `/Users/in05908_mac/.agents/skills/loop-project-zellij-runner/`
 
 **Interfaces:**
 - Consumes: all Tasks 1-5 outputs
@@ -663,7 +663,7 @@ Run: `go test ./...`
 
 Expected: PASS.
 
-Run: `python3 -m unittest discover -s .agents/skills/loop-project-zellij-runner/tests -v`
+Run: `python3 -m unittest discover -s /Users/in05908_mac/.agents/skills/.worktrees/loop-project-zellij-runner/loop-project-zellij-runner/tests -v`
 
 Expected: PASS.
 
@@ -687,21 +687,22 @@ Run: `/Users/in05908_mac/.config/custom-cli/zellij-agent agent start --help`
 
 Expected: help에 `--access`와 `read-only`가 나타남.
 
-- [ ] **Step 5: canonical skill을 사용자 skill 경로에 설치**
+- [ ] **Step 5: 전역 skills branch를 활성 경로에 반영**
 
-기존 target이 없음을 확인한다. 존재하면 source/target diff를 먼저 보고 이번 작업이
-만든 target일 때만 교체한다. 새 설치는 temp sibling에 복제한 뒤 directory rename으로
-완료한다.
+전역 skills 기본 checkout의 unrelated dirty files를 먼저 다시 확인한다. 새 branch가
+오직 `loop-project-zellij-runner/`만 추가했는지 검증한 뒤
+`feat/loop-project-zellij-runner`를 `master`에 fast-forward한다. 기존 dirty file과
+경로가 겹치면 merge하지 않고 중단한다.
 
-```text
-source: /Users/in05908_mac/zellij-with-codeagent/.agents/skills/loop-project-zellij-runner
-target: /Users/in05908_mac/.agents/skills/loop-project-zellij-runner
-temporary target: /Users/in05908_mac/.agents/skills/.loop-project-zellij-runner.new
+```bash
+git -C /Users/in05908_mac/.agents/skills diff --name-only
+git -C /Users/in05908_mac/.agents/skills diff --name-only master..feat/loop-project-zellij-runner
+git -C /Users/in05908_mac/.agents/skills merge --ff-only feat/loop-project-zellij-runner
 ```
 
-Run: source와 target의 `find ... -type f -exec shasum -a 256` 정렬 결과 비교.
-
-Expected: 모든 installed file hash가 canonical source와 동일함.
+Expected: 기존 dirty 목록은 보존되고 활성 경로
+`/Users/in05908_mac/.agents/skills/loop-project-zellij-runner/SKILL.md`가 tracked file로
+생성됨.
 
 - [ ] **Step 6: bounded Zellij smoke precheck**
 
