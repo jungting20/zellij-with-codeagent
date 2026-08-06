@@ -9,13 +9,14 @@ import (
 // Logical IDs are daemon-owned and remain stable even when Zellij pane IDs are
 // recreated or reused by the backend runtime.
 type (
-	TaskID       string
-	AgentID      string
-	PaneID       string
-	ZellijPaneID string
-	ZellijTabID  int
-	SessionID    string
-	TabID        string
+	TaskID         string
+	AgentID        string
+	PaneID         string
+	OwnershipToken string
+	ZellijPaneID   string
+	ZellijTabID    int
+	SessionID      string
+	TabID          string
 )
 
 type PaneStatus string
@@ -30,23 +31,24 @@ const (
 )
 
 type PaneRecord struct {
-	ID            PaneID
-	Generation    uint64
-	SessionID     SessionID
-	TabID         TabID
-	TaskID        TaskID
-	AgentID       AgentID
-	ZellijPaneID  ZellijPaneID
-	ZellijTabID   *ZellijTabID
-	TabName       string
-	Role          string
-	Command       []string
-	CWD           string
-	Status        PaneStatus
-	LastOutput    string
-	StatusMessage string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID             PaneID
+	OwnershipToken OwnershipToken
+	Generation     uint64
+	SessionID      SessionID
+	TabID          TabID
+	TaskID         TaskID
+	AgentID        AgentID
+	ZellijPaneID   ZellijPaneID
+	ZellijTabID    *ZellijTabID
+	TabName        string
+	Role           string
+	Command        []string
+	CWD            string
+	Status         PaneStatus
+	LastOutput     string
+	StatusMessage  string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 
 	closeNotificationClaimed bool
 }
@@ -67,18 +69,19 @@ type SessionRecord struct {
 }
 
 type RegisterPaneRequest struct {
-	ID           PaneID
-	SessionID    SessionID
-	TabID        TabID
-	TaskID       TaskID
-	AgentID      AgentID
-	ZellijPaneID ZellijPaneID
-	ZellijTabID  *ZellijTabID
-	TabName      string
-	Role         string
-	Command      []string
-	CWD          string
-	Status       PaneStatus
+	ID             PaneID
+	OwnershipToken OwnershipToken
+	SessionID      SessionID
+	TabID          TabID
+	TaskID         TaskID
+	AgentID        AgentID
+	ZellijPaneID   ZellijPaneID
+	ZellijTabID    *ZellijTabID
+	TabName        string
+	Role           string
+	Command        []string
+	CWD            string
+	Status         PaneStatus
 }
 
 var (

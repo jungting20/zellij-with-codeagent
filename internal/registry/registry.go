@@ -66,21 +66,22 @@ func (r *Registry) RegisterPane(req RegisterPaneRequest) (PaneRecord, error) {
 
 	now := r.now()
 	record := PaneRecord{
-		ID:           req.ID,
-		Generation:   r.nextGeneration,
-		SessionID:    req.SessionID,
-		TabID:        req.TabID,
-		TaskID:       req.TaskID,
-		AgentID:      req.AgentID,
-		ZellijPaneID: req.ZellijPaneID,
-		ZellijTabID:  cloneZellijTabID(req.ZellijTabID),
-		TabName:      req.TabName,
-		Role:         req.Role,
-		Command:      cloneStrings(req.Command),
-		CWD:          req.CWD,
-		Status:       req.Status,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:             req.ID,
+		OwnershipToken: req.OwnershipToken,
+		Generation:     r.nextGeneration,
+		SessionID:      req.SessionID,
+		TabID:          req.TabID,
+		TaskID:         req.TaskID,
+		AgentID:        req.AgentID,
+		ZellijPaneID:   req.ZellijPaneID,
+		ZellijTabID:    cloneZellijTabID(req.ZellijTabID),
+		TabName:        req.TabName,
+		Role:           req.Role,
+		Command:        cloneStrings(req.Command),
+		CWD:            req.CWD,
+		Status:         req.Status,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 
 	session, exists := r.sessions[req.SessionID]

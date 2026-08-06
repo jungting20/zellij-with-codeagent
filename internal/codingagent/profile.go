@@ -1,7 +1,10 @@
 // Package codingagent defines the supported coding-agent command profiles.
 package codingagent
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type Kind string
 
@@ -77,20 +80,26 @@ func (p Profile) BuildCommand(bypass bool, extra []string) []string {
 	return append(args, extra...)
 }
 
-func (p Profile) BuildManagedCommand(access AccessMode, extra []string) ([]string, error) {
+func (p Profile) BuildManagedCommand(access AccessMode, prompt string, extra []string) ([]string, error) {
 	access, err := ParseAccessMode(string(access))
 	if err != nil {
 		return nil, err
 	}
 	switch access {
 	case AccessFull:
+		if prompt != "" {
+			return nil, fmt.Errorf("%w: full access does not accept a typed prompt", ErrInvalidAccessMode)
+		}
 		return p.BuildCommand(true, extra), nil
 	case AccessReadOnly:
-		if p.Kind != KindCodex {
+		if p.Kind != KindCodex || len(extra) != 0 || strings.HasPrefix(prompt, "-") {
 			return nil, fmt.Errorf("%w: read-only access is supported only by Codex", ErrInvalidAccessMode)
 		}
 		args := []string{p.Executable, "--sandbox", "read-only", "--ask-for-approval", "never"}
-		return append(args, extra...), nil
+		if prompt != "" {
+			args = append(args, prompt)
+		}
+		return args, nil
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrInvalidAccessMode, access)
 	}

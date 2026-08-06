@@ -33,6 +33,7 @@ type StartAgentRequest struct {
 	Kind                Kind
 	AccessMode          AccessMode
 	CWD                 string
+	Prompt              string
 	ExtraArgs           []string
 	NotifyOnIdle        bool
 	SourceZellijSession string
@@ -158,7 +159,7 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 	if err != nil {
 		return StartAgentResponse{}, err
 	}
-	command, err := profile.BuildManagedCommand(accessMode, request.ExtraArgs)
+	command, err := profile.BuildManagedCommand(accessMode, request.Prompt, request.ExtraArgs)
 	if err != nil {
 		return StartAgentResponse{}, err
 	}

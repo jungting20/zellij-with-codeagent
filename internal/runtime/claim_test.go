@@ -31,6 +31,9 @@ func TestClaimPaneRegistersExistingZellijPaneWithoutMutation(t *testing.T) {
 	if response.Pane.ID != "agent-1" || response.Pane.ZellijPaneID != "terminal_2" {
 		t.Fatalf("Pane IDs = %q/%q, want agent-1/terminal_2", response.Pane.ID, response.Pane.ZellijPaneID)
 	}
+	if response.Pane.OwnershipToken == "" {
+		t.Fatal("claimed pane ownership token is empty")
+	}
 	if response.Pane.ZellijTabID == nil || *response.Pane.ZellijTabID != 7 || response.Pane.TabID != "7" || response.Pane.TabName != "work" {
 		t.Fatalf("Pane tab = %#v, want Zellij tab 7 named work", response.Pane)
 	}

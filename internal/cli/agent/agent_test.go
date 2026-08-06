@@ -250,7 +250,6 @@ func TestRunStartSendsValidatedRequest(t *testing.T) {
 	}
 	want := transport.StartAgentRequest{
 		Kind:               "gemini",
-		Access:             "full",
 		CWD:                cwd,
 		Args:               []string{"--model", "gemini-3"},
 		NotifyOnIdle:       true,
@@ -317,6 +316,9 @@ func TestRunStartPassesServiceGeneratedReadOnlyCommandToRunner(t *testing.T) {
 	}
 	if client.request.Access != "read-only" {
 		t.Fatalf("StartAgent access = %q, want read-only", client.request.Access)
+	}
+	if client.request.Prompt != "Verify M1" || len(client.request.Args) != 0 || client.healthCalls != 1 {
+		t.Fatalf("read-only request=%#v healthCalls=%d", client.request, client.healthCalls)
 	}
 	want := []string{"codex", "--sandbox", "read-only", "--ask-for-approval", "never", "Verify M1"}
 	if len(runtimeService.claimed) != 1 || !reflect.DeepEqual(runtimeService.claimed[0].Command, want) {
@@ -626,6 +628,8 @@ func TestRunStartRejectsInvalidInputBeforeCallingClient(t *testing.T) {
 		{name: "unknown access", args: []string{"start", "codex", "--access", "other"}, want: "invalid coding agent access mode"},
 		{name: "missing access", args: []string{"start", "codex", "--access"}, want: "--access requires a value"},
 		{name: "read-only non-codex", args: []string{"start", "gemini", "--access=read-only"}, want: "read-only access is supported only by Codex"},
+		{name: "read-only multiple prompts", args: []string{"start", "codex", "--access=read-only", "--", "one", "two"}, want: "read-only access accepts at most one prompt"},
+		{name: "read-only option prompt", args: []string{"start", "codex", "--access=read-only", "--", "--config"}, want: "read-only prompt must not begin with '-'"},
 		{name: "unexpected positional", args: []string{"start", "codex", "extra"}, want: "unexpected start argument before --: extra"},
 		{name: "unknown option", args: []string{"start", "codex", "--model", "gemini-3"}, want: "unknown start option: --model"},
 	}
@@ -665,6 +669,18 @@ func TestRunStartReportsClientError(t *testing.T) {
 
 	if code != 1 || !strings.Contains(stderr.String(), "agent start failed via socket") || !strings.Contains(stderr.String(), "daemon unavailable") || stdout.Len() != 0 {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestRunStartReadOnlyFailsClosedWithoutDaemonCapability(t *testing.T) {
+	cwd := t.TempDir()
+	client := &testClient{healthConfigured: true, healthResponse: transport.HealthResponse{Status: "ok"}}
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"start", "codex", "--access=read-only", "--", "Verify M1"}, strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
+		Getwd: func() (string, error) { return cwd, nil }, Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}),
+	})
+	if code != 1 || client.healthCalls != 1 || client.calls != 0 || !strings.Contains(stderr.String(), "drain/restart daemon") {
+		t.Fatalf("code=%d health=%d starts=%d stderr=%q", code, client.healthCalls, client.calls, stderr.String())
 	}
 }
 
@@ -711,6 +727,18 @@ type testClient struct {
 	closeHasDeadline bool
 	closeCalledAt    time.Time
 	closeContextErr  error
+	healthResponse   transport.HealthResponse
+	healthErr        error
+	healthCalls      int
+	healthConfigured bool
+}
+
+func (c *testClient) Health(context.Context) (transport.HealthResponse, error) {
+	c.healthCalls++
+	if c.healthConfigured {
+		return c.healthResponse, c.healthErr
+	}
+	return transport.HealthResponse{Status: "ok", Capabilities: []string{transport.CapabilityAgentAccessReadOnlyV1}}, c.healthErr
 }
 
 func (c *testClient) StartAgent(ctx context.Context, request transport.StartAgentRequest) (transport.StartAgentResponse, error) {
@@ -781,8 +809,14 @@ func (serviceCommandMonitor) Start(codingagent.Record) error { return nil }
 func (serviceCommandMonitor) Stop(codingagent.ID)            {}
 
 type serviceBackedClient struct {
-	service *codingagent.Service
-	request transport.StartAgentRequest
+	service     *codingagent.Service
+	request     transport.StartAgentRequest
+	healthCalls int
+}
+
+func (c *serviceBackedClient) Health(context.Context) (transport.HealthResponse, error) {
+	c.healthCalls++
+	return transport.HealthResponse{Status: "ok", Capabilities: []string{transport.CapabilityAgentAccessReadOnlyV1}}, nil
 }
 
 func (c *serviceBackedClient) StartAgent(ctx context.Context, request transport.StartAgentRequest) (transport.StartAgentResponse, error) {

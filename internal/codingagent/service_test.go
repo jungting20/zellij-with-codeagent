@@ -195,7 +195,11 @@ func TestServiceStartAgentAppliesCanonicalAccessModeAndCommand(t *testing.T) {
 
 			request := validStartRequest(t, KindCodex)
 			request.AccessMode = test.accessMode
-			request.ExtraArgs = []string{"review this repository"}
+			if test.wantAccess == AccessReadOnly {
+				request.Prompt = "review this repository"
+			} else {
+				request.ExtraArgs = []string{"review this repository"}
+			}
 			response, err := service.StartAgent(context.Background(), request)
 			if err != nil {
 				t.Fatalf("StartAgent() error = %v", err)
@@ -230,7 +234,7 @@ func TestServiceReadOnlyClaimsAndReturnsNoBypassCommand(t *testing.T) {
 		Kind:                KindCodex,
 		AccessMode:          AccessReadOnly,
 		CWD:                 cwd,
-		ExtraArgs:           []string{"Verify M1"},
+		Prompt:              "Verify M1",
 		SourceZellijSession: "physical-a",
 		SourceZellijPaneID:  "terminal_2",
 	})
@@ -247,6 +251,33 @@ func TestServiceReadOnlyClaimsAndReturnsNoBypassCommand(t *testing.T) {
 	}
 	if slices.Contains(response.Agent.Pane.Command, "--dangerously-bypass-approvals-and-sandbox") {
 		t.Fatalf("read-only command includes permission bypass: %#v", response.Agent.Pane.Command)
+	}
+}
+
+func TestServiceStartAgentRejectsReadOnlyPayloadBeforeSideEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		prompt string
+		extra  []string
+	}{
+		{name: "arguments", extra: []string{"--dangerously-bypass-approvals-and-sandbox"}},
+		{name: "option prompt", prompt: "--config sandbox=workspace-write"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := NewMemoryStore(nil)
+			monitor := &serviceFakeMonitor{}
+			runtimeService := &serviceFakeRuntime{}
+			service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: monitor, NewAgentID: func() ID { return "agent-1" }})
+			req := validStartRequest(t, KindCodex)
+			req.AccessMode, req.Prompt, req.ExtraArgs = AccessReadOnly, tc.prompt, tc.extra
+			if _, err := service.StartAgent(context.Background(), req); !errors.Is(err, ErrInvalidAccessMode) {
+				t.Fatalf("StartAgent() error = %v, want ErrInvalidAccessMode", err)
+			}
+			records, _ := store.List()
+			if len(records) != 0 || len(monitor.started) != 0 || len(runtimeService.claimed) != 0 {
+				t.Fatalf("rejected request caused side effects: records=%d monitor=%d claims=%d", len(records), len(monitor.started), len(runtimeService.claimed))
+			}
+		})
 	}
 }
 

@@ -30,6 +30,7 @@ const (
 )
 
 type AgentClient interface {
+	Health(context.Context) (transport.HealthResponse, error)
 	StartAgent(context.Context, transport.StartAgentRequest) (transport.StartAgentResponse, error)
 	ClosePane(context.Context, string) (transport.ClosePaneResponse, error)
 	FocusNextAgent(context.Context, transport.FocusNextAgentRequest) (transport.FocusNextAgentResponse, error)
@@ -235,6 +236,20 @@ func runStart(args []string, stdin io.Reader, stdout, stderr io.Writer, newClien
 		fmt.Fprintln(stderr, "read-only access is supported only by Codex")
 		return 2
 	}
+	var prompt string
+	if opts.access == string(codingagent.AccessReadOnly) {
+		if len(extra) > 1 {
+			fmt.Fprintln(stderr, "read-only access accepts at most one prompt after --")
+			return 2
+		}
+		if len(extra) == 1 {
+			if strings.HasPrefix(extra[0], "-") {
+				fmt.Fprintln(stderr, "read-only prompt must not begin with '-'")
+				return 2
+			}
+			prompt = extra[0]
+		}
+	}
 	if cfg.Getwd == nil {
 		fmt.Fprintln(stderr, "agent start configuration error: Getwd is required")
 		return 1
@@ -273,13 +288,33 @@ func runStart(args []string, stdin io.Reader, stdout, stderr io.Writer, newClien
 		fmt.Fprintln(stderr, "agent start client is not configured")
 		return 1
 	}
+	if opts.access == string(codingagent.AccessReadOnly) {
+		healthCtx, healthCancel := context.WithTimeout(context.Background(), opts.timeout)
+		health, healthErr := client.Health(healthCtx)
+		healthCancel()
+		if healthErr != nil {
+			fmt.Fprintf(stderr, "agent start capability check failed via socket %s: %v\n", opts.socket, healthErr)
+			return 1
+		}
+		if !containsString(health.Capabilities, transport.CapabilityAgentAccessReadOnlyV1) {
+			fmt.Fprintln(stderr, "installed CLI and running daemon differ; drain/restart daemon before read-only start")
+			return 1
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	access := ""
+	requestArgs := append([]string(nil), extra...)
+	if opts.access == string(codingagent.AccessReadOnly) {
+		access = opts.access
+		requestArgs = nil
+	}
 	response, err := client.StartAgent(ctx, transport.StartAgentRequest{
 		Kind:               kind,
 		CWD:                cwd,
-		Access:             opts.access,
-		Args:               append([]string(nil), extra...),
+		Access:             access,
+		Prompt:             prompt,
+		Args:               requestArgs,
 		NotifyOnIdle:       opts.notifyOnIdle,
 		SourceSession:      session,
 		SourceZellijPaneID: paneID,
@@ -315,6 +350,15 @@ func runStart(args []string, stdin io.Reader, stdout, stderr io.Writer, newClien
 		return 1
 	}
 	return 0
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func runAgentProcess(command []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -505,7 +549,7 @@ func printDashboardUsage(w io.Writer) {
 }
 
 func printStartUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: zellij-agent agent start <codex|claude|gemini|cursor> [--cwd DIR --socket PATH --timeout DURATION --access full|read-only] [-- extra arguments]")
+	fmt.Fprintln(w, "Usage: zellij-agent agent start <codex|claude|gemini|cursor> [--cwd DIR --socket PATH --timeout DURATION --access full|read-only] [-- full-access arguments | read-only-prompt]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Options:")
 	fmt.Fprintln(w, "  --cwd DIR")
@@ -518,7 +562,7 @@ func printStartUsage(w io.Writer) {
 	fmt.Fprintln(w, "  --notify-idle")
 	fmt.Fprintln(w, "    announce non-idle to idle state transitions")
 	fmt.Fprintln(w, "  -- passthrough")
-	fmt.Fprintln(w, "    pass remaining arguments unchanged to the selected agent profile")
+	fmt.Fprintln(w, "    full access passes remaining arguments unchanged; read-only accepts zero or one non-option prompt")
 	fmt.Fprintln(w)
 	printStartSummary(w)
 }
@@ -533,7 +577,7 @@ func printStartSummary(w io.Writer) {
 	fmt.Fprintln(w, "Examples:")
 	fmt.Fprintln(w, "  zellij-agent agent start codex --access full -- \"Implement M1\"")
 	fmt.Fprintln(w, "  zellij-agent agent start codex --access read-only -- \"Verify M1\"")
-	fmt.Fprintln(w, "Profiles add their permission-bypass defaults before passthrough arguments:")
+	fmt.Fprintln(w, "Full-access profiles add their permission-bypass defaults before passthrough arguments:")
 	fmt.Fprintln(w, "  codex   codex --dangerously-bypass-approvals-and-sandbox")
 	fmt.Fprintln(w, "  claude  claude --dangerously-skip-permissions")
 	fmt.Fprintln(w, "  gemini  agy --dangerously-skip-permissions")

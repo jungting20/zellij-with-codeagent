@@ -58,8 +58,10 @@ In another Zellij pane:
 Expected health output:
 
 ```text
-agentd ok (dev)
+agentd ok (dev) capabilities=agent_access_read_only_v1
 ```
+
+The JSON health response advertises `agent_access_read_only_v1`. A read-only start checks this capability before sending its request. If the installed CLI and running daemon differ, first inventory and drain managed panes, then explicitly restart the daemon; the CLI never restarts a live daemon automatically. The registry is memory-backed, so logical pane IDs recorded before a restart are invalid afterward.
 
 ### Optional: Start An Agent With An Idle Voice Notification
 
@@ -85,8 +87,10 @@ being granted its normal full-access permission bypass:
 
 `--access full` is the default. Read-only access is supported only by Codex;
 the managed command uses Codex's read-only sandbox and does not include the
-full-access permission-bypass argument. In either access mode, `agent start`
+full-access permission-bypass argument. After `--`, read-only accepts zero or one positional prompt and rejects option-like values beginning with `-`; full access retains arbitrary argument passthrough. In either access mode, `agent start`
 closes its managed pane after the coding-agent process exits.
+
+Loop verification results do not travel back through the daemon socket. A read-only verifier prints exactly one `LOOP_VERIFY_RESULT_BEGIN` / `LOOP_VERIFY_RESULT_END` block, and the host orchestrator captures it with bounded snapshots before recording and relaying the verdict.
 
 ## 5. Submit A JSON Plan With ctl
 
@@ -229,6 +233,14 @@ The example URL path `/` maps to the task/session `page-root`.
 ```
 
 Stop the daemon with `Ctrl-C` in the daemon pane.
+
+Loop-owned panes must use token-qualified cleanup:
+
+```bash
+./bin/zellij-agent ctl cleanup --pane <logical-id> --ownership-token <ownership-token>
+```
+
+An ownership token mismatch preserves the pane because the logical ID may have been reused after restart. Tokenless `--pane` and task/role filters remain legacy operator cleanup paths; loop automation must not use them.
 
 ## Compact Command List
 

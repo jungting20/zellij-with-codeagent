@@ -45,13 +45,25 @@ func TestPrepareBuildsCodexCommandsForLoopProjectRoles(t *testing.T) {
 			if got := cmd.Args; !sameStrings(got, want) {
 				t.Fatalf("command = %#v, want %#v", got, want)
 			}
-			for _, wantText := range []string{tt.role, repo, runnerSkill, "orchestrator-1", "do not write", "ctl message"} {
+			for _, wantText := range []string{tt.role, repo, runnerSkill, "orchestrator-1", "do not write"} {
 				if !strings.Contains(bootstrap, wantText) {
 					t.Fatalf("bootstrap = %q, missing %q", bootstrap, wantText)
 				}
 			}
 			if tt.forbidden && !strings.Contains(bootstrap, "code_changes: FORBIDDEN") {
 				t.Fatalf("verifier bootstrap = %q, missing code_changes restriction", bootstrap)
+			}
+			if tt.mode == ModeVerifier {
+				for _, wantText := range []string{"do not access the daemon socket", "LOOP_VERIFY_RESULT_BEGIN", "protocol_version: 1", "project_id:", "milestone_id:", "run_id:", "verdict: APPROVE | REJECT | UNCERTAIN", "next_action:", "LOOP_VERIFY_RESULT_END", "exactly one"} {
+					if !strings.Contains(bootstrap, wantText) {
+						t.Fatalf("verifier bootstrap = %q, missing %q", bootstrap, wantText)
+					}
+				}
+				if strings.Contains(bootstrap, "ctl message") {
+					t.Fatalf("verifier bootstrap instructs outbound daemon message: %q", bootstrap)
+				}
+			} else if !strings.Contains(bootstrap, "ctl message") {
+				t.Fatalf("worker bootstrap missing ctl message: %q", bootstrap)
 			}
 		})
 	}

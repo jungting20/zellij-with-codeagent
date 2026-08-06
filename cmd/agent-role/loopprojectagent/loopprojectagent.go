@@ -105,8 +105,23 @@ func bootstrapPrompt(mode Mode, repository, runnerSkill, orchestratorPane string
 	role := "loop-project-worker"
 	permission := "You may make code changes only after receiving an assignment from the orchestrator."
 	if mode == ModeVerifier {
-		role = "loop-project-verifier"
-		permission = "code_changes: FORBIDDEN"
+		return fmt.Sprintf(`You are the loop-project-verifier.
+Repository: %s
+Runner skill: %s
+Orchestrator logical pane ID: %s
+
+Until the orchestrator sends an assignment, do not write or modify repository files.
+code_changes: FORBIDDEN
+do not access the daemon socket and do not send outbound zellij-agent control messages.
+After read-only inspection, print exactly one result block to stdout and no second block:
+LOOP_VERIFY_RESULT_BEGIN
+protocol_version: 1
+project_id: <assigned project id>
+milestone_id: <assigned milestone id>
+run_id: <assigned run id>
+verdict: APPROVE | REJECT | UNCERTAIN
+next_action: <one bounded action>
+LOOP_VERIFY_RESULT_END`, repository, runnerSkill, orchestratorPane)
 	}
 	return fmt.Sprintf(`You are the %s.
 Repository: %s

@@ -1180,6 +1180,9 @@ func TestServerHealth(t *testing.T) {
 	if !bytes.Contains(response.Body.Bytes(), []byte(`"status":"ok"`)) {
 		t.Fatalf("body = %s, want ok status", response.Body.String())
 	}
+	if !bytes.Contains(response.Body.Bytes(), []byte(`"capabilities":["agent_access_read_only_v1"]`)) {
+		t.Fatalf("body = %s, want read-only capability", response.Body.String())
+	}
 }
 
 func (f *fakeRuntimeService) ListSessions(context.Context) ([]rt.SessionRecord, error) {

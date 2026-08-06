@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"reflect"
@@ -17,27 +19,30 @@ import (
 )
 
 type PaneIDGenerator func() PaneID
+type OwnershipTokenGenerator func() (OwnershipToken, error)
 
 type Options struct {
 	Registry           *registry.Registry
 	Backend            zellij.Backend
 	SessionSwitcher    zellij.SessionSwitcher
 	NewPaneID          PaneIDGenerator
+	NewOwnershipToken  OwnershipTokenGenerator
 	EventBus           *eventbus.Bus
 	SubscriptionRunner SubscriptionRunner
 	PaneObserver       PaneObserver
 }
 
 type Service struct {
-	registry  *registry.Registry
-	backend   zellij.Backend
-	switcher  zellij.SessionSwitcher
-	newPaneID PaneIDGenerator
-	bus       *eventbus.Bus
-	subs      *SubscriptionManager
-	observer  PaneObserver
-	createMu  sync.Mutex
-	creates   map[PaneID]*createPaneCall
+	registry          *registry.Registry
+	backend           zellij.Backend
+	switcher          zellij.SessionSwitcher
+	newPaneID         PaneIDGenerator
+	newOwnershipToken OwnershipTokenGenerator
+	bus               *eventbus.Bus
+	subs              *SubscriptionManager
+	observer          PaneObserver
+	createMu          sync.Mutex
+	creates           map[PaneID]*createPaneCall
 }
 
 type createPaneCall struct {
@@ -70,6 +75,10 @@ func NewService(opts Options) *Service {
 	if newPaneID == nil {
 		newPaneID = sequentialPaneIDGenerator()
 	}
+	newOwnershipToken := opts.NewOwnershipToken
+	if newOwnershipToken == nil {
+		newOwnershipToken = randomOwnershipToken
+	}
 
 	bus := opts.EventBus
 	if bus == nil {
@@ -88,14 +97,15 @@ func NewService(opts Options) *Service {
 	}
 
 	return &Service{
-		registry:  reg,
-		backend:   backend,
-		switcher:  switcher,
-		newPaneID: newPaneID,
-		bus:       bus,
-		subs:      subs,
-		observer:  opts.PaneObserver,
-		creates:   make(map[PaneID]*createPaneCall),
+		registry:          reg,
+		backend:           backend,
+		switcher:          switcher,
+		newPaneID:         newPaneID,
+		newOwnershipToken: newOwnershipToken,
+		bus:               bus,
+		subs:              subs,
+		observer:          opts.PaneObserver,
+		creates:           make(map[PaneID]*createPaneCall),
 	}
 }
 
@@ -223,6 +233,10 @@ func samePaneGeneration(want, got registry.PaneRecord) bool {
 }
 
 func (s *Service) createPaneOnce(ctx context.Context, req CreatePaneRequest, id PaneID) (CreatePaneResponse, error) {
+	ownershipToken, err := s.newOwnershipToken()
+	if err != nil {
+		return CreatePaneResponse{}, fmt.Errorf("generate pane ownership token: %w", err)
+	}
 	zellijID, tabID, tabName, cleanup, err := s.createBackendPane(ctx, req)
 	if err != nil {
 		return CreatePaneResponse{}, createPaneCleanupError(err, cleanup(ctx))
@@ -236,17 +250,18 @@ func (s *Service) createPaneOnce(ctx context.Context, req CreatePaneRequest, id 
 	}
 
 	record, err := s.registry.RegisterPane(registry.RegisterPaneRequest{
-		ID:           registry.PaneID(id),
-		SessionID:    registry.SessionID(req.ZellijSession),
-		TabID:        regTabID,
-		TaskID:       registry.TaskID(req.TaskID),
-		AgentID:      registry.AgentID(req.AgentID),
-		ZellijPaneID: registry.ZellijPaneID(zellijID),
-		ZellijTabID:  registryTabID(tabID),
-		TabName:      tabName,
-		Role:         string(req.Role),
-		Command:      cloneStrings(req.Command),
-		CWD:          req.CWD,
+		ID:             registry.PaneID(id),
+		OwnershipToken: registry.OwnershipToken(ownershipToken),
+		SessionID:      registry.SessionID(req.ZellijSession),
+		TabID:          regTabID,
+		TaskID:         registry.TaskID(req.TaskID),
+		AgentID:        registry.AgentID(req.AgentID),
+		ZellijPaneID:   registry.ZellijPaneID(zellijID),
+		ZellijTabID:    registryTabID(tabID),
+		TabName:        tabName,
+		Role:           string(req.Role),
+		Command:        cloneStrings(req.Command),
+		CWD:            req.CWD,
 	})
 	if err != nil {
 		return CreatePaneResponse{}, createPaneCleanupError(err, cleanup(ctx))
@@ -679,23 +694,32 @@ func sequentialPaneIDGenerator() PaneIDGenerator {
 
 func paneFromRecord(record registry.PaneRecord) Pane {
 	return Pane{
-		ID:            PaneID(record.ID),
-		SessionID:     SessionID(record.SessionID),
-		TabID:         TabID(record.TabID),
-		TaskID:        TaskID(record.TaskID),
-		AgentID:       AgentID(record.AgentID),
-		ZellijPaneID:  ZellijPaneID(record.ZellijPaneID),
-		ZellijTabID:   runtimeTabID(record.ZellijTabID),
-		TabName:       record.TabName,
-		Role:          record.Role,
-		Command:       cloneStrings(record.Command),
-		CWD:           record.CWD,
-		Status:        PaneStatus(record.Status),
-		LastOutput:    record.LastOutput,
-		StatusMessage: record.StatusMessage,
-		CreatedAt:     record.CreatedAt,
-		UpdatedAt:     record.UpdatedAt,
+		ID:             PaneID(record.ID),
+		OwnershipToken: OwnershipToken(record.OwnershipToken),
+		SessionID:      SessionID(record.SessionID),
+		TabID:          TabID(record.TabID),
+		TaskID:         TaskID(record.TaskID),
+		AgentID:        AgentID(record.AgentID),
+		ZellijPaneID:   ZellijPaneID(record.ZellijPaneID),
+		ZellijTabID:    runtimeTabID(record.ZellijTabID),
+		TabName:        record.TabName,
+		Role:           record.Role,
+		Command:        cloneStrings(record.Command),
+		CWD:            record.CWD,
+		Status:         PaneStatus(record.Status),
+		LastOutput:     record.LastOutput,
+		StatusMessage:  record.StatusMessage,
+		CreatedAt:      record.CreatedAt,
+		UpdatedAt:      record.UpdatedAt,
 	}
+}
+
+func randomOwnershipToken() (OwnershipToken, error) {
+	var raw [24]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return OwnershipToken(hex.EncodeToString(raw[:])), nil
 }
 
 func cloneStrings(values []string) []string {

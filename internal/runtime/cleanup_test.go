@@ -90,6 +90,30 @@ func TestCleanupReportsUnknownRequestedPane(t *testing.T) {
 	assertPaneStatus(t, service, "pane-2", PaneStatusStarting)
 }
 
+func TestCleanupOwnershipTokenMismatchPreservesPane(t *testing.T) {
+	backend := &fakeBackend{createID: "terminal_5"}
+	service := NewService(Options{Backend: backend, NewOwnershipToken: func() (OwnershipToken, error) { return "current-token", nil }})
+	pane := mustCreatePane(t, service, CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"})
+	response, err := service.Cleanup(context.Background(), CleanupRequest{Targets: []CleanupTarget{{PaneID: pane.ID, OwnershipToken: "stale-token"}}})
+	if err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	if len(response.Skipped) != 1 || response.Skipped[0].ID != pane.ID || len(backend.closeRequests) != 0 {
+		t.Fatalf("Cleanup()=%#v closes=%#v", response, backend.closeRequests)
+	}
+	assertPaneStatus(t, service, pane.ID, PaneStatusStarting)
+}
+
+func TestCleanupOwnershipTokenMatchClosesPane(t *testing.T) {
+	backend := &fakeBackend{createID: "terminal_5"}
+	service := NewService(Options{Backend: backend, NewOwnershipToken: func() (OwnershipToken, error) { return "owned-token", nil }})
+	pane := mustCreatePane(t, service, CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"})
+	response, err := service.Cleanup(context.Background(), CleanupRequest{Targets: []CleanupTarget{{PaneID: pane.ID, OwnershipToken: pane.OwnershipToken}}})
+	if err != nil || len(response.Closed) != 1 || len(backend.closeRequests) != 1 {
+		t.Fatalf("Cleanup()=%#v err=%v closes=%#v", response, err, backend.closeRequests)
+	}
+}
+
 func TestCleanupRoutesCloseByRecordSession(t *testing.T) {
 	backend := &fakeBackend{createIDs: []zellij.PaneID{"terminal_a", "terminal_b"}}
 	service := newTestService(backend)

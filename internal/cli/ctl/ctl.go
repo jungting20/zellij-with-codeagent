@@ -89,11 +89,20 @@ func runHealth(args []string, stdout, stderr io.Writer, newClient ClientFactory)
 		return 1
 	}
 	if response.Version != "" {
-		fmt.Fprintf(stdout, "agentd %s (%s)\n", response.Status, response.Version)
+		fmt.Fprintf(stdout, "agentd %s (%s)", response.Status, response.Version)
+		printCapabilities(stdout, response.Capabilities)
 		return 0
 	}
-	fmt.Fprintf(stdout, "agentd %s\n", response.Status)
+	fmt.Fprintf(stdout, "agentd %s", response.Status)
+	printCapabilities(stdout, response.Capabilities)
 	return 0
+}
+
+func printCapabilities(w io.Writer, capabilities []string) {
+	if len(capabilities) > 0 {
+		fmt.Fprintf(w, " capabilities=%s", strings.Join(capabilities, ","))
+	}
+	fmt.Fprintln(w)
 }
 
 func runStatus(args []string, stdout, stderr io.Writer, newClient ClientFactory) int {
@@ -419,11 +428,29 @@ func runFollowEvents(opts *commandOptions, eventTypes []string, stdout, stderr i
 func runCleanup(args []string, stdout, stderr io.Writer, newClient ClientFactory) int {
 	fs, opts := newFlagSet("cleanup", stderr)
 	var paneIDs repeatedStrings
+	var ownershipTokens repeatedStrings
 	fs.Var(&paneIDs, "pane", "logical pane id to close; can be repeated")
+	fs.Var(&ownershipTokens, "ownership-token", "opaque pane ownership token paired by position with --pane; can be repeated")
 	taskID := fs.String("task", "", "task id filter")
 	role := fs.String("role", "", "role filter")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	var targets []transport.CleanupTarget
+	if len(ownershipTokens) > 0 {
+		if len(paneIDs) == 0 || len(paneIDs) != len(ownershipTokens) {
+			fmt.Fprintln(stderr, "cleanup requires equal non-zero --pane and --ownership-token counts")
+			return 2
+		}
+		targets = make([]transport.CleanupTarget, len(paneIDs))
+		for i := range paneIDs {
+			if strings.TrimSpace(paneIDs[i]) == "" || strings.TrimSpace(ownershipTokens[i]) == "" {
+				fmt.Fprintln(stderr, "cleanup requires non-empty --pane and --ownership-token values")
+				return 2
+			}
+			targets[i] = transport.CleanupTarget{PaneID: paneIDs[i], OwnershipToken: ownershipTokens[i]}
+		}
+		paneIDs = nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
@@ -431,6 +458,7 @@ func runCleanup(args []string, stdout, stderr io.Writer, newClient ClientFactory
 
 	response, err := newClient(opts.socketPath, opts.timeout).Cleanup(ctx, transport.CleanupRequest{
 		PaneIDs: paneIDs,
+		Targets: targets,
 		TaskID:  *taskID,
 		Role:    *role,
 	})

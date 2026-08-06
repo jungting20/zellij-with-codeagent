@@ -46,7 +46,7 @@ func TestProfileBuildManagedCommandReadOnlyCodex(t *testing.T) {
 		t.Fatal("LookupProfile(codex) missing")
 	}
 
-	got, err := profile.BuildManagedCommand(codingagent.AccessReadOnly, []string{"review this repository"})
+	got, err := profile.BuildManagedCommand(codingagent.AccessReadOnly, "review this repository", nil)
 	want := []string{"codex", "--sandbox", "read-only", "--ask-for-approval", "never", "review this repository"}
 	if err != nil || !slices.Equal(got, want) {
 		t.Fatalf("BuildManagedCommand() = %#v, %v; want %#v, nil", got, err, want)
@@ -62,7 +62,7 @@ func TestProfileBuildManagedCommandFullPreservesBypassCommand(t *testing.T) {
 		t.Fatal("LookupProfile(codex) missing")
 	}
 
-	got, err := profile.BuildManagedCommand(codingagent.AccessFull, []string{"implement this"})
+	got, err := profile.BuildManagedCommand(codingagent.AccessFull, "", []string{"implement this"})
 	want := []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "implement this"}
 	if err != nil || !slices.Equal(got, want) {
 		t.Fatalf("BuildManagedCommand() = %#v, %v; want %#v, nil", got, err, want)
@@ -74,7 +74,7 @@ func TestProfileBuildManagedCommandRejectsUnsupportedAccess(t *testing.T) {
 	if !ok {
 		t.Fatal("LookupProfile(codex) missing")
 	}
-	if _, err := profile.BuildManagedCommand(codingagent.AccessMode("limited"), nil); !errors.Is(err, codingagent.ErrInvalidAccessMode) {
+	if _, err := profile.BuildManagedCommand(codingagent.AccessMode("limited"), "", nil); !errors.Is(err, codingagent.ErrInvalidAccessMode) {
 		t.Fatalf("BuildManagedCommand(limited) error = %v, want ErrInvalidAccessMode", err)
 	}
 }
@@ -84,8 +84,27 @@ func TestProfileBuildManagedCommandRejectsReadOnlyNonCodex(t *testing.T) {
 	if !ok {
 		t.Fatal("LookupProfile(gemini) missing")
 	}
-	if _, err := profile.BuildManagedCommand(codingagent.AccessReadOnly, nil); !errors.Is(err, codingagent.ErrInvalidAccessMode) {
+	if _, err := profile.BuildManagedCommand(codingagent.AccessReadOnly, "", nil); !errors.Is(err, codingagent.ErrInvalidAccessMode) {
 		t.Fatalf("BuildManagedCommand(read-only Gemini) error = %v, want ErrInvalidAccessMode", err)
+	}
+}
+
+func TestProfileBuildManagedCommandRejectsReadOnlyOptionInjection(t *testing.T) {
+	profile, _ := codingagent.LookupProfile(codingagent.KindCodex)
+	for _, tc := range []struct {
+		name   string
+		prompt string
+		extra  []string
+	}{
+		{name: "arbitrary arguments", extra: []string{"--dangerously-bypass-approvals-and-sandbox"}},
+		{name: "option-like prompt", prompt: "--config sandbox=workspace-write"},
+		{name: "additional writable directory", prompt: "--add-dir /tmp"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := profile.BuildManagedCommand(codingagent.AccessReadOnly, tc.prompt, tc.extra); !errors.Is(err, codingagent.ErrInvalidAccessMode) {
+				t.Fatalf("BuildManagedCommand() error = %v, want ErrInvalidAccessMode", err)
+			}
+		})
 	}
 }
 

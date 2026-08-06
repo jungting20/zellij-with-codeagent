@@ -40,6 +40,33 @@ func TestCreatePanePropagatesZellijSession(t *testing.T) {
 	}
 }
 
+func TestCreatePaneAssignsDistinctOwnershipTokens(t *testing.T) {
+	backend := &fakeBackend{createIDs: []zellij.PaneID{"terminal_a", "terminal_b"}}
+	tokens := []OwnershipToken{"token-a", "token-b"}
+	service := NewService(Options{Registry: registry.New(), Backend: backend, NewOwnershipToken: func() (OwnershipToken, error) {
+		token := tokens[0]
+		tokens = tokens[1:]
+		return token, nil
+	}})
+	first := mustCreatePane(t, service, CreatePaneRequest{ID: "pane-a", ZellijSession: "session-a"})
+	second := mustCreatePane(t, service, CreatePaneRequest{ID: "pane-b", ZellijSession: "session-a"})
+	if first.OwnershipToken != "token-a" || second.OwnershipToken != "token-b" || first.OwnershipToken == second.OwnershipToken {
+		t.Fatalf("tokens = %q, %q", first.OwnershipToken, second.OwnershipToken)
+	}
+}
+
+func TestCreatePaneOwnershipTokenFailureHasNoBackendSideEffects(t *testing.T) {
+	backend := &fakeBackend{createID: "terminal_a"}
+	service := NewService(Options{Backend: backend, NewOwnershipToken: func() (OwnershipToken, error) { return "", errors.New("entropy unavailable") }})
+	_, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-a", ZellijSession: "session-a"})
+	if err == nil || !strings.Contains(err.Error(), "entropy unavailable") {
+		t.Fatalf("CreatePane() error = %v", err)
+	}
+	if len(backend.createRequests) != 0 || len(service.registry.ListPanes()) != 0 {
+		t.Fatalf("token failure caused side effects: creates=%d records=%d", len(backend.createRequests), len(service.registry.ListPanes()))
+	}
+}
+
 func TestCreatePaneSharesResultForConcurrentIdenticalLogicalRequest(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
