@@ -216,6 +216,40 @@ func TestServiceStartAgentAppliesCanonicalAccessModeAndCommand(t *testing.T) {
 	}
 }
 
+func TestServiceReadOnlyClaimsAndReturnsNoBypassCommand(t *testing.T) {
+	cwd := t.TempDir()
+	runtimeService := &serviceFakeRuntime{}
+	service := NewService(ServiceOptions{
+		RuntimeService:   runtimeService,
+		Store:            NewMemoryStore(nil),
+		LifecycleMonitor: &serviceFakeMonitor{},
+		NewAgentID:       func() ID { return "agent-1" },
+	})
+
+	response, err := service.StartAgent(context.Background(), StartAgentRequest{
+		Kind:                KindCodex,
+		AccessMode:          AccessReadOnly,
+		CWD:                 cwd,
+		ExtraArgs:           []string{"Verify M1"},
+		SourceZellijSession: "physical-a",
+		SourceZellijPaneID:  "terminal_2",
+	})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+
+	want := []string{"codex", "--sandbox", "read-only", "--ask-for-approval", "never", "Verify M1"}
+	if !reflect.DeepEqual(response.Agent.Pane.Command, want) {
+		t.Fatalf("response pane command = %#v, want %#v", response.Agent.Pane.Command, want)
+	}
+	if len(runtimeService.claimed) != 1 || !reflect.DeepEqual(runtimeService.claimed[0].Command, want) {
+		t.Fatalf("ClaimPane command = %#v, want %#v", runtimeService.claimed, want)
+	}
+	if slices.Contains(response.Agent.Pane.Command, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Fatalf("read-only command includes permission bypass: %#v", response.Agent.Pane.Command)
+	}
+}
+
 func TestServiceStartAgentRejectsUnsupportedAccessBeforeSideEffects(t *testing.T) {
 	tests := []struct {
 		name   string

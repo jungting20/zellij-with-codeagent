@@ -15,6 +15,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"zellij-with-codeagent/internal/agentdashboard"
+	"zellij-with-codeagent/internal/codingagent"
+	"zellij-with-codeagent/internal/runtime"
 	"zellij-with-codeagent/internal/transport"
 )
 
@@ -281,16 +283,23 @@ func TestRunStartSendsValidatedRequest(t *testing.T) {
 	}
 }
 
-func TestRunStartSendsReadOnlyAccessRequest(t *testing.T) {
+func TestRunStartPassesServiceGeneratedReadOnlyCommandToRunner(t *testing.T) {
 	cwd := t.TempDir()
-	client := &testClient{response: started("agent-1", "codex", "agent-1", []string{"codex", "--sandbox", "read-only", "--ask-for-approval", "never"}, cwd)}
+	runtimeService := &serviceCommandRuntime{}
+	service := codingagent.NewService(codingagent.ServiceOptions{
+		RuntimeService:   runtimeService,
+		Store:            codingagent.NewMemoryStore(nil),
+		LifecycleMonitor: serviceCommandMonitor{},
+		NewAgentID:       func() codingagent.ID { return "agent-1" },
+	})
+	client := &serviceBackedClient{service: service}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"start", "codex", "--access", "read-only"}, strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
+	code := Run([]string{"start", "codex", "--access", "read-only", "--", "Verify M1"}, strings.NewReader(""), &stdout, &stderr, serviceBackedClientFactory(client), Config{
 		Getwd:  func() (string, error) { return cwd, nil },
 		Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}),
 		RunAgent: func(command []string, gotCWD string, _ io.Reader, _, _ io.Writer) error {
-			want := []string{"codex", "--sandbox", "read-only", "--ask-for-approval", "never"}
+			want := []string{"codex", "--sandbox", "read-only", "--ask-for-approval", "never", "Verify M1"}
 			if !reflect.DeepEqual(command, want) || gotCWD != cwd {
 				t.Fatalf("runner command=%#v cwd=%q, want %#v %q", command, gotCWD, want, cwd)
 			}
@@ -308,6 +317,10 @@ func TestRunStartSendsReadOnlyAccessRequest(t *testing.T) {
 	}
 	if client.request.Access != "read-only" {
 		t.Fatalf("StartAgent access = %q, want read-only", client.request.Access)
+	}
+	want := []string{"codex", "--sandbox", "read-only", "--ask-for-approval", "never", "Verify M1"}
+	if len(runtimeService.claimed) != 1 || !reflect.DeepEqual(runtimeService.claimed[0].Command, want) {
+		t.Fatalf("ClaimPane command = %#v, want %#v", runtimeService.claimed, want)
 	}
 }
 
@@ -742,6 +755,67 @@ func testFactory(client *testClient) ClientFactory {
 		client.timeout = timeout
 		return client
 	}
+}
+
+type serviceCommandRuntime struct {
+	runtime.RuntimeService
+	claimed []runtime.ClaimPaneRequest
+}
+
+func (r *serviceCommandRuntime) ClaimPane(_ context.Context, request runtime.ClaimPaneRequest) (runtime.ClaimPaneResponse, error) {
+	r.claimed = append(r.claimed, request)
+	return runtime.ClaimPaneResponse{Pane: runtime.Pane{
+		ID:           request.ID,
+		AgentID:      request.AgentID,
+		Role:         request.Role,
+		SessionID:    runtime.SessionID(request.ZellijSession),
+		ZellijPaneID: request.ZellijPaneID,
+		Command:      append([]string(nil), request.Command...),
+		CWD:          request.CWD,
+	}}, nil
+}
+
+type serviceCommandMonitor struct{}
+
+func (serviceCommandMonitor) Start(codingagent.Record) error { return nil }
+func (serviceCommandMonitor) Stop(codingagent.ID)            {}
+
+type serviceBackedClient struct {
+	service *codingagent.Service
+	request transport.StartAgentRequest
+}
+
+func (c *serviceBackedClient) StartAgent(ctx context.Context, request transport.StartAgentRequest) (transport.StartAgentResponse, error) {
+	c.request = request
+	response, err := c.service.StartAgent(ctx, request.ToCodingAgent())
+	if err != nil {
+		return transport.StartAgentResponse{}, err
+	}
+	return transport.StartAgentFromCodingAgent(response), nil
+}
+
+func (c *serviceBackedClient) ClosePane(_ context.Context, paneID string) (transport.ClosePaneResponse, error) {
+	return transport.ClosePaneResponse{Pane: transport.Pane{ID: paneID}}, nil
+}
+
+func (*serviceBackedClient) ListAgents(context.Context) (transport.ListAgentsResponse, error) {
+	return transport.ListAgentsResponse{}, nil
+}
+
+func (*serviceBackedClient) FocusAgent(context.Context, string, transport.FocusAgentRequest) (transport.FocusAgentResponse, error) {
+	return transport.FocusAgentResponse{}, nil
+}
+
+func (*serviceBackedClient) FocusNextAgent(context.Context, transport.FocusNextAgentRequest) (transport.FocusNextAgentResponse, error) {
+	return transport.FocusNextAgentResponse{}, nil
+}
+
+func (*serviceBackedClient) StreamEvents(context.Context) (*transport.EventStream, error) {
+	return &transport.EventStream{}, nil
+}
+
+func serviceBackedClientFactory(client *serviceBackedClient) ClientFactory {
+	return func(string, time.Duration) AgentClient { return client }
 }
 
 func mapGetenv(values map[string]string) func(string) string {
