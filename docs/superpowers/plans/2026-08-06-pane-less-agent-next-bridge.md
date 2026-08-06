@@ -6,7 +6,7 @@
 
 **Architecture:** A small `zellij-tile` plugin receives `MessagePlugin` pipe messages, resolves the source Zellij session and terminal pane for its client, and runs the existing `zellij-agent agent next` CLI in the host background with explicit Zellij environment variables. The existing CLI, Unix-socket transport, daemon cursor, idle filter, and `RuntimeService` focus boundary remain authoritative.
 
-**Tech Stack:** Rust 1.88, `zellij-tile = 0.44.1`, `wasm32-unknown-unknown`, Bash, Zellij 0.44.1, and the existing Go test suite.
+**Tech Stack:** Rust 1.88, `zellij-tile = 0.44.1`, `wasm32-wasip1`, Bash, Zellij 0.44.1, and the existing Go test suite.
 
 ## Global Constraints
 
@@ -15,6 +15,7 @@
 - Keep both bindings active in every current mode except `locked`.
 - Invoke the public CLI; do not duplicate navigation or bypass the daemon/runtime boundary.
 - Pin `zellij-tile` exactly to `=0.44.1`, matching installed Zellij `0.44.1`.
+- Build plugins with Zellij's official `wasm32-wasip1` target.
 - Treat this as background logic, so no new default role is required.
 - Install WASM atomically at `~/.config/zellij/plugins/agent-next-bridge.wasm`.
 - Configure `/Users/in05908_mac/.config/custom-cli/zellij-agent` explicitly instead of relying on `PATH`.
@@ -198,8 +199,8 @@ Drop and log only the failed job when context resolution fails. Do not retry, re
 
 ```bash
 cargo test --manifest-path plugins/agent-next-bridge/Cargo.toml
-cargo build --release --target wasm32-unknown-unknown --manifest-path plugins/agent-next-bridge/Cargo.toml
-test -s plugins/agent-next-bridge/target/wasm32-unknown-unknown/release/agent_next_bridge.wasm
+cargo build --release --target wasm32-wasip1 --manifest-path plugins/agent-next-bridge/Cargo.toml
+test -s plugins/agent-next-bridge/target/wasm32-wasip1/release/agent_next_bridge.wasm
 ```
 
 Expected: all commands exit 0.
@@ -207,7 +208,7 @@ Expected: all commands exit 0.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/agent-next-bridge/src
+git add docs/superpowers/plans/2026-08-06-pane-less-agent-next-bridge.md plugins/agent-next-bridge/src
 git commit -m "feat: 백그라운드 에이전트 순회 플러그인 추가"
 ```
 
@@ -235,7 +236,7 @@ Expected: FAIL because the script does not exist. Remove only the exact temporar
 
 - [ ] **Step 2: Implement strict atomic installation**
 
-Create a `set -euo pipefail` script that resolves the repository relative to itself, builds the exact manifest with `--release --target wasm32-unknown-unknown`, creates the destination directory, copies into `mktemp` inside that directory, applies mode `0644`, and uses `mv -f` for atomic replacement. A trap must remove only the resolved temporary file on failure. Print the final absolute path; do not edit config.
+Create a `set -euo pipefail` script that resolves the repository relative to itself, builds the exact manifest with `--release --target wasm32-wasip1`, creates the destination directory, copies into `mktemp` inside that directory, applies mode `0644`, and uses `mv -f` for atomic replacement. A trap must remove only the resolved temporary file on failure. Print the final absolute path; do not edit config.
 
 - [ ] **Step 3: Verify installer behavior**
 
@@ -281,7 +282,7 @@ git commit -m "docs: 패인 없는 순회 설치와 검증 절차 추가"
 
 ```bash
 cargo test --manifest-path plugins/agent-next-bridge/Cargo.toml
-cargo build --release --target wasm32-unknown-unknown --manifest-path plugins/agent-next-bridge/Cargo.toml
+cargo build --release --target wasm32-wasip1 --manifest-path plugins/agent-next-bridge/Cargo.toml
 go test ./...
 git diff --check
 ```

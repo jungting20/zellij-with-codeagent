@@ -21,11 +21,11 @@ enum Permission {
 }
 
 struct QueuedRequest {
-    executable: String,
     navigation: Navigation,
 }
 
 pub struct BridgeModel {
+    executable: Option<String>,
     permission: Permission,
     session_name: String,
     last_terminal: Option<u32>,
@@ -34,25 +34,29 @@ pub struct BridgeModel {
 
 impl Default for BridgeModel {
     fn default() -> Self {
+        Self::new(None)
+    }
+}
+
+impl BridgeModel {
+    pub fn new(executable: Option<String>) -> Self {
+        let executable = executable
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
         Self {
+            executable,
             permission: Permission::Pending,
             session_name: String::new(),
             last_terminal: None,
             queue: Vec::new(),
         }
     }
-}
 
-impl BridgeModel {
-    pub fn queue(&mut self, executable: impl AsRef<str>, navigation: Navigation) {
-        let executable = executable.as_ref().trim();
-        if executable.is_empty() {
+    pub fn queue(&mut self, navigation: Navigation) {
+        if self.executable.is_none() {
             return;
         }
-        self.queue.push(QueuedRequest {
-            executable: executable.into(),
-            navigation,
-        });
+        self.queue.push(QueuedRequest { navigation });
     }
 
     pub fn set_permission(&mut self, granted: bool) {
@@ -65,24 +69,31 @@ impl BridgeModel {
     }
 
     pub fn set_session_name(&mut self, session_name: impl AsRef<str>) {
-        self.session_name = session_name.as_ref().into();
+        self.session_name = session_name.as_ref().trim().into();
     }
 
     pub fn set_last_terminal(&mut self, last_terminal: Option<u32>) {
         self.last_terminal = last_terminal;
     }
 
+    pub fn resolve_source_pane(&self, focused: PaneId) -> Result<String, String> {
+        source_pane_id(focused, self.last_terminal)
+    }
+
     pub fn take_ready(&mut self) -> Vec<ReadyJob> {
-        let session_name = self.session_name.trim();
-        if self.permission != Permission::Granted || session_name.is_empty() {
+        let Some(executable) = self.executable.as_ref() else {
+            return Vec::new();
+        };
+        if self.permission != Permission::Granted || self.session_name.is_empty() {
             return Vec::new();
         }
 
-        let session_name = session_name.to_owned();
+        let executable = executable.clone();
+        let session_name = self.session_name.clone();
         self.queue
             .drain(..)
             .map(|request| ReadyJob {
-                executable: request.executable,
+                executable: executable.clone(),
                 session_name: session_name.clone(),
                 navigation: request.navigation,
             })
@@ -100,10 +111,10 @@ pub fn parse_navigation(name: &str, payload: Option<&str>) -> Result<Navigation,
     }
 }
 
-pub fn command_argv(executable: &str, navigation: Navigation) -> Vec<&str> {
-    let mut argv = vec![executable, "agent", "next"];
+pub fn command_argv(executable: &str, navigation: Navigation) -> Vec<String> {
+    let mut argv = vec![executable.into(), "agent".into(), "next".into()];
     if navigation == Navigation::IdleOnly {
-        argv.push("--idle-only");
+        argv.push("--idle-only".into());
     }
     argv
 }
@@ -165,17 +176,92 @@ mod tests {
     }
 
     #[test]
-    fn queues_requests_until_ready_then_drains_each_once() {
+    fn resolves_plugin_focus_from_remembered_terminal() {
         let mut model = BridgeModel::default();
-        model.queue("/opt/zellij-agent", Navigation::All);
-        model.queue("/opt/zellij-agent", Navigation::IdleOnly);
+        model.set_last_terminal(Some(7));
 
-        assert!(model.take_ready().is_empty());
+        assert_eq!(
+            model.resolve_source_pane(PaneId::Plugin(2)),
+            Ok("terminal_7".into())
+        );
+    }
 
+    #[test]
+    fn permission_before_session_releases_queued_work() {
+        let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
+        model.queue(Navigation::All);
         model.set_permission(true);
         assert!(model.take_ready().is_empty());
+        model.set_session_name("work");
 
+        assert_eq!(
+            model.take_ready(),
+            vec![ReadyJob {
+                executable: "/opt/zellij-agent".into(),
+                session_name: "work".into(),
+                navigation: Navigation::All,
+            }]
+        );
+    }
+
+    #[test]
+    fn session_before_permission_releases_queued_work() {
+        let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
+        model.queue(Navigation::IdleOnly);
+        model.set_session_name("work");
+        assert!(model.take_ready().is_empty());
+        model.set_permission(true);
+
+        assert_eq!(
+            model.take_ready(),
+            vec![ReadyJob {
+                executable: "/opt/zellij-agent".into(),
+                session_name: "work".into(),
+                navigation: Navigation::IdleOnly,
+            }]
+        );
+    }
+
+    #[test]
+    fn drains_ready_work_only_once() {
+        let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
+        model.set_permission(true);
+        model.set_session_name("work");
+        model.queue(Navigation::All);
+
+        assert_eq!(model.take_ready().len(), 1);
+        assert!(model.take_ready().is_empty());
+    }
+
+    #[test]
+    fn discards_queued_requests_when_permission_is_denied() {
+        let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
+        model.queue(Navigation::All);
+        model.set_permission(false);
+        model.set_permission(true);
+        model.set_session_name("work");
+
+        assert!(model.take_ready().is_empty());
+    }
+
+    #[test]
+    fn ignores_whitespace_only_executable_configuration() {
+        let mut model = BridgeModel::new(Some(" \t\n ".into()));
+        model.set_permission(true);
+        model.set_session_name("work");
+        model.queue(Navigation::All);
+
+        assert!(model.take_ready().is_empty());
+    }
+
+    #[test]
+    fn preserves_two_consecutive_keypresses_as_two_jobs() {
+        let mut model = BridgeModel::new(Some("  /opt/zellij-agent  ".into()));
+        model.set_permission(true);
         model.set_session_name("  work  ");
+        model.queue(Navigation::All);
+        model.queue(Navigation::All);
+
         assert_eq!(
             model.take_ready(),
             vec![
@@ -187,21 +273,9 @@ mod tests {
                 ReadyJob {
                     executable: "/opt/zellij-agent".into(),
                     session_name: "work".into(),
-                    navigation: Navigation::IdleOnly,
+                    navigation: Navigation::All,
                 },
             ]
         );
-        assert!(model.take_ready().is_empty());
-    }
-
-    #[test]
-    fn discards_queued_requests_when_permission_is_denied() {
-        let mut model = BridgeModel::default();
-        model.queue("/opt/zellij-agent", Navigation::All);
-        model.set_permission(false);
-        model.set_permission(true);
-        model.set_session_name("work");
-
-        assert!(model.take_ready().is_empty());
     }
 }
