@@ -173,6 +173,27 @@ func TestMemoryStoreValidatesRecordsAndUpdates(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreAcceptsCanonicalAccessModes(t *testing.T) {
+	store := codingagent.NewMemoryStore(time.Now)
+	for _, mode := range []codingagent.AccessMode{"", codingagent.AccessFull, codingagent.AccessReadOnly} {
+		record := testRecord(codingagent.ID("agent-"+string(mode)), runtime.PaneID("pane-"+string(mode)), time.Unix(10, 0))
+		record.AccessMode = mode
+		if _, err := store.Create(record); err != nil {
+			t.Fatalf("Create(access %q) error = %v", mode, err)
+		}
+	}
+}
+
+func TestMemoryStoreRejectsUnknownAccessMode(t *testing.T) {
+	store := codingagent.NewMemoryStore(time.Now)
+	record := testRecord("agent-1", "pane-1", time.Unix(10, 0))
+	record.AccessMode = "limited"
+	_, err := store.Create(record)
+	if !errors.Is(err, codingagent.ErrInvalidRecord) || !errors.Is(err, codingagent.ErrInvalidAccessMode) {
+		t.Fatalf("Create(unknown access) error = %v, want ErrInvalidRecord and ErrInvalidAccessMode", err)
+	}
+}
+
 func testRecord(id codingagent.ID, paneID runtime.PaneID, createdAt time.Time) codingagent.Record {
 	return codingagent.Record{
 		ID:             id,

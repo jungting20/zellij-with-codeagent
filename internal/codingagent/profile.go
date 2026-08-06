@@ -76,3 +76,22 @@ func (p Profile) BuildCommand(bypass bool, extra []string) []string {
 	}
 	return append(args, extra...)
 }
+
+func (p Profile) BuildManagedCommand(access AccessMode, extra []string) ([]string, error) {
+	access, err := ParseAccessMode(string(access))
+	if err != nil {
+		return nil, err
+	}
+	switch access {
+	case AccessFull:
+		return p.BuildCommand(true, extra), nil
+	case AccessReadOnly:
+		if p.Kind != KindCodex {
+			return nil, fmt.Errorf("%w: read-only access is supported only by Codex", ErrInvalidAccessMode)
+		}
+		args := []string{p.Executable, "--sandbox", "read-only", "--ask-for-approval", "never"}
+		return append(args, extra...), nil
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrInvalidAccessMode, access)
+	}
+}

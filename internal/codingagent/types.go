@@ -20,6 +20,7 @@ const (
 type Record struct {
 	ID             ID
 	Kind           Kind
+	AccessMode     AccessMode
 	PaneID         runtime.PaneID
 	State          State
 	NotifyOnIdle   bool
