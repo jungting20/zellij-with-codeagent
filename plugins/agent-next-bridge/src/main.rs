@@ -75,7 +75,9 @@ impl ZellijPlugin for AgentNextBridge {
             Event::PermissionRequestResult(status) => {
                 let granted = status == PermissionStatus::Granted;
                 self.model.set_permission(granted);
-                if !granted {
+                if granted {
+                    self.initialize_context();
+                } else {
                     eprintln!("agent-next bridge permissions were denied; queued work discarded");
                 }
                 self.flush_ready();
@@ -100,6 +102,12 @@ impl ZellijPlugin for AgentNextBridge {
 
 #[cfg(target_family = "wasm")]
 impl AgentNextBridge {
+    fn initialize_context(&mut self) {
+        let environment = get_session_environment_variables();
+        let focused = get_focused_pane_info().ok().map(|(_, pane_id)| pane_id);
+        self.model.initialize_context(&environment, focused);
+    }
+
     fn flush_ready(&mut self) {
         for job in self.model.take_ready() {
             self.request_sequence += 1;

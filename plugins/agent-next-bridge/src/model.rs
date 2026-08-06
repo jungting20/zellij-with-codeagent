@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use zellij_tile::prelude::{get_focused_pane, PaneId, PaneManifest};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -76,6 +77,19 @@ impl BridgeModel {
         self.last_terminal = last_terminal;
     }
 
+    pub fn initialize_context(
+        &mut self,
+        environment: &BTreeMap<String, String>,
+        focused: Option<PaneId>,
+    ) {
+        if let Some(session_name) = environment.get("ZELLIJ_SESSION_NAME") {
+            self.set_session_name(session_name);
+        }
+        if let Some(PaneId::Terminal(pane_id)) = focused {
+            self.set_last_terminal(Some(pane_id));
+        }
+    }
+
     pub fn resolve_source_pane(&self, focused: PaneId) -> Result<String, String> {
         source_pane_id(focused, self.last_terminal)
     }
@@ -135,7 +149,7 @@ pub fn focused_terminal_in_tab(tab_index: usize, pane_manifest: &PaneManifest) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
     use zellij_tile::prelude::{PaneId, PaneInfo, PaneManifest};
 
     #[test]
@@ -185,6 +199,31 @@ mod tests {
         let mut model = BridgeModel::default();
         model.set_last_terminal(Some(7));
 
+        assert_eq!(
+            model.resolve_source_pane(PaneId::Plugin(2)),
+            Ok("terminal_7".into())
+        );
+    }
+
+    #[test]
+    fn startup_context_makes_first_navigation_ready_without_update_events() {
+        let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
+        model.queue(Navigation::IdleOnly);
+        model.set_permission(true);
+
+        model.initialize_context(
+            &BTreeMap::from([("ZELLIJ_SESSION_NAME".into(), "work".into())]),
+            Some(PaneId::Terminal(7)),
+        );
+
+        assert_eq!(
+            model.take_ready(),
+            vec![ReadyJob {
+                executable: "/opt/zellij-agent".into(),
+                session_name: "work".into(),
+                navigation: Navigation::IdleOnly,
+            }]
+        );
         assert_eq!(
             model.resolve_source_pane(PaneId::Plugin(2)),
             Ok("terminal_7".into())
