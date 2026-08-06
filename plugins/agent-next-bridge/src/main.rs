@@ -1,6 +1,9 @@
 #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
 mod model;
 
+#[cfg(not(target_family = "wasm"))]
+fn main() {}
+
 #[cfg(target_family = "wasm")]
 use std::collections::BTreeMap;
 

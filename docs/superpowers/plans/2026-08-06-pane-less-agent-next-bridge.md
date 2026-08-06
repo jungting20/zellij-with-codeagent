@@ -16,6 +16,7 @@
 - Invoke the public CLI; do not duplicate navigation or bypass the daemon/runtime boundary.
 - Pin `zellij-tile` exactly to `=0.44.1`, matching installed Zellij `0.44.1`.
 - Build plugins with Zellij's official `wasm32-wasip1` target.
+- Package the plugin as a WASI executable binary that exports `_start`, not as a `cdylib`/`rlib` module.
 - Treat this as background logic, so no new default role is required.
 - Install WASM atomically at `~/.config/zellij/plugins/agent-next-bridge.wasm`.
 - Configure `/Users/in05908_mac/.config/custom-cli/zellij-agent` explicitly instead of relying on `PATH`.
@@ -25,7 +26,7 @@
 
 - Create `plugins/agent-next-bridge/Cargo.toml` and `Cargo.lock`: isolated, reproducible WASM crate.
 - Create `plugins/agent-next-bridge/src/model.rs`: pure parsing, queue, argv, and source-pane fallback behavior.
-- Create `plugins/agent-next-bridge/src/lib.rs` with the test module entry, then extend it into the thin Zellij lifecycle and host-command adapter.
+- Create `plugins/agent-next-bridge/src/main.rs` as a named WASI binary target with the test module entry, then extend it into the thin Zellij lifecycle and host-command adapter.
 - Create `scripts/install-agent-next-bridge.sh`: release build and atomic local installation.
 - Modify `.gitignore`, `README.md`, and `docs/manual-smoke-test.md`.
 - Modify the untracked user file `~/.config/zellij/config.kdl` only after creating an exact backup.
@@ -37,7 +38,7 @@
 **Files:**
 - Create: `plugins/agent-next-bridge/Cargo.toml`
 - Create: `plugins/agent-next-bridge/Cargo.lock`
-- Create: `plugins/agent-next-bridge/src/lib.rs`
+- Create: `plugins/agent-next-bridge/src/main.rs`
 - Create: `plugins/agent-next-bridge/src/model.rs`
 - Modify: `.gitignore`
 
@@ -58,8 +59,9 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-[lib]
-crate-type = ["cdylib", "rlib"]
+[[bin]]
+name = "agent_next_bridge"
+path = "src/main.rs"
 
 [dependencies]
 zellij-tile = "=0.44.1"
@@ -83,7 +85,7 @@ assert_eq!(source_pane_id(PaneId::Plugin(2), Some(7)), Ok("terminal_7".into()));
 assert!(source_pane_id(PaneId::Plugin(2), None).is_err());
 ```
 
-Create `src/lib.rs` with `mod model;` so Cargo has a native test target before host integration is added.
+Create `src/main.rs` with `mod model;` and a native-only empty `main` so Cargo has a native test target before host integration is added. Keep the binary target name `agent_next_bridge` so the WASI artifact remains `agent_next_bridge.wasm` for the installer.
 
 Also assert that requests remain queued until permission and a non-empty session name exist, are drained exactly once, are not coalesced, and are discarded when permission is denied.
 
@@ -130,7 +132,7 @@ git commit -m "feat: 에이전트 순회 브리지 모델 추가"
 ### Task 2: Wire the model to the Zellij plugin lifecycle
 
 **Files:**
-- Modify: `plugins/agent-next-bridge/src/lib.rs`
+- Modify: `plugins/agent-next-bridge/src/main.rs`
 - Modify: `plugins/agent-next-bridge/src/model.rs`
 
 **Interfaces:**
@@ -201,6 +203,7 @@ Drop and log only the failed job when context resolution fails. Do not retry, re
 cargo test --manifest-path plugins/agent-next-bridge/Cargo.toml
 cargo build --release --target wasm32-wasip1 --manifest-path plugins/agent-next-bridge/Cargo.toml
 test -s plugins/agent-next-bridge/target/wasm32-wasip1/release/agent_next_bridge.wasm
+strings plugins/agent-next-bridge/target/wasm32-wasip1/release/agent_next_bridge.wasm | grep -qx '_start'
 ```
 
 Expected: all commands exit 0.
@@ -283,6 +286,7 @@ git commit -m "docs: 패인 없는 순회 설치와 검증 절차 추가"
 ```bash
 cargo test --manifest-path plugins/agent-next-bridge/Cargo.toml
 cargo build --release --target wasm32-wasip1 --manifest-path plugins/agent-next-bridge/Cargo.toml
+strings plugins/agent-next-bridge/target/wasm32-wasip1/release/agent_next_bridge.wasm | grep -qx '_start'
 go test ./...
 git diff --check
 ```

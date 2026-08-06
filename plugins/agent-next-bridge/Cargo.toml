@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-[lib]
-crate-type = ["cdylib", "rlib"]
+[[bin]]
+name = "agent_next_bridge"
+path = "src/main.rs"
 
 [dependencies]
 zellij-tile = "=0.44.1"
