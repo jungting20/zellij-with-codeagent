@@ -184,9 +184,11 @@ the `wasm32-wasip1` target:
 
 Use the printed absolute path as one identical `file:` plugin URL in
 `load_plugins` and both `MessagePlugin` bindings. Configure the existing
-`zellij-agent` absolute path as `executable_path`; send `agent-next` / `all`
-for `Alt+o` and `agent-next` / `idle-only` for `Alt+p`. On first load, approve
-only the one-time `ReadApplicationState` and `RunCommands` permission request.
+`zellij-agent` path as
+`executable_path "/Users/in05908_mac/.config/custom-cli/zellij-agent"`; send
+`agent-next` / `all` for `Alt+o` and `agent-next` / `idle-only` for `Alt+p`.
+On first load, approve only the one-time `ReadApplicationState` and
+`RunCommands` permission request.
 
 With the daemon still serving, start managed agents from panes attached to
 both `physical-a` and `physical-b`. Create at least four agents in creation

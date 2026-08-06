@@ -144,7 +144,7 @@ installation command to run.
 
 Configure one background plugin identity using that absolute `file:` URL in
 both `load_plugins` and each `MessagePlugin` binding, with the same
-`executable_path` for the existing `zellij-agent` binary. Send
+`executable_path "/Users/in05908_mac/.config/custom-cli/zellij-agent"`. Send
 `name "agent-next"` with payload `"all"` for `Alt+o`, and payload
 `"idle-only"` for `Alt+p`. The first load requests only
 `ReadApplicationState` and `RunCommands`; approve those permissions once for
