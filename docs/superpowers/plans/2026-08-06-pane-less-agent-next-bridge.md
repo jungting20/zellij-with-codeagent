@@ -357,7 +357,7 @@ zellij action start-or-reload-plugin \
   file:/Users/in05908_mac/.config/zellij/plugins/agent-next-bridge.wasm
 ```
 
-Approve only `ReadApplicationState` and `RunCommands`. Expected: one-time permission UI, then a hidden background plugin and no visible terminal pane.
+Approve only `ReadApplicationState`, `ReadSessionEnvironmentVariables`, and `RunCommands`. Expected: one-time permission UI, then a hidden background plugin and no visible terminal pane.
 
 - [ ] **Step 6: Verify navigation without terminal-pane changes**
 

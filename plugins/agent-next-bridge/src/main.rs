@@ -4,6 +4,28 @@ mod model;
 #[cfg(not(target_family = "wasm"))]
 fn main() {}
 
+#[cfg(any(test, target_family = "wasm"))]
+fn required_permissions() -> &'static [zellij_tile::prelude::PermissionType] {
+    use zellij_tile::prelude::PermissionType;
+
+    &[
+        PermissionType::ReadApplicationState,
+        PermissionType::ReadSessionEnvironmentVariables,
+        PermissionType::RunCommands,
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::required_permissions;
+    use zellij_tile::prelude::PermissionType;
+
+    #[test]
+    fn startup_context_permissions_allow_reading_session_environment() {
+        assert!(required_permissions().contains(&PermissionType::ReadSessionEnvironmentVariables));
+    }
+}
+
 #[cfg(target_family = "wasm")]
 use std::collections::BTreeMap;
 
@@ -41,10 +63,7 @@ impl ZellijPlugin for AgentNextBridge {
             EventType::PermissionRequestResult,
             EventType::RunCommandResult,
         ]);
-        request_permission(&[
-            PermissionType::ReadApplicationState,
-            PermissionType::RunCommands,
-        ]);
+        request_permission(required_permissions());
     }
 
     fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
