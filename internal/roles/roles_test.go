@@ -188,3 +188,16 @@ func TestLookupAgentNext(t *testing.T) {
 		}
 	}
 }
+
+func TestLookupLoopProjectRoles(t *testing.T) {
+	for _, name := range []string{RoleLoopProjectWorker, RoleLoopProjectVerifier} {
+		spec, ok := Lookup(name)
+		if !ok {
+			t.Fatalf("Lookup(%q) not found", name)
+		}
+		wantUsage := name + " --repository PATH --runner-skill PATH --orchestrator-pane PANE_ID"
+		if spec.Usage != wantUsage {
+			t.Fatalf("Lookup(%q).Usage = %q, want %q", name, spec.Usage, wantUsage)
+		}
+	}
+}
