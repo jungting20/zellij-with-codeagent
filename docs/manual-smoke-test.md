@@ -175,6 +175,19 @@ zellij-agent ctl cleanup --socket /tmp/agentd.sock --task task-b
 
 ## Agent Next Navigation Smoke
 
+Install the background bridge first, using a Rustup `1.88.0` toolchain with
+the `wasm32-wasip1` target:
+
+```bash
+./scripts/install-agent-next-bridge.sh
+```
+
+Use the printed absolute path as one identical `file:` plugin URL in
+`load_plugins` and both `MessagePlugin` bindings. Configure the existing
+`zellij-agent` absolute path as `executable_path`; send `agent-next` / `all`
+for `Alt+o` and `agent-next` / `idle-only` for `Alt+p`. On first load, approve
+only the one-time `ReadApplicationState` and `RunCommands` permission request.
+
 With the daemon still serving, start managed agents from panes attached to
 both `physical-a` and `physical-b`. Create at least four agents in creation
 order and arrange their detected states as follows:
@@ -182,6 +195,19 @@ order and arrange their detected states as follows:
 ```text
 idle → working → blocked → idle
 ```
+
+Record a before inventory, then record an inventory after each shortcut:
+
+```bash
+zellij action list-panes --all > /tmp/agent-next-before.txt
+# Press Alt+o once.
+zellij action list-panes --all > /tmp/agent-next-after-all.txt
+# Press Alt+p once.
+zellij action list-panes --all > /tmp/agent-next-after-idle.txt
+```
+
+Compare the `TYPE=terminal` pane IDs in all three inventories. Neither
+shortcut may add or remove a terminal pane.
 
 In either attached session, press `Alt+o` repeatedly. Confirm navigation
 visits all four agents in creation order and wraps from the fourth agent back
@@ -197,6 +223,11 @@ produces no visible output.
 Then invoke `zellij-agent agent next` and confirm it still advances through all
 managed agents. Finally, press `Tab` in a normal application pane; it must
 retain the application's normal Tab behavior.
+
+Repeat `Alt+o` and `Alt+p` checks in multiple non-locked modes (normal,
+pane, and tab modes). Both bindings must remain available and preserve the
+same no-terminal-pane inventory. Enter locked mode and confirm both shortcuts
+are excluded there.
 
 ## Runtime Dashboard Smoke
 

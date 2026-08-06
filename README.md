@@ -126,6 +126,35 @@ The bundled local Zellij binding is global: press `Alt+o` repeatedly to cycle
 through all managed agents, or press `Alt+p` to cycle only through idle agents.
 Outside these shortcuts, `Tab` keeps its normal application behavior.
 
+### Pane-less Agent Navigation Bridge
+
+Install the background bridge plugin from the repository root:
+
+```bash
+./scripts/install-agent-next-bridge.sh
+```
+
+The installer builds with Rustup toolchain `1.88.0` and the official
+`wasm32-wasip1` target, then atomically installs
+`agent-next-bridge.wasm` at
+`${ZELLIJ_PLUGIN_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/zellij/plugins}/agent-next-bridge.wasm`.
+It prints the final absolute path and does not edit Zellij configuration. If
+the required Rustup toolchain or target is unavailable, it reports the exact
+installation command to run.
+
+Configure one background plugin identity using that absolute `file:` URL in
+both `load_plugins` and each `MessagePlugin` binding, with the same
+`executable_path` for the existing `zellij-agent` binary. Send
+`name "agent-next"` with payload `"all"` for `Alt+o`, and payload
+`"idle-only"` for `Alt+p`. The first load requests only
+`ReadApplicationState` and `RunCommands`; approve those permissions once for
+this plugin identity.
+
+Both shortcuts use this hidden background bridge, create no terminal panes,
+and delegate to the existing `zellij-agent agent next` CLI command
+(`Alt+p` adds `--idle-only`). Verify this by comparing
+`zellij action list-panes --all` inventories before and after each shortcut.
+
 Coding-agent records are in-memory. A pane close notification removes its
 record immediately. In addition, the daemon reconciles Zellij every two
 seconds; if a managed pane no longer exists, runtime reconciliation triggers
