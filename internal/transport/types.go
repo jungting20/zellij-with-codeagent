@@ -99,6 +99,7 @@ type ListPanesResponse struct {
 type StartAgentRequest struct {
 	Kind               string   `json:"kind"`
 	CWD                string   `json:"cwd"`
+	Access             string   `json:"access,omitempty"`
 	Args               []string `json:"args,omitempty"`
 	NotifyOnIdle       bool     `json:"notify_on_idle,omitempty"`
 	SourceSession      string   `json:"source_session"`
@@ -136,6 +137,7 @@ type FocusNextAgentResponse struct {
 type Agent struct {
 	ID             string    `json:"id"`
 	Kind           string    `json:"kind"`
+	Access         string    `json:"access"`
 	PaneID         string    `json:"pane_id"`
 	State          string    `json:"state"`
 	StateReason    string    `json:"state_reason,omitempty"`
@@ -308,6 +310,7 @@ func (req StartAgentRequest) ToCodingAgent() codingagent.StartAgentRequest {
 	return codingagent.StartAgentRequest{
 		Kind:                codingagent.Kind(req.Kind),
 		CWD:                 req.CWD,
+		AccessMode:          codingagent.AccessMode(req.Access),
 		ExtraArgs:           cloneStrings(req.Args),
 		NotifyOnIdle:        req.NotifyOnIdle,
 		SourceZellijSession: req.SourceSession,
@@ -319,6 +322,7 @@ func StartAgentRequestFromCodingAgent(req codingagent.StartAgentRequest) StartAg
 	return StartAgentRequest{
 		Kind:               string(req.Kind),
 		CWD:                req.CWD,
+		Access:             string(req.AccessMode),
 		Args:               cloneStrings(req.ExtraArgs),
 		NotifyOnIdle:       req.NotifyOnIdle,
 		SourceSession:      req.SourceZellijSession,
@@ -346,6 +350,7 @@ func AgentFromCodingAgent(record codingagent.Record) Agent {
 	return Agent{
 		ID:             string(record.ID),
 		Kind:           string(record.Kind),
+		Access:         string(record.AccessMode),
 		PaneID:         string(record.PaneID),
 		State:          string(record.State),
 		StateReason:    record.StateReason,

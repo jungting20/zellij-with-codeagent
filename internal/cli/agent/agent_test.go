@@ -248,6 +248,7 @@ func TestRunStartSendsValidatedRequest(t *testing.T) {
 	}
 	want := transport.StartAgentRequest{
 		Kind:               "gemini",
+		Access:             "full",
 		CWD:                cwd,
 		Args:               []string{"--model", "gemini-3"},
 		NotifyOnIdle:       true,
@@ -277,6 +278,36 @@ func TestRunStartSendsValidatedRequest(t *testing.T) {
 	}
 	if !client.closeHasDeadline || !client.closeDeadline.After(client.closeCalledAt) || client.closeContextErr != nil {
 		t.Fatalf("close context deadline=%s calledAt=%s hasDeadline=%t err=%v", client.closeDeadline, client.closeCalledAt, client.closeHasDeadline, client.closeContextErr)
+	}
+}
+
+func TestRunStartSendsReadOnlyAccessRequest(t *testing.T) {
+	cwd := t.TempDir()
+	client := &testClient{response: started("agent-1", "codex", "agent-1", []string{"codex", "--sandbox", "read-only", "--ask-for-approval", "never"}, cwd)}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"start", "codex", "--access", "read-only"}, strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
+		Getwd:  func() (string, error) { return cwd, nil },
+		Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": "terminal_2"}),
+		RunAgent: func(command []string, gotCWD string, _ io.Reader, _, _ io.Writer) error {
+			want := []string{"codex", "--sandbox", "read-only", "--ask-for-approval", "never"}
+			if !reflect.DeepEqual(command, want) || gotCWD != cwd {
+				t.Fatalf("runner command=%#v cwd=%q, want %#v %q", command, gotCWD, want, cwd)
+			}
+			for _, arg := range command {
+				if arg == "--dangerously-bypass-approvals-and-sandbox" {
+					t.Fatalf("read-only command includes bypass argument: %#v", command)
+				}
+			}
+			return nil
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("Run() exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if client.request.Access != "read-only" {
+		t.Fatalf("StartAgent access = %q, want read-only", client.request.Access)
 	}
 }
 
@@ -579,6 +610,9 @@ func TestRunStartRejectsInvalidInputBeforeCallingClient(t *testing.T) {
 		{name: "missing session", args: []string{"start", "codex"}, env: map[string]string{"ZELLIJ_SESSION_NAME": "", "ZELLIJ_PANE_ID": "terminal_2"}, want: "ZELLIJ_SESSION_NAME is required"},
 		{name: "missing pane", args: []string{"start", "codex"}, env: map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": ""}, want: "ZELLIJ_PANE_ID is required"},
 		{name: "non-positive timeout", args: []string{"start", "codex", "--timeout", "0s"}, want: "--timeout must be greater than 0"},
+		{name: "unknown access", args: []string{"start", "codex", "--access", "other"}, want: "invalid coding agent access mode"},
+		{name: "missing access", args: []string{"start", "codex", "--access"}, want: "--access requires a value"},
+		{name: "read-only non-codex", args: []string{"start", "gemini", "--access=read-only"}, want: "read-only access is supported only by Codex"},
 		{name: "unexpected positional", args: []string{"start", "codex", "extra"}, want: "unexpected start argument before --: extra"},
 		{name: "unknown option", args: []string{"start", "codex", "--model", "gemini-3"}, want: "unknown start option: --model"},
 	}
@@ -628,7 +662,7 @@ func TestRunHelpDocumentsStartContract(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("Run(%#v) exit code = %d, stderr=%q", args, code, stderr.String())
 		}
-		for _, want := range []string{"codex", "claude", "gemini", "cursor", "agy", "default: current working directory", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-skip-permissions", "agent --yolo --trust", "-- passthrough", "current Zellij pane", "closes the managed pane when the agent exits"} {
+		for _, want := range []string{"codex", "claude", "gemini", "cursor", "agy", "default: current working directory", "--access full|read-only", "zellij-agent agent start codex --access full -- \"Implement M1\"", "zellij-agent agent start codex --access read-only -- \"Verify M1\"", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-skip-permissions", "agent --yolo --trust", "-- passthrough", "current Zellij pane", "closes the managed pane when the agent exits"} {
 			if !strings.Contains(stdout.String(), want) {
 				t.Fatalf("Run(%#v) help = %q, missing %q", args, stdout.String(), want)
 			}

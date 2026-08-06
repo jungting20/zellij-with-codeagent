@@ -29,7 +29,7 @@ func TestViewRendersDeterministicFlatDashboardAtSupportedWidths(t *testing.T) {
 			plain := ansi.Strip(m.View())
 
 			for _, want := range []string{
-				"AGENT DASHBOARD", "STATE  AGENT  PROJECT  SINCE",
+				"AGENT DASHBOARD", "STATE  AGENT  ACCESS  PROJECT  SINCE",
 				"Codex", "Claude", "Gemini", "Cursor",
 				"working", "blocked", "idle", "unknown",
 				"zellij-with-codeagent", "api-server", "frontend", "mobile",
@@ -51,6 +51,24 @@ func TestViewRendersDeterministicFlatDashboardAtSupportedWidths(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestViewRendersAccessAndDefaultsEmptyAccessToFull(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m.width, m.height, m.connection, m.loaded, m.lastRefresh = 100, 8, "live", true, now
+	m.rows = []transport.AgentWithPane{
+		viewRecord("agent-read-only", "codex", "idle", "/repo/reviewer", now.Add(-time.Minute)),
+		viewRecord("agent-full", "codex", "working", "/repo/default", now.Add(-time.Minute)),
+	}
+	m.rows[0].Agent.Access = "read-only"
+
+	plain := ansi.Strip(m.View())
+	for _, want := range []string{"STATE  AGENT  ACCESS  PROJECT  SINCE", "read-only", "full"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("view missing %q:\n%s", want, plain)
+		}
 	}
 }
 

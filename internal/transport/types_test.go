@@ -16,6 +16,7 @@ func TestAgentStartRequestRoundTripPreservesSourceAndArguments(t *testing.T) {
 	payload := []byte(`{
 		"kind": "codex",
 			"cwd": "/workspace/project",
+			"access": "read-only",
 			"args": ["--model", "gpt-5"],
 			"notify_on_idle": true,
 			"source_session": "physical-a",
@@ -26,7 +27,7 @@ func TestAgentStartRequestRoundTripPreservesSourceAndArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	converted := request.ToCodingAgent()
-	if converted.Kind != codingagent.KindCodex || converted.CWD != "/workspace/project" || !converted.NotifyOnIdle || converted.SourceZellijSession != "physical-a" || converted.SourceZellijPaneID != "terminal_2" {
+	if converted.Kind != codingagent.KindCodex || converted.CWD != "/workspace/project" || converted.AccessMode != codingagent.AccessReadOnly || !converted.NotifyOnIdle || converted.SourceZellijSession != "physical-a" || converted.SourceZellijPaneID != "terminal_2" {
 		t.Fatalf("StartAgentRequest.ToCodingAgent() = %#v", converted)
 	}
 	request.Args[0] = "mutated"
@@ -37,7 +38,7 @@ func TestAgentStartRequestRoundTripPreservesSourceAndArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"kind":"codex"`, `"cwd":"/workspace/project"`, `"args":["--model","gpt-5"]`, `"notify_on_idle":true`, `"source_session":"physical-a"`, `"source_zellij_pane_id":"terminal_2"`} {
+	for _, field := range []string{`"kind":"codex"`, `"cwd":"/workspace/project"`, `"access":"read-only"`, `"args":["--model","gpt-5"]`, `"notify_on_idle":true`, `"source_session":"physical-a"`, `"source_zellij_pane_id":"terminal_2"`} {
 		if !strings.Contains(string(encoded), field) {
 			t.Fatalf("marshaled payload = %s, missing %s", encoded, field)
 		}
@@ -51,7 +52,8 @@ func TestAgentResponseConversionPreservesRecordTimestampsAndPane(t *testing.T) {
 	response := codingagent.ListAgentsResponse{Agents: []codingagent.AgentWithPane{{
 		Agent: codingagent.Record{
 			ID: "agent-1", Kind: codingagent.KindClaude, PaneID: "agent-1",
-			State: codingagent.StateBlocked, StateReason: "approval required", MatchedRule: "permission",
+			AccessMode: codingagent.AccessReadOnly,
+			State:      codingagent.StateBlocked, StateReason: "approval required", MatchedRule: "permission",
 			CreatedAt: createdAt, StateChangedAt: changedAt,
 		},
 		Pane: rt.Pane{ID: "agent-1", ZellijPaneID: "terminal_7", CWD: "/workspace/project", Status: rt.PaneStatusRunning, CreatedAt: createdAt, UpdatedAt: updatedAt},
@@ -62,7 +64,7 @@ func TestAgentResponseConversionPreservesRecordTimestampsAndPane(t *testing.T) {
 		t.Fatalf("agents = %#v", converted.Agents)
 	}
 	agent := converted.Agents[0]
-	if agent.Agent.ID != "agent-1" || agent.Agent.Kind != "claude" || agent.Agent.State != "blocked" || agent.Agent.StateReason != "approval required" || agent.Agent.MatchedRule != "permission" {
+	if agent.Agent.ID != "agent-1" || agent.Agent.Kind != "claude" || agent.Agent.Access != "read-only" || agent.Agent.State != "blocked" || agent.Agent.StateReason != "approval required" || agent.Agent.MatchedRule != "permission" {
 		t.Fatalf("agent = %#v", agent.Agent)
 	}
 	if !agent.Agent.CreatedAt.Equal(createdAt) || !agent.Agent.StateChangedAt.Equal(changedAt) || agent.Pane.ZellijPaneID != "terminal_7" || !agent.Pane.UpdatedAt.Equal(updatedAt) {

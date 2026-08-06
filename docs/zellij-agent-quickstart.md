@@ -74,6 +74,20 @@ coding agent. The daemon speaks once whenever this managed agent changes from a
 non-idle state to `idle`. Agents started without the option do not produce this
 notification.
 
+### Start A Read-Only Codex Reviewer
+
+Use the managed read-only access mode when an agent should verify work without
+being granted its normal full-access permission bypass:
+
+```bash
+./bin/zellij-agent agent start codex --access read-only -- "Verify M1"
+```
+
+`--access full` is the default. Read-only access is supported only by Codex;
+the managed command uses Codex's read-only sandbox and does not include the
+full-access permission-bypass argument. In either access mode, `agent start`
+closes its managed pane after the coding-agent process exits.
+
 ## 5. Submit A JSON Plan With ctl
 
 Create a normal JSON request envelope:
