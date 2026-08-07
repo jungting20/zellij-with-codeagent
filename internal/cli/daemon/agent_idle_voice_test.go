@@ -21,6 +21,7 @@ func TestAgentIdleVoiceEnqueuesEnabledTransitions(t *testing.T) {
 		t.Run(string(previous), func(t *testing.T) {
 			store := newAgentIdleVoiceTestStore(codingagent.Record{
 				ID: "agent-3", Kind: codingagent.KindCodex, PaneID: "agent-3",
+				CWD:   "/workspace/sample-project",
 				State: codingagent.StateIdle, NotifyOnIdle: true,
 				StateChangedAt: time.Unix(2, 123),
 			})
@@ -33,7 +34,7 @@ func TestAgentIdleVoiceEnqueuesEnabledTransitions(t *testing.T) {
 
 			want := []voice.Notification{{
 				RequestID: "agent-idle:agent-3:2000000123",
-				Message:   "Codex agent-3 작업이 완료되었습니다",
+				Message:   "sample-project 작업이 완료되었습니다",
 			}}
 			if got := queue.snapshot(); !reflect.DeepEqual(got, want) {
 				t.Fatalf("notifications = %#v, want %#v", got, want)
@@ -42,7 +43,7 @@ func TestAgentIdleVoiceEnqueuesEnabledTransitions(t *testing.T) {
 	}
 }
 
-func TestAgentIdleVoiceAnnouncesInitialStateDetection(t *testing.T) {
+func TestAgentIdleVoiceIgnoresInitialStateDetection(t *testing.T) {
 	for _, state := range []codingagent.State{codingagent.StateWorking, codingagent.StateIdle} {
 		t.Run(string(state), func(t *testing.T) {
 			store := newAgentIdleVoiceTestStore(codingagent.Record{
@@ -57,12 +58,8 @@ func TestAgentIdleVoiceAnnouncesInitialStateDetection(t *testing.T) {
 				PreviousState: string(codingagent.StateUnknown), AgentState: string(state),
 			}, store, queue, &bytes.Buffer{})
 
-			want := []voice.Notification{{
-				RequestID: "agent-started:agent-3:2000000123",
-				Message:   "Codex agent-3 실행되었습니다",
-			}}
-			if got := queue.snapshot(); !reflect.DeepEqual(got, want) {
-				t.Fatalf("notifications = %#v, want %#v", got, want)
+			if got := queue.snapshot(); len(got) != 0 {
+				t.Fatalf("notifications = %#v, want none", got)
 			}
 		})
 	}

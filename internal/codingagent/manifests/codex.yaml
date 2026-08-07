@@ -69,7 +69,7 @@ rules:
   - id: screen_working_fallback
     priority: 500
     state: working
-    region: {type: bottom_non_empty_lines, lines: 3}
+    region: {type: bottom_non_empty_lines, lines: 5}
     match:
       line_regex: ['^[•◦][[:space:]]+.+\([^)]*esc to interrupt\)( · .*)?[[:space:]]*$']
     visible_working: true

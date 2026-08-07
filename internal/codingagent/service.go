@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -96,8 +97,9 @@ type Service struct {
 	now        func() time.Time
 	newAgentID func() ID
 
-	focusMu       sync.Mutex
-	lastFocusedID ID
+	focusMu                    sync.Mutex
+	lastFocusedID              ID
+	lastSeenIdleStateChangedAt time.Time
 
 	lifecycleMu sync.Mutex
 	nextOwner   uint64
@@ -182,6 +184,7 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 		Kind:           request.Kind,
 		AccessMode:     accessMode,
 		PaneID:         runtime.PaneID(id),
+		CWD:            cwd,
 		State:          StateUnknown,
 		NotifyOnIdle:   request.NotifyOnIdle,
 		CreatedAt:      now,
@@ -271,7 +274,7 @@ func (s *Service) FocusNextAgent(ctx context.Context, request FocusNextAgentRequ
 	if err != nil {
 		return FocusNextAgentResponse{}, fmt.Errorf("list coding agents: %w", err)
 	}
-	record, ok := nextAgentRecord(records, s.lastFocusedID, request.IdleOnly)
+	record, ok := nextAgentRecord(records, s.lastFocusedID, s.lastSeenIdleStateChangedAt, request.IdleOnly)
 	if !ok {
 		return FocusNextAgentResponse{Focused: false}, nil
 	}
@@ -282,6 +285,9 @@ func (s *Service) FocusNextAgent(ctx context.Context, request FocusNextAgentRequ
 	})
 	if err != nil {
 		return FocusNextAgentResponse{}, err
+	}
+	if request.IdleOnly && record.StateChangedAt.After(s.lastSeenIdleStateChangedAt) {
+		s.lastSeenIdleStateChangedAt = record.StateChangedAt
 	}
 	return FocusNextAgentResponse{Focused: true, Agent: response.Agent}, nil
 }
@@ -321,7 +327,7 @@ func (s *Service) focusAgentLocked(ctx context.Context, request FocusAgentReques
 	return FocusAgentResponse{Agent: AgentWithPane{Agent: record, Pane: response.Pane}}, nil
 }
 
-func nextAgentRecord(records []Record, current ID, idleOnly bool) (Record, bool) {
+func nextAgentRecord(records []Record, current ID, lastSeenIdleStateChangedAt time.Time, idleOnly bool) (Record, bool) {
 	eligible := make([]Record, 0, len(records))
 	for _, record := range records {
 		if !idleOnly || record.State == StateIdle {
@@ -330,6 +336,20 @@ func nextAgentRecord(records []Record, current ID, idleOnly bool) (Record, bool)
 	}
 	if len(eligible) == 0 {
 		return Record{}, false
+	}
+	if idleOnly {
+		sort.SliceStable(eligible, func(i, j int) bool {
+			if eligible[i].StateChangedAt.Equal(eligible[j].StateChangedAt) {
+				if eligible[i].CreatedAt.Equal(eligible[j].CreatedAt) {
+					return eligible[i].ID < eligible[j].ID
+				}
+				return eligible[i].CreatedAt.Before(eligible[j].CreatedAt)
+			}
+			return eligible[i].StateChangedAt.After(eligible[j].StateChangedAt)
+		})
+		if eligible[0].StateChangedAt.After(lastSeenIdleStateChangedAt) {
+			return eligible[0], true
+		}
 	}
 	for index := range eligible {
 		if eligible[index].ID == current {

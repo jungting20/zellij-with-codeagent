@@ -22,6 +22,7 @@ type Record struct {
 	Kind           Kind
 	AccessMode     AccessMode
 	PaneID         runtime.PaneID
+	CWD            string
 	State          State
 	NotifyOnIdle   bool
 	StateReason    string

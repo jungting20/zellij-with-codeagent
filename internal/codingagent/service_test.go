@@ -86,6 +86,7 @@ func TestServiceStartAgentCreatesRegisteredMonitoredPane(t *testing.T) {
 		Kind:           KindGemini,
 		AccessMode:     AccessFull,
 		PaneID:         "agent-1",
+		CWD:            cwd,
 		State:          StateUnknown,
 		NotifyOnIdle:   true,
 		CreatedAt:      now,
@@ -883,7 +884,7 @@ func TestServiceFocusNextAgentSelectsOnlyIdleAgents(t *testing.T) {
 	service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
 	request := FocusNextAgentRequest{SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1", IdleOnly: true}
 
-	for call, wantID := range []ID{"agent-2", "agent-4", "agent-2"} {
+	for call, wantID := range []ID{"agent-4", "agent-2", "agent-4"} {
 		response, err := service.FocusNextAgent(context.Background(), request)
 		if err != nil {
 			t.Fatalf("FocusNextAgent() call %d error = %v", call+1, err)
@@ -891,6 +892,53 @@ func TestServiceFocusNextAgentSelectsOnlyIdleAgents(t *testing.T) {
 		if !response.Focused || response.Agent.Agent.ID != wantID {
 			t.Fatalf("FocusNextAgent() call %d response = %#v, want focused %q", call+1, response, wantID)
 		}
+	}
+}
+
+func TestServiceFocusNextAgentPrioritizesNewIdleCompletion(t *testing.T) {
+	store := NewMemoryStore(nil)
+	seedFocusRecords(t, store)
+	service := NewService(ServiceOptions{RuntimeService: successfulFocusRuntime(), Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
+	request := FocusNextAgentRequest{SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1", IdleOnly: true}
+
+	first, err := service.FocusNextAgent(context.Background(), request)
+	if err != nil {
+		t.Fatalf("first FocusNextAgent() error = %v", err)
+	}
+	if !first.Focused || first.Agent.Agent.ID != "agent-3" {
+		t.Fatalf("first FocusNextAgent() response = %#v, want latest idle agent-3", first)
+	}
+	for call, wantID := range []ID{"agent-2", "agent-1"} {
+		response, err := service.FocusNextAgent(context.Background(), request)
+		if err != nil {
+			t.Fatalf("idle history FocusNextAgent() call %d error = %v", call+1, err)
+		}
+		if !response.Focused || response.Agent.Agent.ID != wantID {
+			t.Fatalf("idle history FocusNextAgent() call %d response = %#v, want %q", call+1, response, wantID)
+		}
+	}
+
+	if _, err := store.UpdateState("agent-3", StateUpdate{State: StateWorking}); err != nil {
+		t.Fatalf("UpdateState(agent-3, working) error = %v", err)
+	}
+	if _, err := store.UpdateState("agent-3", StateUpdate{State: StateIdle}); err != nil {
+		t.Fatalf("UpdateState(agent-3, idle) error = %v", err)
+	}
+
+	completedAgain, err := service.FocusNextAgent(context.Background(), request)
+	if err != nil {
+		t.Fatalf("second FocusNextAgent() error = %v", err)
+	}
+	if !completedAgain.Focused || completedAgain.Agent.Agent.ID != "agent-3" {
+		t.Fatalf("second FocusNextAgent() response = %#v, want newly idle agent-3", completedAgain)
+	}
+
+	next, err := service.FocusNextAgent(context.Background(), request)
+	if err != nil {
+		t.Fatalf("third FocusNextAgent() error = %v", err)
+	}
+	if !next.Focused || next.Agent.Agent.ID != "agent-2" {
+		t.Fatalf("third FocusNextAgent() response = %#v, want next most recent idle agent-2", next)
 	}
 }
 
@@ -1041,8 +1089,8 @@ func TestServiceFocusNextAgentRestartsWhenCursorAgentBecomesWorking(t *testing.T
 	if err != nil {
 		t.Fatalf("FocusNextAgent() error = %v", err)
 	}
-	if !response.Focused || response.Agent.Agent.ID != "agent-1" {
-		t.Fatalf("FocusNextAgent() response = %#v, want focused agent-1", response)
+	if !response.Focused || response.Agent.Agent.ID != "agent-3" {
+		t.Fatalf("FocusNextAgent() response = %#v, want latest idle agent-3", response)
 	}
 }
 

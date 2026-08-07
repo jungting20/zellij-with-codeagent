@@ -490,6 +490,7 @@ func TestRunContextServeDeliversIdleVoiceFromSharedEventBus(t *testing.T) {
 	changedAt := time.Unix(7, 11)
 	_, err := store.Create(codingagent.Record{
 		ID: "agent-9", Kind: codingagent.KindClaude, PaneID: "pane-9",
+		CWD:   "/workspace/sample-project",
 		State: codingagent.StateIdle, NotifyOnIdle: true, StateChangedAt: changedAt,
 	})
 	if err != nil {
@@ -519,7 +520,7 @@ func TestRunContextServeDeliversIdleVoiceFromSharedEventBus(t *testing.T) {
 	}
 	if got, want := voiceService.notification(), (voice.Notification{
 		RequestID: "agent-idle:agent-9:7000000011",
-		Message:   "Claude agent-9 작업이 완료되었습니다",
+		Message:   "sample-project 작업이 완료되었습니다",
 	}); got != want {
 		t.Fatalf("notification = %#v, want %#v", got, want)
 	}
