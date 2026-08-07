@@ -311,6 +311,21 @@ func TestDetectorFallsBackToIdleForKnownKind(t *testing.T) {
 	}
 }
 
+func TestDetectorPreservesStateOnNoMatchWhenConfigured(t *testing.T) {
+	manifest := mustLoadTestManifest(t, strings.Replace(minimalManifestYAML, "agent: codex", "agent: codex\npreserve_state_on_no_match: true", 1))
+	detector, err := NewDetector(map[Kind]Manifest{KindCodex: manifest})
+	if err != nil {
+		t.Fatalf("NewDetector() error = %v", err)
+	}
+	detection, err := detector.Detect(KindCodex, DetectionInput{Screen: "nothing matches"})
+	if err != nil {
+		t.Fatalf("Detect() error = %v", err)
+	}
+	if detection.State != "" || !detection.SkipStateUpdate || !detection.Fallback || detection.Reason != "default_known_agent_preserve_state_fallback" {
+		t.Fatalf("fallback = state:%q skip:%t fallback:%t reason:%q", detection.State, detection.SkipStateUpdate, detection.Fallback, detection.Reason)
+	}
+}
+
 func mustLoadTestManifest(t *testing.T, source string) Manifest {
 	t.Helper()
 	manifest, err := LoadManifest([]byte(source))

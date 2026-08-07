@@ -162,6 +162,7 @@ fn load(&mut self, configuration: BTreeMap<String, String>) {
     subscribe(&[
         EventType::ModeUpdate,
         EventType::PaneUpdate,
+        EventType::SessionUpdate,
         EventType::PermissionRequestResult,
         EventType::RunCommandResult,
     ]);
@@ -176,7 +177,8 @@ fn load(&mut self, configuration: BTreeMap<String, String>) {
 
 `update` must:
 
-- store `ModeUpdate.session_name` then flush;
+- store `ModeUpdate.session_name` when available and use the
+  `SessionUpdate.is_current_session` entry as the startup-safe source, then flush;
 - remember a focused non-plugin pane from `PaneUpdate`, preserving it when a plugin becomes focused;
 - grant or deny queued work on `PermissionRequestResult` without duplicate dispatch;
 - log non-zero `RunCommandResult` exit and stderr without showing UI.
@@ -357,7 +359,7 @@ zellij action start-or-reload-plugin \
   file:/Users/in05908_mac/.config/zellij/plugins/agent-next-bridge.wasm
 ```
 
-Approve only `ReadApplicationState`, `ReadSessionEnvironmentVariables`, and `RunCommands`. Expected: one-time permission UI, then a hidden background plugin and no visible terminal pane.
+Approve only `ReadApplicationState` and `RunCommands`. Expected: one-time permission UI, then a hidden background plugin and no visible terminal pane.
 
 - [ ] **Step 6: Verify navigation without terminal-pane changes**
 

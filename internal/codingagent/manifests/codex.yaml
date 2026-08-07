@@ -1,5 +1,6 @@
 version: 1
 agent: codex
+preserve_state_on_no_match: true
 rules:
   - id: osc_title_blocked
     priority: 1100
@@ -58,16 +59,28 @@ rules:
                 - contains: ["yes"]
                 - contains: ["❯"]
 
+  - id: conversation_interrupted
+    priority: 550
+    state: idle
+    region: {type: bottom_non_empty_lines, lines: 5}
+    match: {contains: ["■ Conversation interrupted"]}
+    visible_idle: true
+
   - id: screen_working_fallback
     priority: 500
     state: working
     region: {type: bottom_non_empty_lines, lines: 3}
     match:
-      all:
-        - line_regex: ['^[•◦][[:space:]]+Working \([^)]*esc to interrupt\)( · .*)?[[:space:]]*$']
-        - not:
-            - contains: ["■ Conversation interrupted"]
+      line_regex: ['^[•◦][[:space:]]+.+\([^)]*esc to interrupt\)( · .*)?[[:space:]]*$']
     visible_working: true
+
+  - id: screen_prompt_idle
+    priority: 200
+    state: idle
+    region: {type: bottom_non_empty_lines, lines: 5}
+    match:
+      line_regex: ['^[[:space:]]*›([[:space:]]+.*)?[[:space:]]*$']
+    visible_idle: true
 
   - id: osc_title_idle
     priority: 100

@@ -1,0 +1,3 @@
+response complete
+─ Worked for 8s ─
+› Use /skills to list available skills

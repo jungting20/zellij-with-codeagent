@@ -1,0 +1,2 @@
+response text
+◦ Reconnecting... 1/5 (10s • esc to interrupt)

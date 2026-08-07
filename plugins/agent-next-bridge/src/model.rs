@@ -1,5 +1,4 @@
-use std::collections::BTreeMap;
-use zellij_tile::prelude::{get_focused_pane, PaneId, PaneManifest};
+use zellij_tile::prelude::{get_focused_pane, PaneId, PaneManifest, SessionInfo};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Navigation {
@@ -77,16 +76,15 @@ impl BridgeModel {
         self.last_terminal = last_terminal;
     }
 
-    pub fn initialize_context(
-        &mut self,
-        environment: &BTreeMap<String, String>,
-        focused: Option<PaneId>,
-    ) {
-        if let Some(session_name) = environment.get("ZELLIJ_SESSION_NAME") {
-            self.set_session_name(session_name);
-        }
+    pub fn initialize_focused_pane(&mut self, focused: Option<PaneId>) {
         if let Some(PaneId::Terminal(pane_id)) = focused {
             self.set_last_terminal(Some(pane_id));
+        }
+    }
+
+    pub fn set_current_session(&mut self, sessions: &[SessionInfo]) {
+        if let Some(session) = sessions.iter().find(|session| session.is_current_session) {
+            self.set_session_name(&session.name);
         }
     }
 
@@ -149,8 +147,8 @@ pub fn focused_terminal_in_tab(tab_index: usize, pane_manifest: &PaneManifest) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{BTreeMap, HashMap};
-    use zellij_tile::prelude::{PaneId, PaneInfo, PaneManifest};
+    use std::collections::HashMap;
+    use zellij_tile::prelude::{PaneId, PaneInfo, PaneManifest, SessionInfo};
 
     #[test]
     fn parses_supported_navigation_messages() {
@@ -206,27 +204,42 @@ mod tests {
     }
 
     #[test]
-    fn startup_context_makes_first_navigation_ready_without_update_events() {
+    fn startup_context_remembers_the_initial_terminal_pane() {
+        let mut model = BridgeModel::default();
+        model.initialize_focused_pane(Some(PaneId::Terminal(7)));
+
+        assert_eq!(
+            model.resolve_source_pane(PaneId::Plugin(2)),
+            Ok("terminal_7".into())
+        );
+    }
+
+    #[test]
+    fn first_session_update_releases_navigation_without_inherited_zellij_environment() {
         let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
-        model.queue(Navigation::IdleOnly);
+        model.queue(Navigation::All);
         model.set_permission(true);
 
-        model.initialize_context(
-            &BTreeMap::from([("ZELLIJ_SESSION_NAME".into(), "work".into())]),
-            Some(PaneId::Terminal(7)),
-        );
+        model.set_current_session(&[
+            SessionInfo {
+                name: "other".into(),
+                is_current_session: false,
+                ..Default::default()
+            },
+            SessionInfo {
+                name: "fresh".into(),
+                is_current_session: true,
+                ..Default::default()
+            },
+        ]);
 
         assert_eq!(
             model.take_ready(),
             vec![ReadyJob {
                 executable: "/opt/zellij-agent".into(),
-                session_name: "work".into(),
-                navigation: Navigation::IdleOnly,
+                session_name: "fresh".into(),
+                navigation: Navigation::All,
             }]
-        );
-        assert_eq!(
-            model.resolve_source_pane(PaneId::Plugin(2)),
-            Ok("terminal_7".into())
         );
     }
 

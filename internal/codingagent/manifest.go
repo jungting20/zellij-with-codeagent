@@ -12,9 +12,10 @@ import (
 const manifestVersion = 1
 
 type Manifest struct {
-	Version int
-	Agent   Kind
-	Rules   []Rule
+	Version                int
+	Agent                  Kind
+	PreserveStateOnNoMatch bool
+	Rules                  []Rule
 }
 
 type Rule struct {
@@ -31,9 +32,10 @@ type Rule struct {
 }
 
 type manifestYAML struct {
-	Version int        `yaml:"version"`
-	Agent   string     `yaml:"agent"`
-	Rules   []ruleYAML `yaml:"rules"`
+	Version                int        `yaml:"version"`
+	Agent                  string     `yaml:"agent"`
+	PreserveStateOnNoMatch bool       `yaml:"preserve_state_on_no_match"`
+	Rules                  []ruleYAML `yaml:"rules"`
 }
 
 type ruleYAML struct {
@@ -87,7 +89,12 @@ func LoadManifest(source []byte) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("manifest rules must not be empty")
 	}
 
-	manifest := Manifest{Version: raw.Version, Agent: agent, Rules: make([]Rule, 0, len(raw.Rules))}
+	manifest := Manifest{
+		Version:                raw.Version,
+		Agent:                  agent,
+		PreserveStateOnNoMatch: raw.PreserveStateOnNoMatch,
+		Rules:                  make([]Rule, 0, len(raw.Rules)),
+	}
 	seen := make(map[string]struct{}, len(raw.Rules))
 	for order, rawRule := range raw.Rules {
 		rule, err := convertRule(rawRule, order)

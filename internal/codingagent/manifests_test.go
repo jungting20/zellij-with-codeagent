@@ -25,6 +25,7 @@ type embeddedManifestCase struct {
 	wantBlocker    bool
 	wantSkipUpdate bool
 	wantFallback   bool
+	wantReason     string
 }
 
 func TestEmbeddedManifests(t *testing.T) {
@@ -40,9 +41,12 @@ func TestEmbeddedManifests(t *testing.T) {
 		{name: "codex live strong blocker", kind: KindCodex, fixture: "testdata/codex/blocked-live-strong.txt", inputField: "screen", wantState: StateBlocked, wantRule: "live_strong_blocker", wantPriority: 900, wantBlocker: true},
 		{name: "codex weak blocker", kind: KindCodex, fixture: "testdata/codex/blocked-weak-yes-no.txt", inputField: "screen", wantState: StateBlocked, wantRule: "weak_blocker", wantPriority: 600},
 		{name: "codex working footer", kind: KindCodex, fixture: "testdata/codex/working-screen-footer.txt", inputField: "screen", wantState: StateWorking, wantRule: "screen_working_fallback", wantPriority: 500, wantWorking: true},
-		{name: "codex interrupted conversation excludes working footer", kind: KindCodex, fixture: "testdata/codex/idle-conversation-interrupted.txt", inputField: "screen", wantState: StateIdle, wantFallback: true},
+		{name: "codex reconnecting footer", kind: KindCodex, fixture: "testdata/codex/working-reconnecting-footer.txt", inputField: "screen", wantState: StateWorking, wantRule: "screen_working_fallback", wantPriority: 500, wantWorking: true},
+		{name: "codex thinking footer", kind: KindCodex, fixture: "testdata/codex/working-thinking-footer.txt", inputField: "screen", wantState: StateWorking, wantRule: "screen_working_fallback", wantPriority: 500, wantWorking: true},
+		{name: "codex interrupted conversation excludes working footer", kind: KindCodex, fixture: "testdata/codex/idle-conversation-interrupted.txt", inputField: "screen", wantState: StateIdle, wantRule: "conversation_interrupted", wantPriority: 550, wantIdle: true},
+		{name: "codex prompt idle", kind: KindCodex, fixture: "testdata/codex/idle-screen-prompt.txt", inputField: "screen", wantState: StateIdle, wantRule: "screen_prompt_idle", wantPriority: 200, wantIdle: true},
 		{name: "codex osc idle", kind: KindCodex, fixture: "testdata/codex/idle-osc-title.txt", inputField: "osc_title", wantState: StateIdle, wantRule: "osc_title_idle", wantPriority: 100, wantIdle: true},
-		{name: "codex unmatched fallback", kind: KindCodex, fixture: "testdata/codex/idle-unmatched.txt", inputField: "screen", wantState: StateIdle, wantFallback: true},
+		{name: "codex unmatched preserves state", kind: KindCodex, fixture: "testdata/codex/idle-unmatched.txt", inputField: "screen", wantSkipUpdate: true, wantFallback: true, wantReason: "default_known_agent_preserve_state_fallback"},
 
 		{name: "gemini apply confirmation wins", kind: KindGemini, fixture: "testdata/gemini/blocked-apply-confirmation.txt", inputField: "screen", wantState: StateBlocked, wantRule: "apply_or_allow_change", wantPriority: 300, wantBlocker: true},
 		{name: "gemini working cancel hint", kind: KindGemini, fixture: "testdata/gemini/working-esc-cancel.txt", inputField: "screen", wantState: StateWorking, wantRule: "esc_cancel_working", wantPriority: 100, wantWorking: true},
@@ -170,8 +174,12 @@ func assertEmbeddedDetection(t *testing.T, detector *Detector, tt embeddedManife
 		t.Fatalf("flags = idle:%t working:%t blocker:%t skip:%t fallback:%t, want idle:%t working:%t blocker:%t skip:%t fallback:%t", got.VisibleIdle, got.VisibleWorking, got.VisibleBlocker, got.SkipStateUpdate, got.Fallback, tt.wantIdle, tt.wantWorking, tt.wantBlocker, tt.wantSkipUpdate, tt.wantFallback)
 	}
 	if tt.wantFallback {
-		if got.Reason != "default_known_agent_idle_fallback" {
-			t.Fatalf("fallback reason = %q, want default_known_agent_idle_fallback", got.Reason)
+		wantReason := tt.wantReason
+		if wantReason == "" {
+			wantReason = "default_known_agent_idle_fallback"
+		}
+		if got.Reason != wantReason {
+			t.Fatalf("fallback reason = %q, want %q", got.Reason, wantReason)
 		}
 		return
 	}

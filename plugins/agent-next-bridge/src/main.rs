@@ -10,7 +10,6 @@ fn required_permissions() -> &'static [zellij_tile::prelude::PermissionType] {
 
     &[
         PermissionType::ReadApplicationState,
-        PermissionType::ReadSessionEnvironmentVariables,
         PermissionType::RunCommands,
     ]
 }
@@ -21,8 +20,14 @@ mod tests {
     use zellij_tile::prelude::PermissionType;
 
     #[test]
-    fn startup_context_permissions_allow_reading_session_environment() {
-        assert!(required_permissions().contains(&PermissionType::ReadSessionEnvironmentVariables));
+    fn bridge_requests_only_the_permissions_it_uses() {
+        assert_eq!(
+            required_permissions(),
+            &[
+                PermissionType::ReadApplicationState,
+                PermissionType::RunCommands,
+            ]
+        );
     }
 }
 
@@ -60,6 +65,7 @@ impl ZellijPlugin for AgentNextBridge {
         subscribe(&[
             EventType::ModeUpdate,
             EventType::PaneUpdate,
+            EventType::SessionUpdate,
             EventType::PermissionRequestResult,
             EventType::RunCommandResult,
         ]);
@@ -90,6 +96,10 @@ impl ZellijPlugin for AgentNextBridge {
                         self.model.set_last_terminal(Some(pane_id));
                     }
                 }
+            }
+            Event::SessionUpdate(sessions, _) => {
+                self.model.set_current_session(&sessions);
+                self.flush_ready();
             }
             Event::PermissionRequestResult(status) => {
                 let granted = status == PermissionStatus::Granted;
@@ -122,9 +132,8 @@ impl ZellijPlugin for AgentNextBridge {
 #[cfg(target_family = "wasm")]
 impl AgentNextBridge {
     fn initialize_context(&mut self) {
-        let environment = get_session_environment_variables();
         let focused = get_focused_pane_info().ok().map(|(_, pane_id)| pane_id);
-        self.model.initialize_context(&environment, focused);
+        self.model.initialize_focused_pane(focused);
     }
 
     fn flush_ready(&mut self) {

@@ -23,11 +23,15 @@ type Detection struct {
 }
 
 type Detector struct {
-	rules map[Kind][]Rule
+	rules                  map[Kind][]Rule
+	preserveStateOnNoMatch map[Kind]bool
 }
 
 func NewDetector(manifests map[Kind]Manifest) (*Detector, error) {
-	detector := &Detector{rules: make(map[Kind][]Rule, len(manifests))}
+	detector := &Detector{
+		rules:                  make(map[Kind][]Rule, len(manifests)),
+		preserveStateOnNoMatch: make(map[Kind]bool, len(manifests)),
+	}
 	for kind, manifest := range manifests {
 		if kind != manifest.Agent {
 			return nil, fmt.Errorf("detector map key %q does not match manifest agent %q", kind, manifest.Agent)
@@ -43,6 +47,7 @@ func NewDetector(manifests map[Kind]Manifest) (*Detector, error) {
 			return rules[i].Priority > rules[j].Priority
 		})
 		detector.rules[kind] = rules
+		detector.preserveStateOnNoMatch[kind] = manifest.PreserveStateOnNoMatch
 	}
 	return detector, nil
 }
@@ -72,6 +77,13 @@ func (d *Detector) Detect(kind Kind, input DetectionInput) (Detection, error) {
 			VisibleWorking:  rule.VisibleWorking,
 			VisibleBlocker:  rule.VisibleBlocker,
 			SkipStateUpdate: rule.SkipStateUpdate,
+		}, nil
+	}
+	if d.preserveStateOnNoMatch[kind] {
+		return Detection{
+			Reason:          "default_known_agent_preserve_state_fallback",
+			SkipStateUpdate: true,
+			Fallback:        true,
 		}, nil
 	}
 	return Detection{
