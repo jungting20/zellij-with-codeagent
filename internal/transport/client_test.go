@@ -210,6 +210,34 @@ func TestClientStreamsEvents(t *testing.T) {
 	}
 }
 
+func TestClientStreamsEventsByType(t *testing.T) {
+	service := newFakeRuntimeService()
+	client, cleanup := startUnixTransport(t, service)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream, err := client.StreamEventsByType(ctx, string(eventbus.TypeAgentStateChanged))
+	if err != nil {
+		t.Fatalf("StreamEventsByType() error = %v", err)
+	}
+	defer stream.Close()
+
+	service.publish(eventbus.Event{Type: eventbus.TypeRawOutput, PaneID: "agent", Message: "large viewport"})
+	service.publish(eventbus.Event{Type: eventbus.TypeAgentStateChanged, PaneID: "agent", AgentState: "idle"})
+
+	select {
+	case event := <-stream.Events:
+		if event.Type != string(eventbus.TypeAgentStateChanged) || event.PaneID != "agent" {
+			t.Fatalf("event = %#v, want agent_state_changed for agent", event)
+		}
+	case err := <-stream.Errors:
+		t.Fatalf("stream error = %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for filtered event")
+	}
+}
+
 func TestClientSubmitExecutionPlan(t *testing.T) {
 	service := newFakeRuntimeService()
 	client, cleanup := startUnixTransport(t, service)

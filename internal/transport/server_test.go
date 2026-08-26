@@ -673,6 +673,30 @@ func TestServerStreamsEvents(t *testing.T) {
 	}
 }
 
+func TestServerStreamsOnlyRequestedEventTypes(t *testing.T) {
+	service := newFakeRuntimeService()
+	server := newTestServer(t, service)
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	resp, err := http.Get(httpServer.URL + "/v1/events/stream?type=agent_state_changed")
+	if err != nil {
+		t.Fatalf("GET filtered stream: %v", err)
+	}
+	defer resp.Body.Close()
+
+	service.publish(eventbus.Event{Type: eventbus.TypeRawOutput, PaneID: "agent", Message: "large viewport"})
+	service.publish(eventbus.Event{Type: eventbus.TypeAgentStateChanged, PaneID: "agent", AgentState: "idle"})
+
+	var event Event
+	if err := json.NewDecoder(resp.Body).Decode(&event); err != nil {
+		t.Fatalf("decode filtered event: %v", err)
+	}
+	if event.Type != string(eventbus.TypeAgentStateChanged) || event.PaneID != "agent" {
+		t.Fatalf("event = %#v, want agent_state_changed for agent", event)
+	}
+}
+
 func TestServerRecentEventsFilter(t *testing.T) {
 	service := newFakeRuntimeService()
 	server := newTestServer(t, service)

@@ -37,6 +37,13 @@ func (s *Server) handleRecentEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEventStream(w http.ResponseWriter, r *http.Request) {
+	types := make(map[eventbus.EventType]struct{})
+	for _, value := range r.URL.Query()["type"] {
+		if value != "" {
+			types[eventbus.EventType(value)] = struct{}{}
+		}
+	}
+
 	events, unsubscribe, err := s.service.SubscribeEvents(r.Context())
 	if err != nil {
 		writeRuntimeError(w, err)
@@ -58,6 +65,11 @@ func (s *Server) handleEventStream(w http.ResponseWriter, r *http.Request) {
 		case event, ok := <-events:
 			if !ok {
 				return
+			}
+			if len(types) > 0 {
+				if _, ok := types[event.Type]; !ok {
+					continue
+				}
 			}
 			if err := encoder.Encode(EventFromRuntime(event)); err != nil {
 				return

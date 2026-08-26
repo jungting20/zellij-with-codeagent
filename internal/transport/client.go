@@ -196,7 +196,27 @@ func (c *Client) RecentEvents(ctx context.Context, limit int, types ...string) (
 }
 
 func (c *Client) StreamEvents(ctx context.Context) (*EventStream, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/events/stream", nil)
+	return c.streamEvents(ctx, nil)
+}
+
+// StreamEventsByType streams only events whose type matches one of types.
+// An empty type list has the same behavior as StreamEvents.
+func (c *Client) StreamEventsByType(ctx context.Context, types ...string) (*EventStream, error) {
+	return c.streamEvents(ctx, types)
+}
+
+func (c *Client) streamEvents(ctx context.Context, types []string) (*EventStream, error) {
+	query := url.Values{}
+	for _, eventType := range types {
+		if eventType != "" {
+			query.Add("type", eventType)
+		}
+	}
+	path := "/v1/events/stream"
+	if encoded := query.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return nil, err
 	}

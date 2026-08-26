@@ -25,6 +25,7 @@ type fakeClient struct {
 	stream        *transport.EventStream
 	streamErr     error
 	streamCalls   int
+	streamTypes   []string
 }
 
 func (f *fakeClient) ListAgents(context.Context) (transport.ListAgentsResponse, error) {
@@ -41,6 +42,12 @@ func (f *fakeClient) FocusAgent(_ context.Context, agentID string, request trans
 
 func (f *fakeClient) StreamEvents(context.Context) (*transport.EventStream, error) {
 	f.streamCalls++
+	return f.stream, f.streamErr
+}
+
+func (f *fakeClient) StreamEventsByType(_ context.Context, types ...string) (*transport.EventStream, error) {
+	f.streamCalls++
+	f.streamTypes = append([]string(nil), types...)
 	return f.stream, f.streamErr
 }
 
@@ -65,6 +72,9 @@ func TestModelInitLoadsAgentsConnectsStreamAndSchedulesPoll(t *testing.T) {
 	}
 	if client.listCalls != 1 || client.streamCalls != 1 {
 		t.Fatalf("client calls list=%d stream=%d, want 1 each", client.listCalls, client.streamCalls)
+	}
+	if !reflect.DeepEqual(client.streamTypes, []string{agentStateChangedEventType}) {
+		t.Fatalf("stream types = %#v, want agent state changes only", client.streamTypes)
 	}
 	if batch[2] == nil {
 		t.Fatal("poll command is nil")

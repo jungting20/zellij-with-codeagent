@@ -14,10 +14,16 @@ import (
 
 const defaultRefreshInterval = 2 * time.Second
 
+const agentStateChangedEventType = "agent_state_changed"
+
 type Client interface {
 	ListAgents(context.Context) (transport.ListAgentsResponse, error)
 	FocusAgent(context.Context, string, transport.FocusAgentRequest) (transport.FocusAgentResponse, error)
 	StreamEvents(context.Context) (*transport.EventStream, error)
+}
+
+type eventTypeStreamClient interface {
+	StreamEventsByType(context.Context, ...string) (*transport.EventStream, error)
 }
 
 type Options struct {
@@ -269,7 +275,13 @@ func (m Model) focusCmd(agentID string) tea.Cmd {
 
 func (m Model) connectStreamCmd() tea.Cmd {
 	return func() tea.Msg {
-		stream, err := m.client.StreamEvents(m.ctx)
+		var stream *transport.EventStream
+		var err error
+		if client, ok := m.client.(eventTypeStreamClient); ok {
+			stream, err = client.StreamEventsByType(m.ctx, agentStateChangedEventType)
+		} else {
+			stream, err = m.client.StreamEvents(m.ctx)
+		}
 		return streamReadyMsg{stream: stream, err: err}
 	}
 }
