@@ -17,6 +17,7 @@ func TestProfileBuildCommandWithBypass(t *testing.T) {
 		{codingagent.KindClaude, []string{"claude", "--dangerously-skip-permissions"}},
 		{codingagent.KindGemini, []string{"agy", "--dangerously-skip-permissions"}},
 		{codingagent.KindCursor, []string{"agent", "--yolo", "--trust"}},
+		{codingagent.KindHermes, []string{"hermes"}},
 	}
 	for _, tt := range tests {
 		profile, ok := codingagent.LookupProfile(tt.kind)
@@ -26,6 +27,16 @@ func TestProfileBuildCommandWithBypass(t *testing.T) {
 		if got := profile.BuildCommand(true, nil); !slices.Equal(got, tt.want) {
 			t.Fatalf("BuildCommand() = %#v, want %#v", got, tt.want)
 		}
+	}
+}
+
+func TestHermesProfileDoesNotTrackState(t *testing.T) {
+	profile, ok := codingagent.LookupProfile(codingagent.KindHermes)
+	if !ok {
+		t.Fatal("LookupProfile(hermes) missing")
+	}
+	if profile.TracksState {
+		t.Fatal("Hermes TracksState = true, want false")
 	}
 }
 

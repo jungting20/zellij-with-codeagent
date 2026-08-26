@@ -13,6 +13,7 @@ const (
 	KindClaude Kind = "claude"
 	KindGemini Kind = "gemini"
 	KindCursor Kind = "cursor"
+	KindHermes Kind = "hermes"
 )
 
 type Profile struct {
@@ -21,6 +22,7 @@ type Profile struct {
 	Executable  string
 	BypassArgs  []string
 	Manifest    string
+	TracksState bool
 }
 
 var profiles = map[Kind]Profile{
@@ -30,6 +32,7 @@ var profiles = map[Kind]Profile{
 		Executable:  "codex",
 		BypassArgs:  []string{"--dangerously-bypass-approvals-and-sandbox"},
 		Manifest:    "codex.yaml",
+		TracksState: true,
 	},
 	KindClaude: {
 		Kind:        KindClaude,
@@ -37,6 +40,7 @@ var profiles = map[Kind]Profile{
 		Executable:  "claude",
 		BypassArgs:  []string{"--dangerously-skip-permissions"},
 		Manifest:    "claude.yaml",
+		TracksState: true,
 	},
 	KindGemini: {
 		Kind:        KindGemini,
@@ -44,6 +48,7 @@ var profiles = map[Kind]Profile{
 		Executable:  "agy",
 		BypassArgs:  []string{"--dangerously-skip-permissions"},
 		Manifest:    "gemini.yaml",
+		TracksState: true,
 	},
 	KindCursor: {
 		Kind:        KindCursor,
@@ -51,6 +56,13 @@ var profiles = map[Kind]Profile{
 		Executable:  "agent",
 		BypassArgs:  []string{"--yolo", "--trust"},
 		Manifest:    "cursor.yaml",
+		TracksState: true,
+	},
+	KindHermes: {
+		Kind:        KindHermes,
+		DisplayName: "Hermes",
+		Executable:  "hermes",
+		TracksState: false,
 	},
 }
 

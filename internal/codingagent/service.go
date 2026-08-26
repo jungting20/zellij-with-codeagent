@@ -186,20 +186,25 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 		PaneID:         runtime.PaneID(id),
 		CWD:            cwd,
 		State:          StateUnknown,
-		NotifyOnIdle:   request.NotifyOnIdle,
+		NotifyOnIdle:   request.NotifyOnIdle && profile.TracksState,
 		CreatedAt:      now,
 		StateChangedAt: now,
+	}
+	if !profile.TracksState {
+		record.StateReason = "state_tracking_disabled"
 	}
 	created, owner, err := s.registerStart(record)
 	if err != nil {
 		return StartAgentResponse{}, fmt.Errorf("register coding agent %q: %w", id, err)
 	}
-	if err := s.monitor.Start(created); err != nil {
-		_, rollbackErr := s.cleanupOwnedRecord(owner, false)
-		return StartAgentResponse{}, errors.Join(
-			fmt.Errorf("start coding agent monitor %q: %w", id, err),
-			rollbackErr,
-		)
+	if profile.TracksState {
+		if err := s.monitor.Start(created); err != nil {
+			_, rollbackErr := s.cleanupOwnedRecord(owner, false)
+			return StartAgentResponse{}, errors.Join(
+				fmt.Errorf("start coding agent monitor %q: %w", id, err),
+				rollbackErr,
+			)
+		}
 	}
 
 	paneResponse, err := s.RuntimeService.ClaimPane(ctx, runtime.ClaimPaneRequest{

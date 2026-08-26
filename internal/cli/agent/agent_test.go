@@ -555,7 +555,7 @@ func TestRunStartAcceptsOnlyExactKinds(t *testing.T) {
 		Getwd:  func() (string, error) { return cwd, nil },
 		Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": " session-a ", "ZELLIJ_PANE_ID": " terminal_2 "}),
 	}
-	for _, kind := range []string{"codex", "claude", "gemini", "cursor"} {
+	for _, kind := range []string{"codex", "claude", "gemini", "cursor", "hermes"} {
 		t.Run(kind, func(t *testing.T) {
 			client := &testClient{response: started("agent-1", kind, "pane-1", []string{"/usr/bin/true"}, cwd)}
 			var stdout, stderr bytes.Buffer
@@ -620,7 +620,7 @@ func TestRunStartRejectsInvalidInputBeforeCallingClient(t *testing.T) {
 		want string
 	}{
 		{name: "unsupported kind", args: []string{"start", "aider"}, want: "unsupported agent kind: aider"},
-		{name: "missing kind", args: []string{"start"}, want: "start requires <codex|claude|gemini|cursor>"},
+		{name: "missing kind", args: []string{"start"}, want: "start requires <codex|claude|gemini|cursor|hermes>"},
 		{name: "non-directory cwd", args: []string{"start", "codex", "--cwd", file}, want: "resolve cwd:"},
 		{name: "missing session", args: []string{"start", "codex"}, env: map[string]string{"ZELLIJ_SESSION_NAME": "", "ZELLIJ_PANE_ID": "terminal_2"}, want: "ZELLIJ_SESSION_NAME is required"},
 		{name: "missing pane", args: []string{"start", "codex"}, env: map[string]string{"ZELLIJ_SESSION_NAME": "session-a", "ZELLIJ_PANE_ID": ""}, want: "ZELLIJ_PANE_ID is required"},
@@ -691,7 +691,7 @@ func TestRunHelpDocumentsStartContract(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("Run(%#v) exit code = %d, stderr=%q", args, code, stderr.String())
 		}
-		for _, want := range []string{"codex", "claude", "gemini", "cursor", "agy", "default: current working directory", "--access full|read-only", "zellij-agent agent start codex --access full -- \"Implement M1\"", "zellij-agent agent start codex --access read-only -- \"Verify M1\"", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-skip-permissions", "agent --yolo --trust", "-- passthrough", "current Zellij pane", "closes the managed pane when the agent exits"} {
+		for _, want := range []string{"codex", "claude", "gemini", "cursor", "hermes", "agy", "default: current working directory", "--access full|read-only", "zellij-agent agent start codex --access full -- \"Implement M1\"", "zellij-agent agent start codex --access read-only -- \"Verify M1\"", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-skip-permissions", "agent --yolo --trust", "-- passthrough", "current Zellij pane", "closes the managed pane when the agent exits"} {
 			if !strings.Contains(stdout.String(), want) {
 				t.Fatalf("Run(%#v) help = %q, missing %q", args, stdout.String(), want)
 			}

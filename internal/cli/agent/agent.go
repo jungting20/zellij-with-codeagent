@@ -212,13 +212,13 @@ func runStart(args []string, stdin io.Reader, stdout, stderr io.Writer, newClien
 		return 0
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "start requires <codex|claude|gemini|cursor>")
+		fmt.Fprintln(stderr, "start requires <codex|claude|gemini|cursor|hermes>")
 		return 2
 	}
 
 	kind := args[0]
 	if !supportedKind(kind) {
-		fmt.Fprintf(stderr, "unsupported agent kind: %s (want codex, claude, gemini, or cursor)\n", kind)
+		fmt.Fprintf(stderr, "unsupported agent kind: %s (want codex, claude, gemini, cursor, or hermes)\n", kind)
 		return 2
 	}
 
@@ -494,7 +494,7 @@ func isNilAgentClient(client AgentClient) bool {
 
 func supportedKind(kind string) bool {
 	switch kind {
-	case "codex", "claude", "gemini", "cursor":
+	case "codex", "claude", "gemini", "cursor", "hermes":
 		return true
 	default:
 		return false
@@ -549,7 +549,7 @@ func printDashboardUsage(w io.Writer) {
 }
 
 func printStartUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: zellij-agent agent start <codex|claude|gemini|cursor> [--cwd DIR --socket PATH --timeout DURATION --access full|read-only] [-- full-access arguments | read-only-prompt]")
+	fmt.Fprintln(w, "Usage: zellij-agent agent start <codex|claude|gemini|cursor|hermes> [--cwd DIR --socket PATH --timeout DURATION --access full|read-only] [-- full-access arguments | read-only-prompt]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Options:")
 	fmt.Fprintln(w, "  --cwd DIR")
@@ -568,7 +568,7 @@ func printStartUsage(w io.Writer) {
 }
 
 func printStartSummary(w io.Writer) {
-	fmt.Fprintln(w, "Start kinds: codex, claude, gemini, cursor")
+	fmt.Fprintln(w, "Start kinds: codex, claude, gemini, cursor, hermes")
 	fmt.Fprintln(w, "CWD default: current working directory")
 	fmt.Fprintln(w, "Start claims and manages the current Zellij pane.")
 	fmt.Fprintln(w, "Start closes the managed pane when the agent exits.")

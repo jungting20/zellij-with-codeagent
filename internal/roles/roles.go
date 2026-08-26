@@ -115,7 +115,7 @@ var specs = []RoleSpec{
 		Description: "Runs a selected coding agent in the repository containing the target path.",
 		Arguments: []ArgumentSpec{
 			{Name: "path", Required: true, Description: "File or directory path inside the repository where the coding agent should run."},
-			{Name: "--agent", Required: false, Description: "Coding agent kind: codex, claude, gemini, or cursor. Defaults to codex."},
+			{Name: "--agent", Required: false, Description: "Coding agent kind: codex, claude, gemini, cursor, or hermes. Defaults to codex."},
 			{Name: "--yolo", Required: false, Description: "Bypass coding agent permissions and sandboxing."},
 			{Name: "agent-args", Required: false, Description: "Arguments passed to the selected coding agent after --."},
 		},

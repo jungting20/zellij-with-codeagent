@@ -112,6 +112,48 @@ func TestServiceStartAgentCreatesRegisteredMonitoredPane(t *testing.T) {
 	}
 }
 
+func TestServiceStartHermesCreatesManagedPaneWithoutStateMonitor(t *testing.T) {
+	now := time.Date(2026, 8, 12, 9, 30, 0, 0, time.UTC)
+	store := NewMemoryStore(func() time.Time { return now })
+	monitor := &serviceFakeMonitor{startErr: errors.New("monitor must not start")}
+	cwd := t.TempDir()
+	runtimeService := &serviceFakeRuntime{
+		claimFn: func(_ context.Context, request runtime.ClaimPaneRequest) (runtime.ClaimPaneResponse, error) {
+			wantCommand := []string{"hermes", "chat", "--yolo", "-q", "investigate"}
+			if !reflect.DeepEqual(request.Command, wantCommand) {
+				t.Fatalf("ClaimPane command = %#v, want %#v", request.Command, wantCommand)
+			}
+			return runtime.ClaimPaneResponse{Pane: runtime.Pane{
+				ID: request.ID, AgentID: request.AgentID, Role: request.Role,
+				SessionID: runtime.SessionID(request.ZellijSession), ZellijPaneID: request.ZellijPaneID,
+				Command: append([]string(nil), request.Command...), CWD: request.CWD,
+			}}, nil
+		},
+	}
+	service := NewService(ServiceOptions{
+		RuntimeService: runtimeService, Store: store, LifecycleMonitor: monitor,
+		Now: func() time.Time { return now }, NewAgentID: func() ID { return "agent-hermes" },
+	})
+
+	response, err := service.StartAgent(context.Background(), StartAgentRequest{
+		Kind: KindHermes, CWD: cwd,
+		ExtraArgs: []string{"chat", "--yolo", "-q", "investigate"}, NotifyOnIdle: true,
+		SourceZellijSession: "physical-a", SourceZellijPaneID: "terminal_2",
+	})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	if len(monitor.started) != 0 {
+		t.Fatalf("monitor started = %#v, want none", monitor.started)
+	}
+	if response.Agent.Agent.State != StateUnknown || response.Agent.Agent.StateReason != "state_tracking_disabled" {
+		t.Fatalf("Hermes state = (%q, %q), want unknown/state_tracking_disabled", response.Agent.Agent.State, response.Agent.Agent.StateReason)
+	}
+	if response.Agent.Agent.NotifyOnIdle {
+		t.Fatal("Hermes NotifyOnIdle = true, want false")
+	}
+}
+
 func TestServiceStartAgentRejectsInvalidRequestsBeforeRegistration(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "not-a-directory")
 	if err := os.WriteFile(filePath, []byte("x"), 0o600); err != nil {

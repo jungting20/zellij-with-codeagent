@@ -12,17 +12,20 @@ import (
 )
 
 type agent struct {
-	name     string
-	command  string
-	baseArgs []string
-	yoloArgs []string
+	name               string
+	command            string
+	baseArgs           []string
+	yoloArgs           []string
+	promptArgs         []string
+	supportsNotifyIdle bool
 }
 
 var agents = []agent{
-	{name: "agent", command: "zellij-agent", baseArgs: []string{"agent", "start", "cursor", "--"}},
-	{name: "antigravity", command: "zellij-agent", baseArgs: []string{"agent", "start", "gemini", "--"}},
-	{name: "codex", command: "zellij-agent", baseArgs: []string{"agent", "start", "codex", "--"}},
-	{name: "claude", command: "zellij-agent", baseArgs: []string{"agent", "start", "claude", "--"}, yoloArgs: []string{"--dangerously-skip-permissions"}},
+	{name: "codex", command: "zellij-agent", baseArgs: []string{"agent", "start", "codex", "--"}, supportsNotifyIdle: true},
+	{name: "hermes", command: "zellij-agent", baseArgs: []string{"agent", "start", "hermes", "--", "chat"}, yoloArgs: []string{"--yolo"}, promptArgs: []string{"-q"}},
+	{name: "agent", command: "zellij-agent", baseArgs: []string{"agent", "start", "cursor", "--"}, supportsNotifyIdle: true},
+	{name: "antigravity", command: "zellij-agent", baseArgs: []string{"agent", "start", "gemini", "--"}, supportsNotifyIdle: true},
+	{name: "claude", command: "zellij-agent", baseArgs: []string{"agent", "start", "claude", "--"}, yoloArgs: []string{"--dangerously-skip-permissions"}, supportsNotifyIdle: true},
 }
 
 type focusArea int
@@ -202,13 +205,14 @@ func (m Model) selectedCommand() (string, []string) {
 	selected := m.agents[m.cursor]
 	args := make([]string, 0, len(selected.baseArgs)+len(selected.yoloArgs)+1)
 	args = append(args, selected.baseArgs...)
-	if m.voice {
+	if m.voice && selected.supportsNotifyIdle {
 		args = insertBeforePassthrough(args, "--notify-idle")
 	}
 	if m.yolo {
 		args = append(args, selected.yoloArgs...)
 	}
 	if prompt := strings.TrimSpace(m.prompt.Value()); prompt != "" {
+		args = append(args, selected.promptArgs...)
 		args = append(args, prompt)
 	}
 	return selected.command, args

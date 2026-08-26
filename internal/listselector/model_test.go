@@ -21,6 +21,7 @@ func TestDefaultAgentCommands(t *testing.T) {
 		{name: "agent", yolo: true, wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "cursor", "--"}},
 		{name: "antigravity", yolo: true, voice: true, prompt: "fix it", wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "gemini", "--notify-idle", "--", "fix it"}},
 		{name: "codex", yolo: true, wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "codex", "--"}},
+		{name: "hermes", yolo: true, voice: true, prompt: "investigate", wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "hermes", "--", "chat", "--yolo", "-q", "investigate"}},
 		{name: "claude", yolo: false, voice: true, prompt: "review", wantCommand: "zellij-agent", wantArgs: []string{"agent", "start", "claude", "--notify-idle", "--", "review"}},
 	}
 
@@ -45,6 +46,18 @@ func TestDefaultAgentCommands(t *testing.T) {
 				t.Fatalf("args = %#v, want %#v", args, tt.wantArgs)
 			}
 		})
+	}
+}
+
+func TestDefaultAgentOrder(t *testing.T) {
+	m := NewModel()
+	want := []string{"codex", "hermes", "agent", "antigravity", "claude"}
+	got := make([]string, 0, len(m.agents))
+	for _, item := range m.agents {
+		got = append(got, item.name)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("agent order = %#v, want %#v", got, want)
 	}
 }
 
