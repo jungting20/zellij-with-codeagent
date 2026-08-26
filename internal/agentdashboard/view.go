@@ -20,6 +20,7 @@ var (
 	idleStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
 	unknownStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	selectedStyle = lipgloss.NewStyle().Reverse(true)
+	sessionStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("69"))
 	mutedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 )
@@ -38,13 +39,20 @@ func (m Model) View() string {
 	} else if len(m.rows) == 0 {
 		lines = append(lines, "No managed coding agents")
 	} else {
-		visible := len(m.rows)
+		displayRows := m.displayRows()
+		visible := len(displayRows)
 		if m.height > 0 {
 			visible = minInt(visible, maxInt(1, m.height-4))
 		}
-		start := viewportStart(m.selected, len(m.rows), visible)
-		for index := start; index < len(m.rows) && index < start+visible; index++ {
-			lines = append(lines, m.rowView(m.rows[index], index == m.selected, width))
+		selected := displayIndexForAgent(displayRows, m.selected)
+		start := viewportStart(selected, len(displayRows), visible)
+		for index := start; index < len(displayRows) && index < start+visible; index++ {
+			row := displayRows[index]
+			if row.agentIndex < 0 {
+				lines = append(lines, m.sessionView(row.session, row.count))
+				continue
+			}
+			lines = append(lines, m.rowView(m.rows[row.agentIndex], row.agentIndex == m.selected, width))
 		}
 	}
 	if m.statusText != "" {
@@ -62,6 +70,46 @@ func (m Model) View() string {
 		lines = append(lines[:m.height-1], lines[len(lines)-1])
 	}
 	return strings.Join(lines, "\n")
+}
+
+type displayRow struct {
+	session    string
+	count      int
+	agentIndex int
+}
+
+func (m Model) displayRows() []displayRow {
+	rows := make([]displayRow, 0, len(m.rows)*2)
+	for start := 0; start < len(m.rows); {
+		session := sessionName(m.rows[start])
+		end := start + 1
+		for end < len(m.rows) && sessionName(m.rows[end]) == session {
+			end++
+		}
+		rows = append(rows, displayRow{session: session, count: end - start, agentIndex: -1})
+		for index := start; index < end; index++ {
+			rows = append(rows, displayRow{agentIndex: index})
+		}
+		start = end
+	}
+	return rows
+}
+
+func displayIndexForAgent(rows []displayRow, agentIndex int) int {
+	for index, row := range rows {
+		if row.agentIndex == agentIndex {
+			return index
+		}
+	}
+	return 0
+}
+
+func (m Model) sessionView(session string, count int) string {
+	label := fmt.Sprintf("SESSION %s (%d)", session, count)
+	if strings.TrimSpace(m.opts.SourceSession) == session {
+		label += "  current"
+	}
+	return sessionStyle.Render(label)
 }
 
 func (m Model) headerView() string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -187,9 +188,7 @@ func (m Model) handleRefresh(msg refreshResultMsg) (tea.Model, tea.Cmd) {
 	} else {
 		m.listHealthy = true
 		rows := append([]transport.AgentWithPane(nil), msg.agents.Agents...)
-		sort.SliceStable(rows, func(i, j int) bool {
-			return rows[i].Agent.CreatedAt.Before(rows[j].Agent.CreatedAt)
-		})
+		sortAgentRows(rows, m.opts.SourceSession)
 		m.rows = rows
 		m.loaded = true
 		m.lastRefresh = msg.at
@@ -202,6 +201,33 @@ func (m Model) handleRefresh(msg refreshResultMsg) (tea.Model, tea.Cmd) {
 		return m, m.requestRefresh()
 	}
 	return m, nil
+}
+
+func sortAgentRows(rows []transport.AgentWithPane, sourceSession string) {
+	sourceSession = strings.TrimSpace(sourceSession)
+	sort.SliceStable(rows, func(i, j int) bool {
+		leftSession := sessionName(rows[i])
+		rightSession := sessionName(rows[j])
+		leftCurrent := sourceSession != "" && leftSession == sourceSession
+		rightCurrent := sourceSession != "" && rightSession == sourceSession
+		if leftCurrent != rightCurrent {
+			return leftCurrent
+		}
+		if leftSession != rightSession {
+			return leftSession < rightSession
+		}
+		if !rows[i].Agent.CreatedAt.Equal(rows[j].Agent.CreatedAt) {
+			return rows[i].Agent.CreatedAt.Before(rows[j].Agent.CreatedAt)
+		}
+		return rows[i].Agent.ID < rows[j].Agent.ID
+	})
+}
+
+func sessionName(record transport.AgentWithPane) string {
+	if name := strings.TrimSpace(record.Pane.SessionID); name != "" {
+		return name
+	}
+	return "ungrouped"
 }
 
 func (m *Model) restoreSelection() {

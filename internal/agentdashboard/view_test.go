@@ -11,7 +11,7 @@ import (
 	"zellij-with-codeagent/internal/transport"
 )
 
-func TestViewRendersDeterministicFlatDashboardAtSupportedWidths(t *testing.T) {
+func TestViewRendersDeterministicGroupedDashboardAtSupportedWidths(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	records := []transport.AgentWithPane{
 		viewRecord("agent-codex", "codex", "working", "/repo/zellij-with-codeagent", now.Add(-90*time.Second)),
@@ -19,10 +19,14 @@ func TestViewRendersDeterministicFlatDashboardAtSupportedWidths(t *testing.T) {
 		viewRecord("agent-gemini", "gemini", "idle", "/repo/frontend", now.Add(-3*time.Minute-41*time.Second)),
 		viewRecord("agent-cursor", "cursor", "unknown", "/repo/mobile", now.Add(-2*time.Second)),
 	}
+	records[0].Pane.SessionID = "project-alpha"
+	records[1].Pane.SessionID = "project-alpha"
+	records[2].Pane.SessionID = "experiments"
+	records[3].Pane.SessionID = "experiments"
 
 	for _, width := range []int{80, 120} {
 		t.Run(string(rune(width)), func(t *testing.T) {
-			m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+			m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{SourceSession: "project-alpha"}))
 			m.width, m.height, m.connection, m.loaded, m.lastRefresh = width, 12, "live", true, now
 			m.rows = append([]transport.AgentWithPane(nil), records...)
 			m.selected, m.selectedID = 1, "agent-claude"
@@ -30,6 +34,7 @@ func TestViewRendersDeterministicFlatDashboardAtSupportedWidths(t *testing.T) {
 
 			for _, want := range []string{
 				"AGENT DASHBOARD", "STATE  AGENT  ACCESS  PROJECT  SINCE",
+				"SESSION project-alpha (2)  current", "SESSION experiments (2)",
 				"Codex", "Claude", "Gemini", "Cursor",
 				"working", "blocked", "idle", "unknown",
 				"zellij-with-codeagent", "api-server", "frontend", "mobile",
@@ -51,6 +56,21 @@ func TestViewRendersDeterministicFlatDashboardAtSupportedWidths(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestViewGroupsMissingSessionAsUngrouped(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m.width, m.height, m.connection, m.loaded, m.lastRefresh = 100, 8, "live", true, now
+	m.rows = []transport.AgentWithPane{
+		viewRecord("agent-one", "codex", "idle", "/repo/one", now.Add(-time.Minute)),
+		viewRecord("agent-two", "claude", "working", "/repo/two", now.Add(-time.Minute)),
+	}
+
+	plain := ansi.Strip(m.View())
+	if !strings.Contains(plain, "SESSION ungrouped (2)") {
+		t.Fatalf("view missing ungrouped session header:\n%s", plain)
 	}
 }
 
