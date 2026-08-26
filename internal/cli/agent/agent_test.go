@@ -62,6 +62,47 @@ func TestRunDashboardRequiresZellijContext(t *testing.T) {
 	}
 }
 
+func TestRunDashboardJSONListsAgentsWithoutZellijContext(t *testing.T) {
+	client := &testClient{listResponse: transport.ListAgentsResponse{
+		Agents: []transport.AgentWithPane{{
+			Agent: transport.Agent{ID: "agent-1", Kind: "codex", State: "idle"},
+			Pane:  transport.Pane{ID: "pane-1", CWD: "/tmp/project"},
+		}},
+	}}
+	var stdout, stderr bytes.Buffer
+	code := Run(
+		[]string{"dashboard", "--output", "json", "--timeout", "3s"},
+		strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{Getenv: func(string) string { return "" }},
+	)
+	if code != 0 || stderr.Len() != 0 || client.listCalls != 1 {
+		t.Fatalf("code=%d listCalls=%d stdout=%q stderr=%q", code, client.listCalls, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{`"id":"agent-1"`, `"kind":"codex"`, `"state":"idle"`, `"cwd":"/tmp/project"`} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout=%q, missing %q", stdout.String(), want)
+		}
+	}
+}
+
+func TestRunDashboardFocusesAgentForSidebar(t *testing.T) {
+	client := &testClient{focusResponse: transport.FocusAgentResponse{Agent: transport.AgentWithPane{Agent: transport.Agent{ID: "agent-2"}}}}
+	var stdout, stderr bytes.Buffer
+	code := Run(
+		[]string{"dashboard", "--output", "json", "--focus", "agent-2", "--timeout", "3s"},
+		strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{Getenv: mapGetenv(map[string]string{
+			"ZELLIJ_SESSION_NAME": "session-b",
+			"ZELLIJ_PANE_ID":      "terminal_8",
+		})},
+	)
+	if code != 0 || stderr.Len() != 0 || client.focusCalls != 1 || client.focusAgentID != "agent-2" {
+		t.Fatalf("code=%d focusCalls=%d agent=%q stdout=%q stderr=%q", code, client.focusCalls, client.focusAgentID, stdout.String(), stderr.String())
+	}
+	want := transport.FocusAgentRequest{SourceSession: "session-b", SourceZellijPaneID: "terminal_8"}
+	if !reflect.DeepEqual(client.focusRequest, want) {
+		t.Fatalf("FocusAgent request=%#v, want %#v", client.focusRequest, want)
+	}
+}
+
 func TestRunNextFocusesNextAgentWithZellijContext(t *testing.T) {
 	client := &testClient{nextResponse: focusedNext("agent-2", "claude", "agent-2", "pane-2")}
 	var stdout, stderr bytes.Buffer
@@ -731,6 +772,14 @@ type testClient struct {
 	healthErr        error
 	healthCalls      int
 	healthConfigured bool
+	listResponse     transport.ListAgentsResponse
+	listErr          error
+	listCalls        int
+	focusResponse    transport.FocusAgentResponse
+	focusErr         error
+	focusCalls       int
+	focusAgentID     string
+	focusRequest     transport.FocusAgentRequest
 }
 
 func (c *testClient) Health(context.Context) (transport.HealthResponse, error) {
@@ -759,11 +808,15 @@ func (c *testClient) ClosePane(ctx context.Context, paneID string) (transport.Cl
 }
 
 func (c *testClient) ListAgents(context.Context) (transport.ListAgentsResponse, error) {
-	return transport.ListAgentsResponse{}, nil
+	c.listCalls++
+	return c.listResponse, c.listErr
 }
 
-func (c *testClient) FocusAgent(context.Context, string, transport.FocusAgentRequest) (transport.FocusAgentResponse, error) {
-	return transport.FocusAgentResponse{}, nil
+func (c *testClient) FocusAgent(_ context.Context, agentID string, request transport.FocusAgentRequest) (transport.FocusAgentResponse, error) {
+	c.focusCalls++
+	c.focusAgentID = agentID
+	c.focusRequest = request
+	return c.focusResponse, c.focusErr
 }
 
 func (c *testClient) FocusNextAgent(ctx context.Context, request transport.FocusNextAgentRequest) (transport.FocusNextAgentResponse, error) {

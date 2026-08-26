@@ -2,6 +2,7 @@ package agentcli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -145,6 +146,8 @@ func runDashboard(args []string, stdin io.Reader, stdout, stderr io.Writer, newC
 	socket := fs.String("socket", cli.DefaultSocketPath, "agentd Unix socket path")
 	timeout := fs.Duration("timeout", defaultTimeout, "request timeout")
 	refresh := fs.Duration("refresh-interval", defaultRefreshInterval, "polling refresh interval")
+	output := fs.String("output", "tui", "output mode: tui or json")
+	focusAgentID := fs.String("focus", "", "focus one agent and exit (requires --output json)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -160,14 +163,12 @@ func runDashboard(args []string, stdin io.Reader, stdout, stderr io.Writer, newC
 		fmt.Fprintln(stderr, "agent dashboard --refresh-interval must be positive")
 		return 2
 	}
-	if cfg.Getenv == nil {
-		fmt.Fprintln(stderr, "agent dashboard configuration error: Getenv is required")
-		return 1
+	if *output != "tui" && *output != "json" {
+		fmt.Fprintln(stderr, "agent dashboard --output must be tui or json")
+		return 2
 	}
-	session := strings.TrimSpace(cfg.Getenv("ZELLIJ_SESSION_NAME"))
-	paneID := normalizeZellijPaneID(cfg.Getenv("ZELLIJ_PANE_ID"))
-	if session == "" || paneID == "" {
-		fmt.Fprintln(stderr, "agent dashboard must run inside a Zellij pane (ZELLIJ_SESSION_NAME and ZELLIJ_PANE_ID are required)")
+	if strings.TrimSpace(*focusAgentID) != "" && *output != "json" {
+		fmt.Fprintln(stderr, "agent dashboard --focus requires --output json")
 		return 2
 	}
 	if newClient == nil {
@@ -178,6 +179,47 @@ func runDashboard(args []string, stdin io.Reader, stdout, stderr io.Writer, newC
 	if isNilAgentClient(client) {
 		fmt.Fprintln(stderr, "agent dashboard client is not configured")
 		return 1
+	}
+	if *output == "json" && strings.TrimSpace(*focusAgentID) == "" {
+		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+		defer cancel()
+		response, err := client.ListAgents(ctx)
+		if err != nil {
+			fmt.Fprintf(stderr, "agent dashboard list failed via socket %s: %v\n", *socket, err)
+			return 1
+		}
+		if err := json.NewEncoder(stdout).Encode(response); err != nil {
+			fmt.Fprintf(stderr, "agent dashboard encode failed: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if cfg.Getenv == nil {
+		fmt.Fprintln(stderr, "agent dashboard configuration error: Getenv is required")
+		return 1
+	}
+	session := strings.TrimSpace(cfg.Getenv("ZELLIJ_SESSION_NAME"))
+	paneID := normalizeZellijPaneID(cfg.Getenv("ZELLIJ_PANE_ID"))
+	if session == "" || paneID == "" {
+		fmt.Fprintln(stderr, "agent dashboard must run inside a Zellij pane (ZELLIJ_SESSION_NAME and ZELLIJ_PANE_ID are required)")
+		return 2
+	}
+	if strings.TrimSpace(*focusAgentID) != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+		defer cancel()
+		response, err := client.FocusAgent(ctx, strings.TrimSpace(*focusAgentID), transport.FocusAgentRequest{
+			SourceSession:      session,
+			SourceZellijPaneID: paneID,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "agent dashboard focus failed via socket %s: %v\n", *socket, err)
+			return 1
+		}
+		if err := json.NewEncoder(stdout).Encode(response); err != nil {
+			fmt.Fprintf(stderr, "agent dashboard encode failed: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 	newModel := cfg.NewModel
 	if newModel == nil {
@@ -537,13 +579,17 @@ func printNextUsage(w io.Writer) {
 }
 
 func printDashboardUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: zellij-agent agent dashboard [--socket PATH --timeout DURATION --refresh-interval DURATION]")
+	fmt.Fprintln(w, "Usage: zellij-agent agent dashboard [--socket PATH --timeout DURATION --refresh-interval DURATION] [--output tui|json] [--focus AGENT_ID]")
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "  --socket PATH\n    agentd Unix socket path (default %q)\n", cli.DefaultSocketPath)
 	fmt.Fprintln(w, "  --timeout DURATION")
 	fmt.Fprintln(w, "    request timeout (default 10s)")
 	fmt.Fprintln(w, "  --refresh-interval DURATION")
 	fmt.Fprintln(w, "    polling refresh interval (default 2s)")
+	fmt.Fprintln(w, "  --output tui|json")
+	fmt.Fprintln(w, "    interactive dashboard or one-shot machine-readable output (default tui)")
+	fmt.Fprintln(w, "  --focus AGENT_ID")
+	fmt.Fprintln(w, "    focus one agent and exit; requires --output json")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Keys: j/k move, Enter focus, R refresh, q quit")
 }

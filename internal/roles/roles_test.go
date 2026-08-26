@@ -189,6 +189,25 @@ func TestLookupAgentNext(t *testing.T) {
 	}
 }
 
+func TestLookupAgentDashboard(t *testing.T) {
+	spec, ok := Lookup(RoleAgentDashboard)
+	if !ok {
+		t.Fatal("Lookup(RoleAgentDashboard) ok = false, want true")
+	}
+	if spec.Usage != "agent-dashboard [--socket PATH --timeout DURATION --refresh-interval DURATION] [--output tui|json] [--focus AGENT_ID]" {
+		t.Fatalf("usage = %q, want agent-dashboard usage", spec.Usage)
+	}
+	want := []string{"--socket", "--timeout", "--refresh-interval", "--output", "--focus"}
+	if len(spec.Arguments) != len(want) {
+		t.Fatalf("arguments = %#v, want %d optional arguments", spec.Arguments, len(want))
+	}
+	for i, name := range want {
+		if spec.Arguments[i].Name != name || spec.Arguments[i].Required {
+			t.Fatalf("arguments[%d] = %#v, want optional %s", i, spec.Arguments[i], name)
+		}
+	}
+}
+
 func TestLookupLoopProjectRoles(t *testing.T) {
 	for _, name := range []string{RoleLoopProjectWorker, RoleLoopProjectVerifier} {
 		spec, ok := Lookup(name)

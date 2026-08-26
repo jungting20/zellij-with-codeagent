@@ -28,6 +28,7 @@ const (
 	RoleDebateCritic        = "debate-critic"
 	RoleDebateJudge         = "debate-judge"
 	RoleAgentNext           = "agent-next"
+	RoleAgentDashboard      = "agent-dashboard"
 	RoleLoopProjectWorker   = "loop-project-worker"
 	RoleLoopProjectVerifier = "loop-project-verifier"
 )
@@ -128,6 +129,18 @@ var specs = []RoleSpec{
 			{Name: "--socket", Required: false, Description: "agentd Unix socket path."},
 			{Name: "--timeout", Required: false, Description: "Daemon request timeout."},
 			{Name: "--idle-only", Required: false, Description: "Cycle only through idle agents."},
+		},
+	},
+	{
+		Name:        RoleAgentDashboard,
+		Usage:       "agent-dashboard [--socket PATH --timeout DURATION --refresh-interval DURATION] [--output tui|json] [--focus AGENT_ID]",
+		Description: "Shows and focuses managed coding agents in a dashboard.",
+		Arguments: []ArgumentSpec{
+			{Name: "--socket", Required: false, Description: "agentd Unix socket path."},
+			{Name: "--timeout", Required: false, Description: "Daemon request timeout."},
+			{Name: "--refresh-interval", Required: false, Description: "Dashboard polling interval."},
+			{Name: "--output", Required: false, Description: "Output mode: tui or json."},
+			{Name: "--focus", Required: false, Description: "Focus one agent and exit in JSON mode."},
 		},
 	},
 	{

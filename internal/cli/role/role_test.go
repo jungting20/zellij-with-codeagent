@@ -92,6 +92,24 @@ func TestRunDispatchesAgentNext(t *testing.T) {
 	}
 }
 
+func TestRunDispatchesAgentDashboard(t *testing.T) {
+	binDir := t.TempDir()
+	argsPath := filepath.Join(t.TempDir(), "args")
+	writeFakeProvider(t, filepath.Join(binDir, "zellij-agent"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \""+argsPath+"\"\n")
+	t.Setenv("PATH", binDir)
+
+	if code := Run([]string{"agent-dashboard", "--refresh-interval", "3s"}); code != 0 {
+		t.Fatalf("Run(agent-dashboard) = %d, want 0", code)
+	}
+	got, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(args) error = %v", err)
+	}
+	if string(got) != "agent\ndashboard\n--refresh-interval\n3s\n" {
+		t.Fatalf("zellij-agent args = %q, want agent dashboard --refresh-interval 3s", got)
+	}
+}
+
 func TestRunDispatchesDebateCoordinator(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
