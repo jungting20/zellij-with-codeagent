@@ -155,28 +155,6 @@ and delegate to the existing `zellij-agent agent next` CLI command
 (`Alt+p` adds `--idle-only`). Verify this by comparing
 `zellij action list-panes --all` inventories before and after each shortcut.
 
-### Agent Dashboard Sidebar
-
-Install the left-side dashboard plugin atomically with:
-
-```bash
-./scripts/install-agent-dashboard-sidebar.sh
-```
-
-Add `agent-dashboard-sidebar-v2.wasm` as a borderless left pane in the layout and
-pass `executable_path` pointing to the installed `zellij-agent` binary. Bind
-`Alt+z` to a `MessagePlugin` action with name `toggle-agent-dashboard` and the
-same plugin URL and configuration. The sidebar is non-selectable while idle;
-`Alt+z` focuses it, `j`/`k` or the arrow keys select an agent, `Enter` focuses
-the selected managed agent through the daemon, and `Esc` or `Alt+z` returns to
-the previous terminal pane.
-
-The plugin requests `ReadApplicationState`, `ChangeApplicationState`, and
-`RunCommands`. It renders agent data returned by
-`zellij-agent agent dashboard --output json` and delegates selection to
-`zellij-agent agent dashboard --output json --focus AGENT_ID`, preserving the
-runtime and local transport boundary.
-
 Coding-agent records are in-memory. A pane close notification removes its
 record immediately. In addition, the daemon reconciles Zellij every two
 seconds; if a managed pane no longer exists, runtime reconciliation triggers

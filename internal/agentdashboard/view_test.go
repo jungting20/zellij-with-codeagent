@@ -33,7 +33,7 @@ func TestViewRendersDeterministicGroupedDashboardAtSupportedWidths(t *testing.T)
 			plain := ansi.Strip(m.View())
 
 			for _, want := range []string{
-				"AGENT DASHBOARD", "STATE  AGENT  ACCESS  PROJECT  SINCE",
+				"AGENT DASHBOARD", "PROJECT  STATE  AGENT  ACCESS  SINCE",
 				"SESSION project-alpha (2)  current", "SESSION experiments (2)",
 				"Codex", "Claude", "Gemini", "Cursor",
 				"working", "blocked", "idle", "unknown",
@@ -85,10 +85,29 @@ func TestViewRendersAccessAndDefaultsEmptyAccessToFull(t *testing.T) {
 	m.rows[0].Agent.Access = "read-only"
 
 	plain := ansi.Strip(m.View())
-	for _, want := range []string{"STATE  AGENT  ACCESS  PROJECT  SINCE", "read-only", "full"} {
+	for _, want := range []string{"PROJECT  STATE  AGENT  ACCESS  SINCE", "read-only", "full"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("view missing %q:\n%s", want, plain)
 		}
+	}
+}
+
+func TestViewShowsProjectBeforeOtherColumnsInNarrowPane(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m.width, m.height, m.connection, m.loaded, m.lastRefresh = 20, 8, "live", true, now
+	m.rows = []transport.AgentWithPane{
+		viewRecord("agent-one", "codex", "working", "/repo/first-project", now.Add(-time.Minute)),
+	}
+
+	plain := ansi.Strip(m.View())
+	header := lineContaining(plain, "PROJECT")
+	row := lineContaining(plain, "first-p")
+	if header == "" || row == "" {
+		t.Fatalf("narrow view does not prioritize project column:\n%s", plain)
+	}
+	if strings.Contains(row, "working") || strings.Contains(row, "Codex") {
+		t.Fatalf("narrow row should spend available width on project first: %q", row)
 	}
 }
 

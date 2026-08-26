@@ -33,7 +33,7 @@ func (m Model) View() string {
 	if width <= 0 {
 		width = 80
 	}
-	lines := []string{m.headerView(), "STATE  AGENT  ACCESS  PROJECT  SINCE"}
+	lines := []string{m.headerView(), "PROJECT  STATE  AGENT  ACCESS  SINCE"}
 	if !m.loaded {
 		lines = append(lines, "Loading agents...")
 	} else if len(m.rows) == 0 {
@@ -137,10 +137,10 @@ func (m Model) rowView(record transport.AgentWithPane, selected bool, width int)
 		now = time.Now()
 	}
 	projectWidth := maxInt(8, width-46)
-	line := "  " + padCell(stateView(record.Agent.State), 10) +
+	line := "  " + padCell(projectName(record.Pane.CWD), projectWidth) +
+		"  " + padCell(stateView(record.Agent.State), 10) +
 		"  " + padCell(agentName(record.Agent.Kind), 12) +
 		"  " + padCell(accessName(record.Agent.Access), 9) +
-		"  " + padCell(projectName(record.Pane.CWD), projectWidth) +
 		"  " + elapsed(now, record.Agent.StateChangedAt)
 	if selected {
 		line = "> " + strings.TrimPrefix(line, "  ")
