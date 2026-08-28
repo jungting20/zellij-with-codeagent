@@ -198,13 +198,33 @@ func TestModelTabCyclesSelection(t *testing.T) {
 	}
 }
 
-func TestModelTabWithNoAgentsDoesNothing(t *testing.T) {
+func TestModelShiftTabCyclesSelectionBackward(t *testing.T) {
+	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m = applyRefresh(t, m, []transport.AgentWithPane{
+		record("a", "codex", "idle", time.Unix(1, 0)),
+		record("b", "claude", "idle", time.Unix(2, 0)),
+	})
+
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.selected != 1 || m.selectedID != "b" {
+		t.Fatalf("Shift+Tab selected=%d id=%q, want wrapped to b", m.selected, m.selectedID)
+	}
+
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.selected != 0 || m.selectedID != "a" {
+		t.Fatalf("second Shift+Tab selected=%d id=%q, want a", m.selected, m.selectedID)
+	}
+}
+
+func TestModelTabKeysWithNoAgentsDoNothing(t *testing.T) {
 	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m = concreteModel(t, next)
-	if cmd != nil || m.selected != 0 || m.selectedID != "" {
-		t.Fatalf("Tab with no agents cmd=%v selected=%d id=%q", cmd, m.selected, m.selectedID)
+	for _, key := range []tea.KeyType{tea.KeyTab, tea.KeyShiftTab} {
+		next, cmd := m.Update(tea.KeyMsg{Type: key})
+		m = concreteModel(t, next)
+		if cmd != nil || m.selected != 0 || m.selectedID != "" {
+			t.Fatalf("key %v with no agents cmd=%v selected=%d id=%q", key, cmd, m.selected, m.selectedID)
+		}
 	}
 }
 

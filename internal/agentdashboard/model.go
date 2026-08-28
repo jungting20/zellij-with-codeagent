@@ -170,6 +170,11 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selected = (m.selected + 1) % len(m.rows)
 			m.selectedID = m.rows[m.selected].Agent.ID
 		}
+	case "shift+tab":
+		if len(m.rows) > 0 {
+			m.selected = (m.selected - 1 + len(m.rows)) % len(m.rows)
+			m.selectedID = m.rows[m.selected].Agent.ID
+		}
 	case "R":
 		return m, m.requestRefresh()
 	case "enter":

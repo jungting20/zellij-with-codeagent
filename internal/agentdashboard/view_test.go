@@ -38,7 +38,7 @@ func TestViewRendersDeterministicGroupedDashboardAtSupportedWidths(t *testing.T)
 				"Codex", "Claude", "Gemini", "Cursor",
 				"working", "blocked", "idle", "unknown",
 				"zellij-with-codeagent", "api-server", "frontend", "mobile",
-				"01:30", "> ", "j/k/Tab move  Enter focus  R refresh  q quit",
+				"01:30", "> ", "j/k/Tab/S-Tab move  Enter focus  R refresh  q quit",
 			} {
 				if !strings.Contains(plain, want) {
 					t.Fatalf("width=%d view missing %q:\n%s", width, want, plain)
