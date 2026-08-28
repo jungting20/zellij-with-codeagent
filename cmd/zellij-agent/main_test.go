@@ -148,6 +148,10 @@ func (c *fakeAgentClient) FocusAgent(context.Context, string, transport.FocusAge
 	return transport.FocusAgentResponse{}, nil
 }
 
+func (c *fakeAgentClient) FocusSession(context.Context, string, transport.FocusSessionRequest) (transport.FocusSessionResponse, error) {
+	return transport.FocusSessionResponse{}, nil
+}
+
 func (c *fakeAgentClient) FocusNextAgent(_ context.Context, request transport.FocusNextAgentRequest) (transport.FocusNextAgentResponse, error) {
 	c.nextRequest = request
 	return c.nextResponse, nil

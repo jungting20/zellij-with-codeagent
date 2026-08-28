@@ -135,6 +135,16 @@ type FocusNextAgentResponse struct {
 	Agent   AgentWithPane `json:"agent"`
 }
 
+type FocusSessionRequest struct {
+	SourceSession      string `json:"source_session"`
+	SourceZellijPaneID string `json:"source_zellij_pane_id"`
+}
+
+type FocusSessionResponse struct {
+	SessionID    string `json:"session_id"`
+	ZellijPaneID string `json:"zellij_pane_id"`
+}
+
 type Agent struct {
 	ID             string    `json:"id"`
 	Kind           string    `json:"kind"`

@@ -28,6 +28,7 @@ type ServerOptions struct {
 type ServerRuntime interface {
 	codingagent.AgentService
 	rt.PaneService
+	rt.SessionFocusService
 	rt.RuntimeInspectionService
 	rt.EventService
 	rt.ReconciliationService

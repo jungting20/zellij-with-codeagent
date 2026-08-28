@@ -84,6 +84,40 @@ func TestClientAgentMethodsUseExactPathsMethodsAndEscaping(t *testing.T) {
 	}
 }
 
+func TestClientFocusSessionUsesExactPathAndBody(t *testing.T) {
+	var method, path, body string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.EscapedPath()
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		body = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"session_id":"loop","zellij_pane_id":"terminal_0"}`))
+	}))
+	defer server.Close()
+	client := NewClient(ClientOptions{})
+	client.baseURL = server.URL
+	client.http = server.Client()
+
+	response, err := client.FocusSession(context.Background(), "loop", FocusSessionRequest{
+		SourceSession: "dashboard", SourceZellijPaneID: "terminal_9",
+	})
+	if err != nil {
+		t.Fatalf("FocusSession() error = %v", err)
+	}
+	if method != http.MethodPost || path != "/v1/sessions/loop/focus" {
+		t.Fatalf("request = %s %s", method, path)
+	}
+	if body != `{"source_session":"dashboard","source_zellij_pane_id":"terminal_9"}` {
+		t.Fatalf("request body = %q", body)
+	}
+	if response.SessionID != "loop" || response.ZellijPaneID != "terminal_0" {
+		t.Fatalf("FocusSession() = %#v", response)
+	}
+}
+
 func TestClientCreatePaneOverUnixSocket(t *testing.T) {
 	service := newFakeRuntimeService()
 	client, cleanup := startUnixTransport(t, service)

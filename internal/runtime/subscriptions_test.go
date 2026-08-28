@@ -55,6 +55,29 @@ type recordingPaneObserver struct {
 	errors        []error
 }
 
+type blockingPaneObserver struct {
+	started chan struct{}
+	release chan struct{}
+
+	mu      sync.Mutex
+	outputs []string
+	once    sync.Once
+}
+
+func (o *blockingPaneObserver) PaneOpened(registry.PaneRecord) {}
+
+func (o *blockingPaneObserver) PaneOutput(_ registry.PaneRecord, renderedText string) {
+	o.mu.Lock()
+	o.outputs = append(o.outputs, renderedText)
+	o.mu.Unlock()
+	o.once.Do(func() { close(o.started) })
+	<-o.release
+}
+
+func (o *blockingPaneObserver) PaneClosed(registry.PaneRecord) {}
+
+func (o *blockingPaneObserver) PaneError(registry.PaneRecord, error) {}
+
 func (o *recordingPaneObserver) PaneOpened(record registry.PaneRecord) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -513,6 +536,87 @@ func TestSubscriptionManagerDedupesIdenticalViewport(t *testing.T) {
 			}
 			return
 		}
+	}
+}
+
+func TestSubscriptionManagerKeepsOnlyLatestPendingViewport(t *testing.T) {
+	reg := registry.New()
+	if _, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID:           "pane-1",
+		ZellijPaneID: "terminal_5",
+	}); err != nil {
+		t.Fatalf("RegisterPane: %v", err)
+	}
+
+	observer := &blockingPaneObserver{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	writerDone := make(chan struct{})
+	runner := &scriptedSubscriptionRunner{
+		fn: func(_ context.Context, _ zellij.CommandSpec, pw *io.PipeWriter) {
+			defer close(writerDone)
+			_, _ = io.WriteString(pw, `{"name":"pane_update","pane_id":"terminal_5","viewport":["first"]}`+"\n")
+			<-observer.started
+			padding := strings.Repeat("x", 8192)
+			for i := 0; i < 100; i++ {
+				text := padding + "-intermediate"
+				if i == 99 {
+					text = "latest"
+				}
+				_, _ = io.WriteString(pw, `{"name":"pane_update","pane_id":"terminal_5","viewport":["`+text+`"]}`+"\n")
+			}
+		},
+	}
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{
+		Registry: reg,
+		Backend:  zellij.NewBackend(zellij.Options{}),
+		Bus:      eventbus.New(),
+		Runner:   runner,
+		Observer: observer,
+	})
+
+	mgr.StartPane("pane-1")
+	select {
+	case <-writerDone:
+		// The stream reader continued draining while the observer was blocked.
+	case <-time.After(2 * time.Second):
+		close(observer.release)
+		t.Fatal("subscribe stream stopped draining behind viewport processing")
+	}
+	close(observer.release)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		observer.mu.Lock()
+		outputs := append([]string(nil), observer.outputs...)
+		observer.mu.Unlock()
+		if len(outputs) >= 2 && outputs[len(outputs)-1] == "latest" {
+			if len(outputs) > 3 || outputs[0] != "first" {
+				t.Fatalf("observer output count = %d, first = %q, last = %q; want coalesced output ending in latest", len(outputs), outputs[0], outputs[len(outputs)-1])
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("observer outputs = %#v, want [first latest]", outputs)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestOfferSubscribeFramePreservesPaneClosed(t *testing.T) {
+	frames := make(chan subscribeFrame, 1)
+	offerSubscribeFrame(frames, subscribeFrame{parsed: ParsedSubscribeLine{
+		Kind:         ParsedSubscribePaneUpdate,
+		RenderedText: "stale",
+	}})
+	offerSubscribeFrame(frames, subscribeFrame{parsed: ParsedSubscribeLine{
+		Kind: ParsedSubscribePaneClosed,
+	}})
+
+	got := <-frames
+	if got.err != nil || got.parsed.Kind != ParsedSubscribePaneClosed {
+		t.Fatalf("pending frame = %#v, want pane_closed", got)
 	}
 }
 

@@ -796,8 +796,22 @@ type fakeRuntimeService struct {
 	agentNextErr         error
 	agentNextResponseSet bool
 	agentNextResponse    codingagent.FocusNextAgentResponse
+	sessionFocusReq      rt.FocusSessionRequest
+	sessionFocusCalls    int
+	sessionFocusErr      error
 
 	subs []chan eventbus.Event
+}
+
+func (f *fakeRuntimeService) FocusSession(_ context.Context, req rt.FocusSessionRequest) (rt.FocusSessionResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sessionFocusCalls++
+	f.sessionFocusReq = req
+	if f.sessionFocusErr != nil {
+		return rt.FocusSessionResponse{}, f.sessionFocusErr
+	}
+	return rt.FocusSessionResponse{SessionID: req.SessionID, ZellijPaneID: "terminal_0"}, nil
 }
 
 func (f *fakeRuntimeService) StartAgent(_ context.Context, req codingagent.StartAgentRequest) (codingagent.StartAgentResponse, error) {
@@ -1359,5 +1373,24 @@ func TestServerSessionsAndTabs(t *testing.T) {
 	server.ServeHTTP(resp, req)
 	if resp.Code != http.StatusNotFound {
 		t.Errorf("GET /v1/sessions/missing code = %d, want 404", resp.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/sessions/loop/focus", strings.NewReader(`{"source_session":"dashboard","source_zellij_pane_id":"terminal_9"}`))
+	resp = httptest.NewRecorder()
+	server.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("POST /v1/sessions/loop/focus code = %d, want 200; body=%s", resp.Code, resp.Body.String())
+	}
+	if service.sessionFocusCalls != 1 || service.sessionFocusReq != (rt.FocusSessionRequest{
+		SessionID: "loop", SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_9",
+	}) {
+		t.Fatalf("FocusSession calls=%d request=%#v", service.sessionFocusCalls, service.sessionFocusReq)
+	}
+	var focused FocusSessionResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &focused); err != nil {
+		t.Fatalf("decode focus session response: %v", err)
+	}
+	if focused.SessionID != "loop" || focused.ZellijPaneID != "terminal_0" {
+		t.Fatalf("focus session response = %#v", focused)
 	}
 }

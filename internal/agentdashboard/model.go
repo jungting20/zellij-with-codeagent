@@ -114,7 +114,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.requestRefresh()
 		}
 		m.statusText = "focused " + msg.agentID
-		return m, nil
+		m.closeStream()
+		m.quitting = true
+		return m, tea.Quit
 	case streamReadyMsg:
 		m.streamKnown = true
 		if msg.err != nil || msg.stream == nil {
@@ -161,6 +163,11 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		if m.selected+1 < len(m.rows) {
 			m.selected++
+			m.selectedID = m.rows[m.selected].Agent.ID
+		}
+	case "tab":
+		if len(m.rows) > 0 {
+			m.selected = (m.selected + 1) % len(m.rows)
 			m.selectedID = m.rows[m.selected].Agent.ID
 		}
 	case "R":

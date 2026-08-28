@@ -378,6 +378,52 @@ func (s *Service) FocusPane(ctx context.Context, req FocusPaneRequest) (FocusPan
 	return FocusPaneResponse{Pane: paneFromRecord(record)}, nil
 }
 
+func (s *Service) FocusSession(ctx context.Context, req FocusSessionRequest) (FocusSessionResponse, error) {
+	sourceSession := strings.TrimSpace(req.SourceZellijSession)
+	sourcePaneID := strings.TrimSpace(string(req.SourceZellijPaneID))
+	targetSession := strings.TrimSpace(req.SessionID)
+	if sourceSession == "" || sourcePaneID == "" || targetSession == "" {
+		return FocusSessionResponse{}, fmt.Errorf("%w: source and target Zellij context is required", ErrInvalidPaneTarget)
+	}
+	if s.switcher == nil {
+		return FocusSessionResponse{}, fmt.Errorf("%w: session switcher is not configured", ErrInvalidPaneTarget)
+	}
+
+	panes, err := s.backend.ListPanes(ctx, zellij.ListPanesRequest{Session: targetSession})
+	if err != nil {
+		return FocusSessionResponse{}, err
+	}
+	targetPaneID := focusedTerminalPaneID(panes)
+	if targetPaneID == "" {
+		return FocusSessionResponse{}, fmt.Errorf("%w: session %s has no active terminal pane", ErrPaneNotFound, targetSession)
+	}
+	if err := s.switcher.SwitchSession(ctx, zellij.SwitchSessionRequest{
+		SourceSession: sourceSession,
+		SourcePaneID:  zellij.PaneID(sourcePaneID),
+		TargetSession: targetSession,
+		TargetPaneID:  targetPaneID,
+	}); err != nil {
+		return FocusSessionResponse{}, err
+	}
+	return FocusSessionResponse{SessionID: targetSession, ZellijPaneID: ZellijPaneID(targetPaneID)}, nil
+}
+
+func focusedTerminalPaneID(panes []zellij.Pane) zellij.PaneID {
+	var fallback zellij.PaneID
+	for _, pane := range panes {
+		if pane.IsPlugin || pane.Exited || pane.ID == "" {
+			continue
+		}
+		if fallback == "" {
+			fallback = pane.ID
+		}
+		if pane.IsFocused {
+			return pane.ID
+		}
+	}
+	return fallback
+}
+
 // SubscribeEvents exposes in-process runtime observations published by the daemon.
 func (s *Service) SubscribeEvents(ctx context.Context) (<-chan eventbus.Event, func(), error) {
 	if s.bus == nil {
