@@ -41,7 +41,6 @@ The legacy entrypoints are still available as compatibility wrappers when needed
 ```bash
 go build -o bin/agentd ./cmd/agentd
 go build -o bin/agentctl ./cmd/agentctl
-go build -o bin/agent-planner ./cmd/agent-planner
 go build -o bin/agent-role ./cmd/agent-role
 ```
 
@@ -60,18 +59,12 @@ Start the local transport daemon:
 ```
 
 The `serve` command exposes JSON HTTP over the default Unix socket `/tmp/agentd.sock`. It does not bind a TCP port. Pass `--socket <path>` only when you need an override.
-Use the built `zellij-agent` binary for planner flows so generated panes can call back into the same stable executable path.
-
 Use `zellij-agent ctl` as the thin command-line client for the local socket:
 
 ```bash
 ./bin/zellij-agent ctl health
 ./bin/zellij-agent ctl status
 ./bin/zellij-agent ctl plan --file examples/plans/agent-role-demo.json
-./bin/zellij-agent planner page --url http://localhost:8000/example/aa --cwd "$PWD" --ui
-./bin/zellij-agent planner tui
-./bin/zellij-agent planner validate --file plan.json
-./bin/zellij-agent planner submit --file plan.json --ui
 ./bin/zellij-agent ctl events --limit 20
 ./bin/zellij-agent ctl events --follow --type raw_output
 ./bin/zellij-agent ctl input coder --text $'go test ./...\n'
@@ -331,30 +324,11 @@ oldest `ready` ticket to `in_progress`. Add `--json` to ticket data commands
 other than `init` and `start` for machine-readable output and structured
 errors.
 
-### Planner Commands
+### Execution Plan Commands
 
-`zellij-agent ctl plan` accepts either a raw execution plan payload or a full `/v1/requests` envelope.
-`zellij-agent planner page` is a mock planner path for URL-based page inspection. It uses a built-in mock source by default, generates a canonical `/v1/requests` `execution_plan`, and submits panes for editor, LSP, network, and console inspection. Add `--dry-run` to print the envelope without contacting `agentd`.
-`zellij-agent planner tui` provides the same mock planner path through a single chat-style prompt. Include the URL in the natural-language request, for example `localhost:8000/example/aa 페이지 소스 열고 네트워크/콘솔 확인해줘`; the mock source and cwd default from the current repo, and generated panes call back into `zellij-agent role`.
-`zellij-agent planner validate` and `zellij-agent planner submit` accept AI-generated JSON files, require the canonical `/v1/requests` envelope, and reject legacy or unknown payload fields before submission.
-
-For planner commands that submit or generate plans, `--zellij-session` selects
-the physical Zellij session. When omitted, the CLI uses its own
-`ZELLIJ_SESSION_NAME`. The logical `--session` flag remains the execution task
-ID. Commands fail before submission when neither source names a physical Zellij
-session. A page dry run shows the generated logical session alongside the
-explicit physical target:
-
-```bash
-./bin/zellij-agent planner page --url http://localhost:8000/example/aa --dry-run --zellij-session physical-a
-```
-
-```json
-{
-  "session": "page-example-aa",
-  "zellij_session": "physical-a"
-}
-```
+`zellij-agent ctl plan` accepts either a raw execution plan payload or a full
+`/v1/requests` envelope, validates it, and submits it to the runtime. Use
+`--zellij-session` to override the physical Zellij session in the input plan.
 
 ## Runtime Service Shape
 

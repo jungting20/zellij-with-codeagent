@@ -148,56 +148,7 @@ request=req_quickstart_json session=quickstart-json layout=triple-horizontal
 
 `ctl plan` also accepts a raw execution plan payload without the outer `type`, `request_id`, and `payload` envelope. Use `--request-id` when submitting a raw payload and you want a stable request ID.
 
-## 6. Preview The TUI Plan Without Creating Panes
-
-```bash
-./bin/zellij-agent planner tui \
-  --goal "https://example.com 페이지 소스 열고 네트워크/콘솔 확인해줘" \
-  --dry-run
-```
-
-The JSON should contain commands that call back into the same binary:
-
-```text
-zellij-agent role editor
-zellij-agent role network-tracker
-zellij-agent role console-tracker
-```
-
-## 7. Run TUI And Create Panes
-
-Non-interactive smoke command:
-
-```bash
-./bin/zellij-agent planner tui \
-  --goal "https://example.com 페이지 소스 열고 네트워크/콘솔 확인해줘" \
-  --auto-submit
-```
-
-Interactive version:
-
-```bash
-./bin/zellij-agent planner tui
-```
-
-When prompted, enter:
-
-```text
-https://example.com 페이지 소스 열고 네트워크/콘솔 확인해줘
-```
-
-Then answer `y` to submit.
-
-This creates managed Zellij panes for:
-
-```text
-page-editor
-page-lsp
-page-network
-page-console
-```
-
-## 8. Inspect Created Panes
+## 6. Inspect Created Panes
 
 ```bash
 ./bin/zellij-agent ctl status
@@ -210,25 +161,16 @@ Snapshot a JSON-created pane:
 ./bin/zellij-agent ctl snapshot quickstart-shell --full
 ```
 
-Or snapshot a TUI-created pane:
-
-```bash
-./bin/zellij-agent ctl snapshot page-console --full
-```
-
 Send input to a pane if needed:
 
 ```bash
-./bin/zellij-agent ctl input page-editor --text $':q\n'
+./bin/zellij-agent ctl input quickstart-shell --text $'echo ready\n'
 ```
 
-## 9. Cleanup
-
-The example URL path `/` maps to the task/session `page-root`.
+## 7. Cleanup
 
 ```bash
 ./bin/zellij-agent ctl cleanup --task quickstart-json
-./bin/zellij-agent ctl cleanup --task page-root
 ./bin/zellij-agent ctl status
 ```
 
@@ -283,10 +225,7 @@ cat >/tmp/zellij-agent-quickstart.json <<'JSON'
 }
 JSON
 ./bin/zellij-agent ctl plan --file /tmp/zellij-agent-quickstart.json
-./bin/zellij-agent planner tui --goal "https://example.com 페이지 소스 열고 네트워크/콘솔 확인해줘" --dry-run
-./bin/zellij-agent planner tui --goal "https://example.com 페이지 소스 열고 네트워크/콘솔 확인해줘" --auto-submit
 ./bin/zellij-agent ctl status
 ./bin/zellij-agent ctl events --limit 20
 ./bin/zellij-agent ctl cleanup --task quickstart-json
-./bin/zellij-agent ctl cleanup --task page-root
 ```
