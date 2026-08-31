@@ -19,11 +19,19 @@ type StartPlanRequest struct {
 const ticketWorkerLayout = `layout {
     pane name="ticket-manager"
 
+    pane size=1 borderless=true {
+        plugin location="zellij:compact-bar"
+    }
+
     swap_tiled_layout name="ticket-worker" {
-        tab min_panes=2 split_direction="horizontal" {
+        tab min_panes=3 split_direction="horizontal" {
             pane size="50%"
             pane size="50%" split_direction="vertical" {
                 children
+            }
+
+            pane size=1 borderless=true {
+                plugin location="zellij:compact-bar"
             }
         }
     }

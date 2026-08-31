@@ -98,6 +98,30 @@ func TestPrepareBuildsYoloCodexCommandInRepository(t *testing.T) {
 	}
 }
 
+func TestPreparePreservesMultilineCodexInitialPromptAsOneArgument(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+
+	binDir := t.TempDir()
+	codexPath := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codexPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	prompt := "Implement ticket.\n\nWhen done, print the completion marker."
+	cmd, err := prepare([]string{"--yolo", repo, "--", prompt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantArgs := []string{codexPath, "--dangerously-bypass-approvals-and-sandbox", prompt}
+	if !slices.Equal(cmd.Args, wantArgs) {
+		t.Fatalf("cmd.Args = %#v, want %#v", cmd.Args, wantArgs)
+	}
+}
+
 func TestPrepareBuildsSelectedAgentCommands(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {

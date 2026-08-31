@@ -166,7 +166,7 @@ var specs = []RoleSpec{
 	{
 		Name:        RoleTicketManager,
 		Usage:       "ticket-manager [options] <path>",
-		Description: "Runs a bounded pool of coding agents from the project ticket queue.",
+		Description: "Runs a bounded pool of coding agents in ticket-isolated Git worktrees.",
 		Arguments: []ArgumentSpec{
 			{Name: "path", Required: true, Description: "File or directory path inside the initialized ticket project."},
 			{Name: "--task", Required: true, Description: "Logical runtime task ID shared by the manager and coding panes."},

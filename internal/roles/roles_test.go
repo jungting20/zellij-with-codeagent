@@ -1,6 +1,9 @@
 package roles
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestAllIncludesRoleDescriptions(t *testing.T) {
 	for _, name := range []string{
@@ -152,7 +155,7 @@ func TestLookupTicketManager(t *testing.T) {
 	if !ok {
 		t.Fatal("Lookup(RoleTicketManager) ok = false")
 	}
-	if spec.Name != "ticket-manager" || spec.Usage != "ticket-manager [options] <path>" || spec.Description == "" {
+	if spec.Name != "ticket-manager" || spec.Usage != "ticket-manager [options] <path>" || !strings.Contains(spec.Description, "worktree") {
 		t.Fatalf("ticket manager spec = %#v", spec)
 	}
 	want := map[string]bool{

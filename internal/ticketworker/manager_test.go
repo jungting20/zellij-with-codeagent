@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,18 +39,22 @@ func TestManagerWaitsForAnchorThenFillsConfiguredCapacity(t *testing.T) {
 	}
 	wantNames := []string{"[1] Ticket", "[2] Ticket"}
 	for i, req := range client.created() {
-		if req.InitialInputReadyText != "›" {
-			t.Fatalf("create[%d] ready text = %q", i, req.InitialInputReadyText)
-		}
-		if !strings.HasSuffix(req.InitialInput, "\n") ||
-			!strings.Contains(req.InitialInput, "Implement ticket.") {
-			t.Fatalf("create[%d] initial input = %q", i, req.InitialInput)
+		if req.InitialInput != "" || req.InitialInputReadyText != "" {
+			t.Fatalf("create[%d] terminal initialization = (%q, %q), want empty", i, req.InitialInput, req.InitialInputReadyText)
 		}
 		wantID := int64(i + 1)
 		if req.ID != "ticket-coding-run-a-"+string(rune('0'+wantID)) || req.Name != wantNames[i] || req.Role != "coding-agent" || req.TaskID != "tickets" || req.SameTabAsPaneID != "ticket-manager" || req.ZellijSession != "physical-a" {
 			t.Fatalf("create[%d] = %#v", i, req)
 		}
-		wantCommand := []string{"zellij-agent", "role", "coding-agent", "--yolo", "/repo"}
+		wantRoot := "/repo/.worktrees/ticket-" + strconv.FormatInt(wantID, 10)
+		if req.CWD != wantRoot {
+			t.Fatalf("create[%d] cwd = %q, want %q", i, req.CWD, wantRoot)
+		}
+		wantPrompt, _, err := RenderTicketPrompt(managerTicket(wantID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantCommand := []string{"zellij-agent", "role", "coding-agent", "--yolo", wantRoot, "--", wantPrompt}
 		if len(req.Command) != len(wantCommand) {
 			t.Fatalf("command = %#v", req.Command)
 		}
@@ -62,6 +67,25 @@ func TestManagerWaitsForAnchorThenFillsConfiguredCapacity(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Run() shutdown error = %v", err)
+	}
+}
+
+func TestManagerRequeuesTicketWhenWorktreePreparationFails(t *testing.T) {
+	store := &fakeManagerStore{ready: []Ticket{managerTicket(42)}}
+	client := newFakeManagerClient()
+	client.streams = []*fakeEventStream{newFakeEventStream()}
+	manager := newTestManager(t, store, client, 1)
+	manager.worktrees = fakeWorktreePreparer{err: errors.New("branch is already checked out")}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(store.requeues()) == 1 })
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() shutdown error = %v", err)
+	}
+	if len(client.created()) != 0 {
+		t.Fatalf("pane creates = %d, want 0", len(client.created()))
 	}
 }
 
@@ -177,12 +201,9 @@ func TestManagerIgnoresPromptEchoAndCompletesExactMarker(t *testing.T) {
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(client.created()) == 1 })
 
-	prompt := client.created()[0].InitialInput
-	if len(prompt) == 0 || prompt[len(prompt)-1] != '\n' {
-		t.Fatalf("submitted prompt = %q, want trailing newline to send Enter", prompt)
-	}
+	prompt := client.created()[0].Command[len(client.created()[0].Command)-1]
 	if !strings.HasPrefix(prompt, "Implement ticket.\n\n") {
-		t.Fatalf("submitted prompt = %q, want stored ticket prompt prefix", prompt)
+		t.Fatalf("Codex prompt argument = %q, want stored ticket prompt prefix", prompt)
 	}
 	stream.events <- transport.Event{Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-42", Message: prompt}
 	time.Sleep(20 * time.Millisecond)
@@ -244,7 +265,8 @@ func TestManagerIgnoresRenderedViewportPromptEcho(t *testing.T) {
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(client.created()) == 1 })
 
-	viewport := renderedPromptViewport(client.created()[0].InitialInput)
+	request := client.created()[0]
+	viewport := renderedPromptViewport(request.Command[len(request.Command)-1])
 	stream.events <- transport.Event{
 		Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-41", Message: viewport,
 	}
@@ -269,7 +291,8 @@ func TestManagerPeriodicSnapshotIgnoresRenderedViewportPromptEcho(t *testing.T) 
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(client.created()) == 1 })
 
-	client.setSnapshot("ticket-coding-run-a-42", renderedPromptViewport(client.created()[0].InitialInput))
+	request := client.created()[0]
+	client.setSnapshot("ticket-coding-run-a-42", renderedPromptViewport(request.Command[len(request.Command)-1]))
 	ticks <- time.Now()
 	time.Sleep(20 * time.Millisecond)
 	if got := store.transitions(); len(got) != 0 {
@@ -293,7 +316,8 @@ func TestManagerCompletesPromptEchoFollowedByRealFinalOutput(t *testing.T) {
 	done := runManager(ctx, manager)
 	waitFor(t, func() bool { return len(client.created()) == 1 })
 
-	output := renderedPromptViewport(client.created()[0].InitialInput) +
+	request := client.created()[0]
+	output := renderedPromptViewport(request.Command[len(request.Command)-1]) +
 		"\nZELLIJ_AGENT_TICKET_SUMMARY 실제 완료 변경\nZELLIJ_AGENT_TICKET_DONE 43"
 	stream.events <- transport.Event{
 		Type: "raw_output", TaskID: "tickets", PaneID: "ticket-coding-run-a-43", Message: output,
@@ -580,9 +604,8 @@ func TestManagerUncertainCreateFailureRetriesSamePaneThenRequeues(t *testing.T) 
 	if created[0].ID != created[1].ID {
 		t.Fatalf("retried pane IDs = %q, %q", created[0].ID, created[1].ID)
 	}
-	if created[0].InitialInput == "" || created[1].InitialInput != created[0].InitialInput ||
-		created[1].InitialInputReadyText != created[0].InitialInputReadyText {
-		t.Fatalf("retried initialization = %#v, want initial request retained", created[1])
+	if !slices.Equal(created[1].Command, created[0].Command) || created[1].InitialInput != "" || created[1].InitialInputReadyText != "" {
+		t.Fatalf("retried command = %#v, want initial command retained without terminal input", created[1])
 	}
 	cancel()
 	if err := <-done; err != nil {
@@ -1310,6 +1333,7 @@ func newTestManagerWithTicks(t *testing.T, store *fakeManagerStore, client *fake
 		Config: Config{Version: 1, MaxWorkers: capacity, PollInterval: time.Hour, VoiceNotifications: false, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
 		Root:   "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
 		StartupTimeout: 200 * time.Millisecond, ReadyPollInterval: time.Millisecond, Tick: ticks, Log: io.Discard, ManagerID: "run-a",
+		Worktrees: fakeWorktreePreparer{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1324,7 +1348,7 @@ func newTestManagerWithVoice(t *testing.T, client *fakeManagerClient, enabled bo
 		Config: Config{Version: 1, MaxWorkers: 1, PollInterval: time.Hour, VoiceNotifications: enabled, VoiceNotificationPrefix: defaultVoiceNotificationPrefix},
 		Root:   "/repo", TaskID: "tickets", AnchorPaneID: "ticket-manager", ZellijSession: "physical-a", RoleBin: "zellij-agent",
 		StartupTimeout: 200 * time.Millisecond, ReadyPollInterval: time.Millisecond, Log: io.Discard, ManagerID: "run-a",
-		NotificationBackoff: backoff,
+		NotificationBackoff: backoff, Worktrees: fakeWorktreePreparer{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1339,7 +1363,16 @@ func runManager(ctx context.Context, manager *Manager) <-chan error {
 }
 
 func managerTicket(id int64) Ticket {
-	return Ticket{ID: id, Title: "Ticket", Summary: "Summary", SpecPath: "docs/superpowers/specs/t-design.md", PlanPath: "docs/superpowers/plans/t.md", Prompt: "Implement ticket.", Status: StatusInProgress}
+	return Ticket{ID: id, Title: "Ticket", Summary: "Summary", SpecPath: "docs/superpowers/specs/t-design.md", PlanPath: "docs/superpowers/plans/t.md", WorktreeBranch: "ticket/" + strconv.FormatInt(id, 10), Prompt: "Implement ticket.", Status: StatusInProgress}
+}
+
+type fakeWorktreePreparer struct{ err error }
+
+func (f fakeWorktreePreparer) Prepare(_ context.Context, root string, ticket Ticket) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return root + "/.worktrees/ticket-" + strconv.FormatInt(ticket.ID, 10), nil
 }
 
 func completedManagerTicket(id int64) Ticket {

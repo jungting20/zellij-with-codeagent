@@ -24,8 +24,10 @@ func TestBuildStartPlanCreatesTicketManagerAnchor(t *testing.T) {
 	layout := got.Tabs[0].LayoutString
 	for _, want := range []string{
 		`pane name="ticket-manager"`,
+		`pane size=1 borderless=true`,
+		`plugin location="zellij:compact-bar"`,
 		`swap_tiled_layout name="ticket-worker"`,
-		`tab min_panes=2 split_direction="horizontal"`,
+		`tab min_panes=3 split_direction="horizontal"`,
 		`pane size="50%"`,
 		`split_direction="vertical"`,
 		`children`,
@@ -36,6 +38,9 @@ func TestBuildStartPlanCreatesTicketManagerAnchor(t *testing.T) {
 	}
 	if strings.Count(layout, `size="50%"`) != 2 {
 		t.Fatalf("ticket-worker layout 50%% pane count = %d, want 2", strings.Count(layout, `size="50%"`))
+	}
+	if strings.Count(layout, `plugin location="zellij:compact-bar"`) != 2 {
+		t.Fatalf("ticket-worker compact-bar count = %d, want 2", strings.Count(layout, `plugin location="zellij:compact-bar"`))
 	}
 	pane := got.Tabs[0].Panes[0]
 	if got.Tabs[0].Name != "ticket:"+filepath.Base(root) || pane.Role != "ticket-manager" || pane.CWD != root {

@@ -292,7 +292,7 @@ Register a ticket from an approved Superpowers design and implementation plan:
   --prompt $'Implement the approved search plan.\nRun the complete test suite.'
 ```
 
-The worktree branch name is required and stored with the ticket. The spec and plan must be existing Markdown files under
+The worktree branch name is required and used when the ticket starts. The spec and plan must be existing Markdown files under
 `docs/superpowers/specs/` and `docs/superpowers/plans/`. A plan can be
 registered only once. The required prompt is stored with the ticket and used
 as the coding-agent instruction. The manager appends its completion-marker
@@ -312,10 +312,21 @@ instruction automatically. Queue and lifecycle commands are:
 `ticket-worker` tab. With no active workers, the manager fills the tab. While
 workers are active, the manager occupies the top 50% and all coding-agent
 workers share the bottom 50% side by side; Zellij reflows that row whenever a
-worker opens or closes. The manager claims the oldest `ready` tickets, starts
+worker opens or closes. A borderless `zellij:compact-bar` pane remains at the
+bottom in both layouts. The manager claims the oldest `ready` tickets, starts
 up to `max_workers` coding-agent panes, and continues polling for new tickets.
+Before starting each pane, it creates a persistent Git worktree at
+`.worktrees/ticket-<ID>` on the ticket's `worktree_branch`. A missing branch is
+created from the repository's current `HEAD`; an existing branch is attached
+when it is not already checked out elsewhere. A matching existing worktree is
+reused after retries or manager restarts. Worktrees and branches are preserved
+after completion for review and integration. Preparation failures requeue the
+ticket without starting a coding-agent pane.
 Every coding-agent created by the manager runs in YOLO mode, bypassing Codex
-approvals and sandboxing. The manager uses `--zellij-session` when supplied or
+approvals and sandboxing. The complete ticket instruction, including its
+completion marker, is passed to Codex as its initial CLI prompt argument; the
+manager does not paste the prompt or synthesize an Enter keypress. The manager
+uses `--zellij-session` when supplied or
 `ZELLIJ_SESSION_NAME` when run inside Zellij. The unified CLI automatically
 starts the local daemon when needed.
 
