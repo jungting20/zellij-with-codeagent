@@ -44,7 +44,12 @@ use zellij_tile::prelude::*;
 struct AgentNextBridge {
     model: BridgeModel,
     request_sequence: u64,
+    command_in_flight: bool,
+    retry_scheduled: bool,
 }
+
+#[cfg(target_family = "wasm")]
+const RETRY_DELAY_SECONDS: f64 = 0.25;
 
 #[cfg(target_family = "wasm")]
 register_plugin!(AgentNextBridge);
@@ -68,6 +73,7 @@ impl ZellijPlugin for AgentNextBridge {
             EventType::SessionUpdate,
             EventType::PermissionRequestResult,
             EventType::RunCommandResult,
+            EventType::Timer,
         ]);
         request_permission(required_permissions());
     }
@@ -75,8 +81,11 @@ impl ZellijPlugin for AgentNextBridge {
     fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
         match parse_navigation(&pipe_message.name, pipe_message.payload.as_deref()) {
             Ok(navigation) => {
-                self.model.queue(navigation);
-                self.flush_ready();
+                if self.model.queue(navigation) {
+                    self.flush_ready();
+                } else {
+                    eprintln!("agent-next bridge queue is full or disabled; request ignored");
+                }
             }
             Err(error) => eprintln!("agent-next bridge: {error}"),
         }
@@ -96,6 +105,7 @@ impl ZellijPlugin for AgentNextBridge {
                         self.model.set_last_terminal(Some(pane_id));
                     }
                 }
+                self.flush_ready();
             }
             Event::SessionUpdate(sessions, _) => {
                 self.model.set_current_session(&sessions);
@@ -112,6 +122,7 @@ impl ZellijPlugin for AgentNextBridge {
                 self.flush_ready();
             }
             Event::RunCommandResult(exit_code, _, stderr, context) => {
+                self.command_in_flight = false;
                 if exit_code != Some(0) {
                     let request_id = context
                         .get("request_id")
@@ -122,6 +133,11 @@ impl ZellijPlugin for AgentNextBridge {
                         String::from_utf8_lossy(&stderr)
                     );
                 }
+                self.flush_ready();
+            }
+            Event::Timer(_) => {
+                self.retry_scheduled = false;
+                self.flush_ready();
             }
             _ => {}
         }
@@ -137,35 +153,50 @@ impl AgentNextBridge {
     }
 
     fn flush_ready(&mut self) {
-        for job in self.model.take_ready() {
-            self.request_sequence += 1;
-            let request_id = self.request_sequence.to_string();
-            let focused = match get_focused_pane_info() {
-                Ok((_, pane_id)) => pane_id,
-                Err(error) => {
-                    eprintln!(
-                        "agent-next bridge request {request_id} dropped: focused pane unavailable: {error}"
-                    );
-                    continue;
-                }
-            };
-            let source_pane_id = match self.model.resolve_source_pane(focused) {
-                Ok(source_pane_id) => source_pane_id,
-                Err(error) => {
-                    eprintln!("agent-next bridge request {request_id} dropped: {error}");
-                    continue;
-                }
-            };
-            let argv = command_argv(&job.executable, job.navigation);
-            run_command_with_env_variables_and_cwd(
-                &argv.iter().map(String::as_str).collect::<Vec<_>>(),
-                BTreeMap::from([
-                    ("ZELLIJ_SESSION_NAME".into(), job.session_name),
-                    ("ZELLIJ_PANE_ID".into(), source_pane_id),
-                ]),
-                get_plugin_ids().initial_cwd,
-                BTreeMap::from([("request_id".into(), request_id)]),
-            );
+        if self.command_in_flight {
+            return;
+        }
+
+        let Some(job) = self.model.next_ready() else {
+            return;
+        };
+        let focused = match get_focused_pane_info() {
+            Ok((_, pane_id)) => pane_id,
+            Err(error) => {
+                eprintln!("agent-next bridge delayed: focused pane unavailable: {error}");
+                self.schedule_retry();
+                return;
+            }
+        };
+        let source_pane_id = match self.model.resolve_source_pane(focused) {
+            Ok(source_pane_id) => source_pane_id,
+            Err(error) => {
+                eprintln!("agent-next bridge delayed: {error}");
+                self.schedule_retry();
+                return;
+            }
+        };
+
+        self.request_sequence += 1;
+        let request_id = self.request_sequence.to_string();
+        let argv = command_argv(&job.executable, job.navigation);
+        run_command_with_env_variables_and_cwd(
+            &argv.iter().map(String::as_str).collect::<Vec<_>>(),
+            BTreeMap::from([
+                ("ZELLIJ_SESSION_NAME".into(), job.session_name),
+                ("ZELLIJ_PANE_ID".into(), source_pane_id),
+            ]),
+            get_plugin_ids().initial_cwd,
+            BTreeMap::from([("request_id".into(), request_id)]),
+        );
+        self.model.complete_ready();
+        self.command_in_flight = true;
+    }
+
+    fn schedule_retry(&mut self) {
+        if !self.retry_scheduled {
+            self.retry_scheduled = true;
+            set_timeout(RETRY_DELAY_SECONDS);
         }
     }
 }

@@ -158,6 +158,45 @@ func TestSwitchSessionFocusesPaneDirectlyWithinSourceSession(t *testing.T) {
 	}
 }
 
+func TestSwitchSessionTreatsCurrentSourcePaneAsAlreadyFocused(t *testing.T) {
+	runner := &fakeRunner{}
+	backend := NewBackend(Options{Runner: runner})
+
+	err := backend.SwitchSession(context.Background(), SwitchSessionRequest{
+		SourceSession: "shared-session",
+		SourcePaneID:  "terminal_12",
+		TargetSession: "shared-session",
+		TargetPaneID:  "terminal_12",
+	})
+	if err != nil {
+		t.Fatalf("SwitchSession() error = %v", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("commands = %#v, want none", runner.commands)
+	}
+}
+
+func TestSwitchSessionTreatsZellijAlreadyFocusedErrorAsSuccess(t *testing.T) {
+	runner := &fakeRunner{results: []fakeResult{{
+		result: CommandResult{Stderr: "Pane Terminal(12) is already focused\n"},
+		err:    errors.New("exit status 1"),
+	}}}
+	backend := NewBackend(Options{Runner: runner})
+
+	err := backend.SwitchSession(context.Background(), SwitchSessionRequest{
+		SourceSession: "dashboard-session",
+		SourcePaneID:  "terminal_2",
+		TargetSession: "target-session",
+		TargetPaneID:  "terminal_12",
+	})
+	if err != nil {
+		t.Fatalf("SwitchSession() error = %v", err)
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("commands = %#v, want one", runner.commands)
+	}
+}
+
 func TestSwitchSessionRejectsMissingContextBeforeRunningCommand(t *testing.T) {
 	tests := []struct {
 		name string
