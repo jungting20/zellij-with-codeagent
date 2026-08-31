@@ -104,7 +104,7 @@ func TestModelKeepsCreationOrderAndSelectionByAgentID(t *testing.T) {
 	}
 }
 
-func TestModelGroupsBySessionWithCurrentSessionFirst(t *testing.T) {
+func TestModelGroupsBySessionAndTabWithCurrentSessionFirst(t *testing.T) {
 	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{SourceSession: "session-b"}))
 	records := []transport.AgentWithPane{
 		record("a-late", "codex", "idle", time.Unix(40, 0)),
@@ -114,9 +114,13 @@ func TestModelGroupsBySessionWithCurrentSessionFirst(t *testing.T) {
 		record("a-first", "codex", "idle", time.Unix(20, 0)),
 	}
 	records[0].Pane.SessionID = "session-a"
+	records[0].Pane.TabID = "tab-b"
 	records[1].Pane.SessionID = "session-b"
+	records[1].Pane.TabID = "tab-b"
 	records[3].Pane.SessionID = "session-b"
+	records[3].Pane.TabID = "tab-a"
 	records[4].Pane.SessionID = "session-a"
+	records[4].Pane.TabID = "tab-a"
 
 	m = applyRefresh(t, m, records)
 	if got := rowIDs(m.rows); !reflect.DeepEqual(got, []string{"b-first", "b-late", "a-first", "a-late", "ungrouped"}) {

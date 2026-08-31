@@ -234,6 +234,11 @@ func sortAgentRows(rows []transport.AgentWithPane, sourceSession string) {
 		if leftSession != rightSession {
 			return leftSession < rightSession
 		}
+		leftTab := tabKey(rows[i])
+		rightTab := tabKey(rows[j])
+		if leftTab != rightTab {
+			return leftTab < rightTab
+		}
 		if !rows[i].Agent.CreatedAt.Equal(rows[j].Agent.CreatedAt) {
 			return rows[i].Agent.CreatedAt.Before(rows[j].Agent.CreatedAt)
 		}
@@ -246,6 +251,31 @@ func sessionName(record transport.AgentWithPane) string {
 		return name
 	}
 	return "ungrouped"
+}
+
+func tabKey(record transport.AgentWithPane) string {
+	if id := strings.TrimSpace(record.Pane.TabID); id != "" {
+		return "id\x00" + id
+	}
+	if name := strings.TrimSpace(record.Pane.TabName); name != "" {
+		return "name\x00" + name
+	}
+	return "ungrouped"
+}
+
+func tabName(record transport.AgentWithPane) string {
+	id := strings.TrimSpace(record.Pane.TabID)
+	name := strings.TrimSpace(record.Pane.TabName)
+	switch {
+	case name != "" && id != "":
+		return name + " (" + id + ")"
+	case name != "":
+		return name
+	case id != "":
+		return id
+	default:
+		return "ungrouped"
+	}
 }
 
 func (m *Model) restoreSelection() {
