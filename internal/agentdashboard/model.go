@@ -114,7 +114,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.requestRefresh()
 		}
 		m.statusText = "focused " + msg.agentID
-		return m, nil
+		m.closeStream()
+		m.quitting = true
+		return m, tea.Quit
 	case streamReadyMsg:
 		m.streamKnown = true
 		if msg.err != nil || msg.stream == nil {
@@ -161,6 +163,16 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		if m.selected+1 < len(m.rows) {
 			m.selected++
+			m.selectedID = m.rows[m.selected].Agent.ID
+		}
+	case "tab":
+		if len(m.rows) > 0 {
+			m.selected = (m.selected + 1) % len(m.rows)
+			m.selectedID = m.rows[m.selected].Agent.ID
+		}
+	case "shift+tab":
+		if len(m.rows) > 0 {
+			m.selected = (m.selected - 1 + len(m.rows)) % len(m.rows)
 			m.selectedID = m.rows[m.selected].Agent.ID
 		}
 	case "R":
@@ -222,6 +234,11 @@ func sortAgentRows(rows []transport.AgentWithPane, sourceSession string) {
 		if leftSession != rightSession {
 			return leftSession < rightSession
 		}
+		leftTab := tabKey(rows[i])
+		rightTab := tabKey(rows[j])
+		if leftTab != rightTab {
+			return leftTab < rightTab
+		}
 		if !rows[i].Agent.CreatedAt.Equal(rows[j].Agent.CreatedAt) {
 			return rows[i].Agent.CreatedAt.Before(rows[j].Agent.CreatedAt)
 		}
@@ -234,6 +251,31 @@ func sessionName(record transport.AgentWithPane) string {
 		return name
 	}
 	return "ungrouped"
+}
+
+func tabKey(record transport.AgentWithPane) string {
+	if id := strings.TrimSpace(record.Pane.TabID); id != "" {
+		return "id\x00" + id
+	}
+	if name := strings.TrimSpace(record.Pane.TabName); name != "" {
+		return "name\x00" + name
+	}
+	return "ungrouped"
+}
+
+func tabName(record transport.AgentWithPane) string {
+	id := strings.TrimSpace(record.Pane.TabID)
+	name := strings.TrimSpace(record.Pane.TabName)
+	switch {
+	case name != "" && id != "":
+		return name + " (" + id + ")"
+	case name != "":
+		return name
+	case id != "":
+		return id
+	default:
+		return "ungrouped"
+	}
 }
 
 func (m *Model) restoreSelection() {

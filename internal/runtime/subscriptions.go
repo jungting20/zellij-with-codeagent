@@ -87,6 +87,11 @@ type subscriptionKey struct {
 	generation uint64
 }
 
+type subscribeFrame struct {
+	parsed ParsedSubscribeLine
+	err    error
+}
+
 // NewSubscriptionManager wires subscribe streaming for managed panes.
 func NewSubscriptionManager(opts SubscriptionManagerOptions) *SubscriptionManager {
 	if opts.Now == nil {
@@ -268,21 +273,16 @@ func (m *SubscriptionManager) run(record registry.PaneRecord, subscription *pane
 		return
 	}
 
-	reader := bufio.NewReader(stream.Stdout)
-	for {
-		line, err := reader.ReadBytes('\n')
-		if len(line) > 0 {
-			m.handleLine(record, subscription, string(line))
-		}
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if m.subscriptionIsCurrent(record, subscription) {
-				m.publishStreamError(record, err)
-			}
-			break
-		}
+	frames := make(chan subscribeFrame, 1)
+	readDone := make(chan error, 1)
+	go readLatestSubscribeFrames(stream.Stdout, frames, readDone)
+
+	for frame := range frames {
+		m.handleParsedLine(record, subscription, frame)
+	}
+	readErr := <-readDone
+	if readErr != nil && m.subscriptionIsCurrent(record, subscription) {
+		m.publishStreamError(record, readErr)
 	}
 
 	waitErr := stream.Wait()
@@ -303,10 +303,18 @@ func (m *SubscriptionManager) handleLine(record registry.PaneRecord, subscriptio
 		return
 	}
 	parsed, err := ParseSubscribeNDJSONLine(rawLine)
-	if err != nil {
-		m.publishSubscribeParseError(record, err)
+	m.handleParsedLine(record, subscription, subscribeFrame{parsed: parsed, err: err})
+}
+
+func (m *SubscriptionManager) handleParsedLine(record registry.PaneRecord, subscription *paneSubscription, frame subscribeFrame) {
+	if !m.subscriptionIsCurrent(record, subscription) {
 		return
 	}
+	if frame.err != nil {
+		m.publishSubscribeParseError(record, frame.err)
+		return
+	}
+	parsed := frame.parsed
 	if parsed.Kind == ParsedSubscribeUnknown && parsed.RenderedText == "" && parsed.ZellijPaneID == "" {
 		return
 	}
@@ -324,6 +332,63 @@ func (m *SubscriptionManager) handleLine(record registry.PaneRecord, subscriptio
 	case ParsedSubscribePaneUpdate:
 		m.handlePaneUpdate(record, parsed.RenderedText)
 	default:
+	}
+}
+
+func readLatestSubscribeFrames(stdout io.Reader, frames chan subscribeFrame, done chan<- error) {
+	defer close(frames)
+	reader := bufio.NewReader(stdout)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			parsed, parseErr := ParseSubscribeNDJSONLine(string(line))
+			if parseErr != nil || parsed.Kind != ParsedSubscribeUnknown || parsed.RenderedText != "" || parsed.ZellijPaneID != "" {
+				offerSubscribeFrame(frames, subscribeFrame{parsed: parsed, err: parseErr})
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				err = nil
+			}
+			done <- err
+			return
+		}
+	}
+}
+
+func offerSubscribeFrame(frames chan subscribeFrame, frame subscribeFrame) {
+	for {
+		select {
+		case frames <- frame:
+			return
+		default:
+		}
+
+		if frame.err == nil && frame.parsed.Kind == ParsedSubscribePaneUpdate {
+			// Only viewport updates may replace each other. A close or error already
+			// waiting in the slot must be observed before another update is accepted.
+			select {
+			case pending := <-frames:
+				if pending.err != nil || pending.parsed.Kind != ParsedSubscribePaneUpdate {
+					frames <- pending
+					return
+				}
+			default:
+			}
+			continue
+		}
+
+		// Control frames are rare and must not be dropped. They may evict a stale
+		// viewport, but wait behind another control frame to preserve its delivery.
+		select {
+		case pending := <-frames:
+			if pending.err != nil || pending.parsed.Kind != ParsedSubscribePaneUpdate {
+				frames <- pending
+				frames <- frame
+				return
+			}
+		default:
+		}
 	}
 }
 

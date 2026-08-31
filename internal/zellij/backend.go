@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -175,9 +176,20 @@ func (b *CLIBackend) SwitchSession(ctx context.Context, req SwitchSessionRequest
 	if req.TargetPaneID == "" {
 		return fmt.Errorf("target: %w", ErrMissingPane)
 	}
+	if req.SourceSession == req.TargetSession && req.SourcePaneID == req.TargetPaneID {
+		return nil
+	}
 
 	_, err := b.run(ctx, "switch session", switchSessionCommand(b.binary, req))
+	if isAlreadyFocusedError(err) {
+		return nil
+	}
 	return err
+}
+
+func isAlreadyFocusedError(err error) bool {
+	var commandErr *CommandError
+	return errors.As(err, &commandErr) && strings.Contains(commandErr.Stderr, "is already focused")
 }
 
 func (b *CLIBackend) run(ctx context.Context, operation string, spec CommandSpec) (CommandResult, error) {

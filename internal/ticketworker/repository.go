@@ -12,7 +12,12 @@ import (
 
 var ErrRepositoryNotFound = errors.New("repository root not found")
 
-const ignoreEntry = ".zellij-agent/ticket-worker/"
+const (
+	ignoreEntry          = ".zellij-agent/ticket-worker/"
+	worktreesIgnoreEntry = ".worktrees/"
+)
+
+var ticketWorkerIgnoreEntries = []string{ignoreEntry, worktreesIgnoreEntry}
 
 func FindRoot(start string) (string, error) {
 	current, err := filepath.Abs(start)
@@ -77,16 +82,24 @@ func ensureGitignore(root string) error {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("read .gitignore: %w", err)
 	}
+	existing := make(map[string]struct{})
 	for _, line := range strings.Split(string(data), "\n") {
-		if strings.TrimSpace(line) == ignoreEntry {
-			return nil
+		existing[strings.TrimSpace(line)] = struct{}{}
+	}
+	missing := make([]string, 0, len(ticketWorkerIgnoreEntries))
+	for _, entry := range ticketWorkerIgnoreEntries {
+		if _, ok := existing[entry]; !ok {
+			missing = append(missing, entry)
 		}
+	}
+	if len(missing) == 0 {
+		return nil
 	}
 	updated := string(data)
 	if updated != "" && !strings.HasSuffix(updated, "\n") {
 		updated += "\n"
 	}
-	updated += ignoreEntry + "\n"
+	updated += strings.Join(missing, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
 		return fmt.Errorf("update .gitignore: %w", err)
 	}

@@ -21,6 +21,7 @@ var (
 	unknownStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	selectedStyle = lipgloss.NewStyle().Reverse(true)
 	sessionStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("69"))
+	tabStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("75"))
 	mutedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 )
@@ -48,8 +49,12 @@ func (m Model) View() string {
 		start := viewportStart(selected, len(displayRows), visible)
 		for index := start; index < len(displayRows) && index < start+visible; index++ {
 			row := displayRows[index]
-			if row.agentIndex < 0 {
+			switch row.kind {
+			case displaySession:
 				lines = append(lines, m.sessionView(row.session, row.count))
+				continue
+			case displayTab:
+				lines = append(lines, m.tabView(row.tab, row.count))
 				continue
 			}
 			lines = append(lines, m.rowView(m.rows[row.agentIndex], row.agentIndex == m.selected, width))
@@ -62,7 +67,7 @@ func (m Model) View() string {
 		}
 		lines = append(lines, style.Render(m.statusText))
 	}
-	lines = append(lines, "j/k move  Enter focus  R refresh  q quit")
+	lines = append(lines, "j/k/Tab/S-Tab move  Enter focus  R refresh  q quit")
 	for index := range lines {
 		lines[index] = ansi.Truncate(lines[index], width, "…")
 	}
@@ -73,24 +78,43 @@ func (m Model) View() string {
 }
 
 type displayRow struct {
+	kind       displayRowKind
 	session    string
+	tab        string
 	count      int
 	agentIndex int
 }
 
+type displayRowKind uint8
+
+const (
+	displayAgent displayRowKind = iota
+	displaySession
+	displayTab
+)
+
 func (m Model) displayRows() []displayRow {
-	rows := make([]displayRow, 0, len(m.rows)*2)
+	rows := make([]displayRow, 0, len(m.rows)*3)
 	for start := 0; start < len(m.rows); {
 		session := sessionName(m.rows[start])
-		end := start + 1
-		for end < len(m.rows) && sessionName(m.rows[end]) == session {
-			end++
+		sessionEnd := start + 1
+		for sessionEnd < len(m.rows) && sessionName(m.rows[sessionEnd]) == session {
+			sessionEnd++
 		}
-		rows = append(rows, displayRow{session: session, count: end - start, agentIndex: -1})
-		for index := start; index < end; index++ {
-			rows = append(rows, displayRow{agentIndex: index})
+		rows = append(rows, displayRow{kind: displaySession, session: session, count: sessionEnd - start})
+		for tabStart := start; tabStart < sessionEnd; {
+			tab := tabKey(m.rows[tabStart])
+			tabEnd := tabStart + 1
+			for tabEnd < sessionEnd && tabKey(m.rows[tabEnd]) == tab {
+				tabEnd++
+			}
+			rows = append(rows, displayRow{kind: displayTab, tab: tabName(m.rows[tabStart]), count: tabEnd - tabStart})
+			for index := tabStart; index < tabEnd; index++ {
+				rows = append(rows, displayRow{kind: displayAgent, agentIndex: index})
+			}
+			tabStart = tabEnd
 		}
-		start = end
+		start = sessionEnd
 	}
 	return rows
 }
@@ -105,11 +129,15 @@ func displayIndexForAgent(rows []displayRow, agentIndex int) int {
 }
 
 func (m Model) sessionView(session string, count int) string {
-	label := fmt.Sprintf("SESSION %s (%d)", session, count)
+	label := fmt.Sprintf("%s (%d)", session, count)
 	if strings.TrimSpace(m.opts.SourceSession) == session {
 		label += "  current"
 	}
 	return sessionStyle.Render(label)
+}
+
+func (m Model) tabView(tab string, count int) string {
+	return tabStyle.Render(fmt.Sprintf("  %s (%d)", tab, count))
 }
 
 func (m Model) headerView() string {
@@ -136,14 +164,14 @@ func (m Model) rowView(record transport.AgentWithPane, selected bool, width int)
 	if now.IsZero() {
 		now = time.Now()
 	}
-	projectWidth := maxInt(8, width-46)
-	line := "  " + padCell(projectName(record.Pane.CWD), projectWidth) +
+	projectWidth := maxInt(8, width-48)
+	line := "    " + padCell(projectName(record.Pane.CWD), projectWidth) +
 		"  " + padCell(stateView(record.Agent.State), 10) +
 		"  " + padCell(agentName(record.Agent.Kind), 12) +
 		"  " + padCell(accessName(record.Agent.Access), 9) +
 		"  " + elapsed(now, record.Agent.StateChangedAt)
 	if selected {
-		line = "> " + strings.TrimPrefix(line, "  ")
+		line = "  > " + strings.TrimPrefix(line, "    ")
 		return selectedStyle.Render(line)
 	}
 	return line

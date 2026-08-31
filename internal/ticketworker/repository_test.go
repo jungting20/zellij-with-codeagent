@@ -118,8 +118,32 @@ func TestInitializeProjectIsIdempotentAndUpdatesGitignoreOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, entry := range []string{ignoreEntry, worktreesIgnoreEntry} {
+		if got := strings.Count(string(data), entry); got != 1 {
+			t.Fatalf(".gitignore = %q, %q count = %d", data, entry, got)
+		}
+	}
+}
+
+func TestInitializeProjectAddsWorktreesIgnoreToPreviouslyInitializedRepository(t *testing.T) {
+	root := newRepositoryRoot(t)
+	initial := "bin/\n" + ignoreEntry + "\n"
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := InitializeProject(context.Background(), root, nil); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := strings.Count(string(data), ignoreEntry); got != 1 {
-		t.Fatalf(".gitignore = %q, entry count = %d", data, got)
+		t.Fatalf(".gitignore = %q, %q count = %d", data, ignoreEntry, got)
+	}
+	if got := strings.Count(string(data), worktreesIgnoreEntry); got != 1 {
+		t.Fatalf(".gitignore = %q, %q count = %d", data, worktreesIgnoreEntry, got)
 	}
 }
 
@@ -144,8 +168,10 @@ func TestInitializeProjectConfigFailurePreservesDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), ignoreEntry) {
-		t.Fatalf(".gitignore after config failure = %q, missing %q", data, ignoreEntry)
+	for _, entry := range []string{ignoreEntry, worktreesIgnoreEntry} {
+		if !strings.Contains(string(data), entry) {
+			t.Fatalf(".gitignore after config failure = %q, missing %q", data, entry)
+		}
 	}
 }
 

@@ -819,6 +819,10 @@ func (c *testClient) FocusAgent(_ context.Context, agentID string, request trans
 	return c.focusResponse, c.focusErr
 }
 
+func (c *testClient) FocusSession(context.Context, string, transport.FocusSessionRequest) (transport.FocusSessionResponse, error) {
+	return transport.FocusSessionResponse{}, nil
+}
+
 func (c *testClient) FocusNextAgent(ctx context.Context, request transport.FocusNextAgentRequest) (transport.FocusNextAgentResponse, error) {
 	c.nextCalls++
 	c.nextRequest = request
@@ -891,6 +895,10 @@ func (*serviceBackedClient) ListAgents(context.Context) (transport.ListAgentsRes
 
 func (*serviceBackedClient) FocusAgent(context.Context, string, transport.FocusAgentRequest) (transport.FocusAgentResponse, error) {
 	return transport.FocusAgentResponse{}, nil
+}
+
+func (*serviceBackedClient) FocusSession(context.Context, string, transport.FocusSessionRequest) (transport.FocusSessionResponse, error) {
+	return transport.FocusSessionResponse{}, nil
 }
 
 func (*serviceBackedClient) FocusNextAgent(context.Context, transport.FocusNextAgentRequest) (transport.FocusNextAgentResponse, error) {

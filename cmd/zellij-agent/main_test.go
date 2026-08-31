@@ -27,7 +27,7 @@ func TestRunHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run() exit code = %d, want 0", code)
 	}
-	for _, want := range []string{"Usage: zellij-agent", "planner", "work", "chrome", "dashboard", "agent", "current Zellij pane through close-on-exit", "ticket-worker", "code-review", "debate-background"} {
+	for _, want := range []string{"Usage: zellij-agent", "work", "chrome", "dashboard", "agent", "current Zellij pane through close-on-exit", "ticket-worker", "code-review", "debate-background"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, missing %q", stdout.String(), want)
 		}
@@ -146,6 +146,10 @@ func (c *fakeAgentClient) ListAgents(context.Context) (transport.ListAgentsRespo
 
 func (c *fakeAgentClient) FocusAgent(context.Context, string, transport.FocusAgentRequest) (transport.FocusAgentResponse, error) {
 	return transport.FocusAgentResponse{}, nil
+}
+
+func (c *fakeAgentClient) FocusSession(context.Context, string, transport.FocusSessionRequest) (transport.FocusSessionResponse, error) {
+	return transport.FocusSessionResponse{}, nil
 }
 
 func (c *fakeAgentClient) FocusNextAgent(_ context.Context, request transport.FocusNextAgentRequest) (transport.FocusNextAgentResponse, error) {
@@ -379,16 +383,16 @@ func TestRunDispatchesWorkDryRun(t *testing.T) {
 	}
 }
 
-func TestRunDispatchesPlannerHelp(t *testing.T) {
+func TestRunRejectsRemovedPlannerCommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := run([]string{"planner", "--help"}, strings.NewReader(""), &stdout, &stderr)
 
-	if code != 0 {
-		t.Fatalf("run() exit code = %d, want 0", code)
+	if code != 2 {
+		t.Fatalf("run() exit code = %d, want 2", code)
 	}
-	if !strings.Contains(stdout.String(), "Usage: agent-planner") {
-		t.Fatalf("stdout = %q, want planner usage", stdout.String())
+	if !strings.Contains(stderr.String(), "unknown command group: planner") {
+		t.Fatalf("stderr = %q, want removed planner rejection", stderr.String())
 	}
 }
 

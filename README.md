@@ -41,7 +41,6 @@ The legacy entrypoints are still available as compatibility wrappers when needed
 ```bash
 go build -o bin/agentd ./cmd/agentd
 go build -o bin/agentctl ./cmd/agentctl
-go build -o bin/agent-planner ./cmd/agent-planner
 go build -o bin/agent-role ./cmd/agent-role
 ```
 
@@ -60,18 +59,12 @@ Start the local transport daemon:
 ```
 
 The `serve` command exposes JSON HTTP over the default Unix socket `/tmp/agentd.sock`. It does not bind a TCP port. Pass `--socket <path>` only when you need an override.
-Use the built `zellij-agent` binary for planner flows so generated panes can call back into the same stable executable path.
-
 Use `zellij-agent ctl` as the thin command-line client for the local socket:
 
 ```bash
 ./bin/zellij-agent ctl health
 ./bin/zellij-agent ctl status
 ./bin/zellij-agent ctl plan --file examples/plans/agent-role-demo.json
-./bin/zellij-agent planner page --url http://localhost:8000/example/aa --cwd "$PWD" --ui
-./bin/zellij-agent planner tui
-./bin/zellij-agent planner validate --file plan.json
-./bin/zellij-agent planner submit --file plan.json --ui
 ./bin/zellij-agent ctl events --limit 20
 ./bin/zellij-agent ctl events --follow --type raw_output
 ./bin/zellij-agent ctl input coder --text $'go test ./...\n'
@@ -248,9 +241,9 @@ project. Initialize it from the project root or any nested directory:
 
 Initialization creates `.zellij-agent/ticket-worker/tickets.db` and
 `.zellij-agent/worker/config.yaml` at the Git root, then adds
-`.zellij-agent/ticket-worker/` to the root `.gitignore`. It is idempotent:
-running it again preserves existing tickets, does not duplicate the ignore
-entry, and never overwrites an existing worker config.
+`.zellij-agent/ticket-worker/` and `.worktrees/` to the root `.gitignore`. It
+is idempotent: running it again preserves existing tickets, does not duplicate
+the ignore entries, and never overwrites an existing worker config.
 
 The generated worker config contains the coding-agent capacity and polling
 cadence:
@@ -274,14 +267,17 @@ Register a ticket from an approved Superpowers design and implementation plan:
   --spec docs/superpowers/specs/2026-07-17-search-design.md \
   --plan docs/superpowers/plans/2026-07-17-search.md \
   --worktree-branch feat/search \
+  --agent claude \
   --prompt $'Implement the approved search plan.\nRun the complete test suite.'
 ```
 
-The worktree branch name is required and stored with the ticket. The spec and plan must be existing Markdown files under
+The worktree branch name is required and used when the ticket starts. The spec and plan must be existing Markdown files under
 `docs/superpowers/specs/` and `docs/superpowers/plans/`. A plan can be
 registered only once. The required prompt is stored with the ticket and used
 as the coding-agent instruction. The manager appends its completion-marker
-instruction automatically. Queue and lifecycle commands are:
+instruction automatically. `--agent` selects `codex`, `claude`, `gemini`,
+`cursor`, or `hermes`; it defaults to `codex` when omitted. The same option is
+available on `fast-add`. Queue and lifecycle commands are:
 
 ```bash
 ./bin/zellij-agent ticket-worker list [--status ready] [--no-prompt]
@@ -297,10 +293,21 @@ instruction automatically. Queue and lifecycle commands are:
 `ticket-worker` tab. With no active workers, the manager fills the tab. While
 workers are active, the manager occupies the top 50% and all coding-agent
 workers share the bottom 50% side by side; Zellij reflows that row whenever a
-worker opens or closes. The manager claims the oldest `ready` tickets, starts
+worker opens or closes. A borderless `zellij:compact-bar` pane remains at the
+bottom in both layouts. The manager claims the oldest `ready` tickets, starts
 up to `max_workers` coding-agent panes, and continues polling for new tickets.
-Every coding-agent created by the manager runs in YOLO mode, bypassing Codex
-approvals and sandboxing. The manager uses `--zellij-session` when supplied or
+Before starting each pane, it creates a persistent Git worktree at
+`.worktrees/ticket-<ID>` on the ticket's `worktree_branch`. A missing branch is
+created from the repository's current `HEAD`; an existing branch is attached
+when it is not already checked out elsewhere. A matching existing worktree is
+reused after retries or manager restarts. Worktrees and branches are preserved
+after completion for review and integration. Preparation failures requeue the
+ticket without starting a coding-agent pane.
+Every coding-agent created by the manager runs in YOLO mode using the agent
+stored on that ticket. The complete ticket instruction, including its
+completion marker, is passed to the selected coding agent as its initial CLI
+prompt argument; the manager does not paste the prompt or synthesize an Enter
+keypress. The manager uses `--zellij-session` when supplied or
 `ZELLIJ_SESSION_NAME` when run inside Zellij. The unified CLI automatically
 starts the local daemon when needed.
 
@@ -309,30 +316,11 @@ oldest `ready` ticket to `in_progress`. Add `--json` to ticket data commands
 other than `init` and `start` for machine-readable output and structured
 errors.
 
-### Planner Commands
+### Execution Plan Commands
 
-`zellij-agent ctl plan` accepts either a raw execution plan payload or a full `/v1/requests` envelope.
-`zellij-agent planner page` is a mock planner path for URL-based page inspection. It uses a built-in mock source by default, generates a canonical `/v1/requests` `execution_plan`, and submits panes for editor, LSP, network, and console inspection. Add `--dry-run` to print the envelope without contacting `agentd`.
-`zellij-agent planner tui` provides the same mock planner path through a single chat-style prompt. Include the URL in the natural-language request, for example `localhost:8000/example/aa 페이지 소스 열고 네트워크/콘솔 확인해줘`; the mock source and cwd default from the current repo, and generated panes call back into `zellij-agent role`.
-`zellij-agent planner validate` and `zellij-agent planner submit` accept AI-generated JSON files, require the canonical `/v1/requests` envelope, and reject legacy or unknown payload fields before submission.
-
-For planner commands that submit or generate plans, `--zellij-session` selects
-the physical Zellij session. When omitted, the CLI uses its own
-`ZELLIJ_SESSION_NAME`. The logical `--session` flag remains the execution task
-ID. Commands fail before submission when neither source names a physical Zellij
-session. A page dry run shows the generated logical session alongside the
-explicit physical target:
-
-```bash
-./bin/zellij-agent planner page --url http://localhost:8000/example/aa --dry-run --zellij-session physical-a
-```
-
-```json
-{
-  "session": "page-example-aa",
-  "zellij_session": "physical-a"
-}
-```
+`zellij-agent ctl plan` accepts either a raw execution plan payload or a full
+`/v1/requests` envelope, validates it, and submits it to the runtime. Use
+`--zellij-session` to override the physical Zellij session in the input plan.
 
 ## Runtime Service Shape
 

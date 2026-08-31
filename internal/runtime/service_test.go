@@ -534,6 +534,39 @@ func TestFocusPaneSwitchesFromSourceContextToRegisteredTarget(t *testing.T) {
 	}
 }
 
+func TestFocusSessionSwitchesToFocusedTerminalPane(t *testing.T) {
+	switcher := &fakeSessionSwitcher{}
+	backend := &fakeBackend{listPanesBySession: map[string][]zellij.Pane{
+		"loop": {
+			{ID: "plugin_1", IsPlugin: true, IsFocused: true},
+			{ID: "terminal_0", IsFocused: true, TabID: 0, TabName: "loop"},
+			{ID: "terminal_2", TabID: 1, TabName: "other"},
+		},
+	}}
+	service := NewService(Options{Registry: registry.New(), Backend: backend, SessionSwitcher: switcher})
+
+	response, err := service.FocusSession(context.Background(), FocusSessionRequest{
+		SessionID:           "loop",
+		SourceZellijSession: "dashboard-session",
+		SourceZellijPaneID:  "terminal_9",
+	})
+	if err != nil {
+		t.Fatalf("FocusSession() error = %v", err)
+	}
+	want := zellij.SwitchSessionRequest{
+		SourceSession: "dashboard-session",
+		SourcePaneID:  "terminal_9",
+		TargetSession: "loop",
+		TargetPaneID:  "terminal_0",
+	}
+	if !reflect.DeepEqual(switcher.requests, []zellij.SwitchSessionRequest{want}) {
+		t.Fatalf("switch requests = %#v, want %#v", switcher.requests, []zellij.SwitchSessionRequest{want})
+	}
+	if response.SessionID != "loop" || response.ZellijPaneID != "terminal_0" {
+		t.Fatalf("FocusSession() response = %#v", response)
+	}
+}
+
 func TestFocusPaneUsesBackendSessionSwitcherByDefault(t *testing.T) {
 	switcher := &fakeSessionSwitcher{}
 	backend := &fakeSwitchingBackend{fakeBackend: &fakeBackend{}, fakeSessionSwitcher: switcher}

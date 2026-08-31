@@ -229,6 +229,7 @@ func runAdd(ctx context.Context, store *ticketworker.Store, args []string, stdou
 	spec := flags.String("spec", "", "approved design path")
 	plan := flags.String("plan", "", "approved implementation plan path")
 	worktreeBranch := flags.String("worktree-branch", "", "worktree branch name")
+	agent := flags.String("agent", "codex", "coding agent kind")
 	prompt := flags.String("prompt", "", "coding-agent prompt")
 	jsonOutput := flags.Bool("json", false, "write JSON")
 	if err := flags.Parse(args); err != nil {
@@ -246,6 +247,7 @@ func runAdd(ctx context.Context, store *ticketworker.Store, args []string, stdou
 		SpecPath:       *spec,
 		PlanPath:       *plan,
 		WorktreeBranch: *worktreeBranch,
+		Agent:          *agent,
 		Prompt:         *prompt,
 	})
 	if err != nil {
@@ -259,6 +261,7 @@ func runFastAdd(ctx context.Context, store *ticketworker.Store, args []string, s
 	title := flags.String("title", "", "ticket title")
 	summary := flags.String("summary", "", "ticket summary")
 	worktreeBranch := flags.String("worktree-branch", "", "worktree branch name")
+	agent := flags.String("agent", "codex", "coding agent kind")
 	prompt := flags.String("prompt", "", "coding-agent prompt")
 	jsonOutput := flags.Bool("json", false, "write JSON")
 	if err := flags.Parse(args); err != nil {
@@ -274,6 +277,7 @@ func runFastAdd(ctx context.Context, store *ticketworker.Store, args []string, s
 		Title:          *title,
 		Summary:        *summary,
 		WorktreeBranch: *worktreeBranch,
+		Agent:          *agent,
 		Prompt:         *prompt,
 	})
 	if err != nil {
@@ -398,7 +402,7 @@ func reportTicket(stdout, stderr io.Writer, jsonOutput bool, value ticketworker.
 		}
 		return ExitOK
 	}
-	if _, err := fmt.Fprintf(stdout, "ID: %d\nStatus: %s\nTitle: %s\nSummary: %s\nSpec: %s\nPlan: %s\nWorktree branch: %s\nPrompt:\n%s\n", value.ID, value.Status, value.Title, value.Summary, value.SpecPath, value.PlanPath, value.WorktreeBranch, value.Prompt); err != nil {
+	if _, err := fmt.Fprintf(stdout, "ID: %d\nStatus: %s\nTitle: %s\nSummary: %s\nSpec: %s\nPlan: %s\nWorktree branch: %s\nAgent: %s\nPrompt:\n%s\n", value.ID, value.Status, value.Title, value.Summary, value.SpecPath, value.PlanPath, value.WorktreeBranch, value.Agent, value.Prompt); err != nil {
 		return reportError(stderr, false, fmt.Errorf("write output: %w", err))
 	}
 	return ExitOK
@@ -428,12 +432,12 @@ func reportTickets(stdout, stderr io.Writer, jsonOutput, noPrompt bool, values [
 	}
 	for _, value := range values {
 		if noPrompt {
-			if _, err := fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\t%s\n", value.ID, value.Status, value.Title, value.WorktreeBranch, value.PlanPath); err != nil {
+			if _, err := fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\t%s\t%s\n", value.ID, value.Status, value.Agent, value.Title, value.WorktreeBranch, value.PlanPath); err != nil {
 				return reportError(stderr, false, fmt.Errorf("write output: %w", err))
 			}
 			continue
 		}
-		if _, err := fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\t%s\t%s\n", value.ID, value.Status, value.Title, value.WorktreeBranch, value.PlanPath, escapeListField(value.Prompt)); err != nil {
+		if _, err := fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n", value.ID, value.Status, value.Agent, value.Title, value.WorktreeBranch, value.PlanPath, escapeListField(value.Prompt)); err != nil {
 			return reportError(stderr, false, fmt.Errorf("write output: %w", err))
 		}
 	}
@@ -473,6 +477,7 @@ func classifyError(err error) (int, string) {
 		return ExitEmptyQueue, "empty_queue"
 	case errors.Is(err, ticketworker.ErrInvalidArtifact),
 		errors.Is(err, ticketworker.ErrInvalidPrompt),
+		errors.Is(err, ticketworker.ErrInvalidAgent),
 		errors.Is(err, ticketworker.ErrInvalidWorktreeBranch),
 		errors.Is(err, ticketworker.ErrRepositoryNotFound),
 		errors.Is(err, ticketworker.ErrNotInitialized):

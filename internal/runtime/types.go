@@ -64,6 +64,10 @@ type FocusService interface {
 	FocusPane(context.Context, FocusPaneRequest) (FocusPaneResponse, error)
 }
 
+type SessionFocusService interface {
+	FocusSession(context.Context, FocusSessionRequest) (FocusSessionResponse, error)
+}
+
 type RuntimeInspectionService interface {
 	InspectRuntime(context.Context, InspectRuntimeRequest) (InspectRuntimeResponse, error)
 }
@@ -104,6 +108,7 @@ type RuntimeService interface {
 	PaneService
 	PaneClaimService
 	FocusService
+	SessionFocusService
 	RuntimeInspectionService
 	EventService
 	ReconciliationService
@@ -161,6 +166,17 @@ type FocusPaneRequest struct {
 
 type FocusPaneResponse struct {
 	Pane Pane
+}
+
+type FocusSessionRequest struct {
+	SessionID           string
+	SourceZellijSession string
+	SourceZellijPaneID  ZellijPaneID
+}
+
+type FocusSessionResponse struct {
+	SessionID    string
+	ZellijPaneID ZellijPaneID
 }
 
 type SendInputRequest struct {

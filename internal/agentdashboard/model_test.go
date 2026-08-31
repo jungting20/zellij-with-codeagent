@@ -104,7 +104,7 @@ func TestModelKeepsCreationOrderAndSelectionByAgentID(t *testing.T) {
 	}
 }
 
-func TestModelGroupsBySessionWithCurrentSessionFirst(t *testing.T) {
+func TestModelGroupsBySessionAndTabWithCurrentSessionFirst(t *testing.T) {
 	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{SourceSession: "session-b"}))
 	records := []transport.AgentWithPane{
 		record("a-late", "codex", "idle", time.Unix(40, 0)),
@@ -114,9 +114,13 @@ func TestModelGroupsBySessionWithCurrentSessionFirst(t *testing.T) {
 		record("a-first", "codex", "idle", time.Unix(20, 0)),
 	}
 	records[0].Pane.SessionID = "session-a"
+	records[0].Pane.TabID = "tab-b"
 	records[1].Pane.SessionID = "session-b"
+	records[1].Pane.TabID = "tab-b"
 	records[3].Pane.SessionID = "session-b"
+	records[3].Pane.TabID = "tab-a"
 	records[4].Pane.SessionID = "session-a"
+	records[4].Pane.TabID = "tab-a"
 
 	m = applyRefresh(t, m, records)
 	if got := rowIDs(m.rows); !reflect.DeepEqual(got, []string{"b-first", "b-late", "a-first", "a-late", "ungrouped"}) {
@@ -166,9 +170,65 @@ func TestModelFocusUsesSelectedAgentAndSourceContext(t *testing.T) {
 	if client.focusAgentID != "agent-2" || client.focusRequest != (transport.FocusAgentRequest{SourceSession: "source-session", SourceZellijPaneID: "terminal_9"}) {
 		t.Fatalf("focus id=%q request=%#v", client.focusAgentID, client.focusRequest)
 	}
-	m = update(t, m, msg)
-	if m.focusing || m.statusText != "focused agent-2" {
-		t.Fatalf("focusing=%t status=%q", m.focusing, m.statusText)
+	next, quit := m.Update(msg)
+	m = concreteModel(t, next)
+	if m.focusing || !m.quitting || m.statusText != "focused agent-2" {
+		t.Fatalf("focusing=%t quitting=%t status=%q", m.focusing, m.quitting, m.statusText)
+	}
+	if quit == nil {
+		t.Fatal("successful Enter focus did not quit dashboard")
+	}
+	if _, ok := quit().(tea.QuitMsg); !ok {
+		t.Fatalf("focus completion command returned %T, want tea.QuitMsg", quit())
+	}
+}
+
+func TestModelTabCyclesSelection(t *testing.T) {
+	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m = applyRefresh(t, m, []transport.AgentWithPane{
+		record("a", "codex", "idle", time.Unix(1, 0)),
+		record("b", "claude", "idle", time.Unix(2, 0)),
+	})
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = concreteModel(t, next)
+	if cmd != nil || m.focusing || m.quitting || m.selected != 1 || m.selectedID != "b" {
+		t.Fatalf("Tab cmd=%v focusing=%t quitting=%t selected=%d id=%q", cmd, m.focusing, m.quitting, m.selected, m.selectedID)
+	}
+
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.selected != 0 || m.selectedID != "a" {
+		t.Fatalf("second Tab selected=%d id=%q, want wrapped to a", m.selected, m.selectedID)
+	}
+}
+
+func TestModelShiftTabCyclesSelectionBackward(t *testing.T) {
+	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m = applyRefresh(t, m, []transport.AgentWithPane{
+		record("a", "codex", "idle", time.Unix(1, 0)),
+		record("b", "claude", "idle", time.Unix(2, 0)),
+	})
+
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.selected != 1 || m.selectedID != "b" {
+		t.Fatalf("Shift+Tab selected=%d id=%q, want wrapped to b", m.selected, m.selectedID)
+	}
+
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.selected != 0 || m.selectedID != "a" {
+		t.Fatalf("second Shift+Tab selected=%d id=%q, want a", m.selected, m.selectedID)
+	}
+}
+
+func TestModelTabKeysWithNoAgentsDoNothing(t *testing.T) {
+	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+
+	for _, key := range []tea.KeyType{tea.KeyTab, tea.KeyShiftTab} {
+		next, cmd := m.Update(tea.KeyMsg{Type: key})
+		m = concreteModel(t, next)
+		if cmd != nil || m.selected != 0 || m.selectedID != "" {
+			t.Fatalf("key %v with no agents cmd=%v selected=%d id=%q", key, cmd, m.selected, m.selectedID)
+		}
 	}
 }
 

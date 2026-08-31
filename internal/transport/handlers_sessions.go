@@ -19,11 +19,6 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionRoute(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, BadRequest("only GET is supported for session routes"), http.StatusMethodNotAllowed)
-		return
-	}
-
 	sessionID, tabID, subResource, ok := splitSessionPath(r.URL.Path)
 	if !ok || sessionID == "" {
 		writeAPIError(w, BadRequest("invalid session path"), http.StatusBadRequest)
@@ -32,6 +27,36 @@ func (s *Server) handleSessionRoute(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
+
+	if tabID == "focus" && subResource == "" {
+		if r.Method != http.MethodPost {
+			writeAPIError(w, BadRequest("session focus requires POST"), http.StatusMethodNotAllowed)
+			return
+		}
+		var request FocusSessionRequest
+		if !decodeRequest(w, r, &request) {
+			return
+		}
+		response, err := s.service.FocusSession(ctx, rt.FocusSessionRequest{
+			SessionID:           sessionID,
+			SourceZellijSession: request.SourceSession,
+			SourceZellijPaneID:  rt.ZellijPaneID(request.SourceZellijPaneID),
+		})
+		if err != nil {
+			writeRuntimeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, FocusSessionResponse{
+			SessionID:    response.SessionID,
+			ZellijPaneID: string(response.ZellijPaneID),
+		})
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		writeAPIError(w, BadRequest("only GET is supported for session routes"), http.StatusMethodNotAllowed)
+		return
+	}
 
 	if tabID == "" && subResource == "" {
 		session, err := s.service.GetSession(ctx, rt.SessionID(sessionID))

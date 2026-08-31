@@ -591,7 +591,7 @@ func printDashboardUsage(w io.Writer) {
 	fmt.Fprintln(w, "  --focus AGENT_ID")
 	fmt.Fprintln(w, "    focus one agent and exit; requires --output json")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Keys: j/k move, Enter focus, R refresh, q quit")
+	fmt.Fprintln(w, "Keys: j/k/Tab move, Enter focus and exit, R refresh, q quit")
 }
 
 func printStartUsage(w io.Writer) {

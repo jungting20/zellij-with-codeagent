@@ -15,7 +15,6 @@ import (
 	dashboardcli "zellij-with-codeagent/internal/cli/dashboard"
 	debatebg "zellij-with-codeagent/internal/cli/debatebackground"
 	listselectorcli "zellij-with-codeagent/internal/cli/listselector"
-	plannercli "zellij-with-codeagent/internal/cli/planner"
 	rolecli "zellij-with-codeagent/internal/cli/role"
 	ticketworkercli "zellij-with-codeagent/internal/cli/ticketworker"
 	workcli "zellij-with-codeagent/internal/cli/work"
@@ -46,10 +45,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return daemoncli.Run(args[1:], stdout, stderr)
 	case "ctl":
 		return ctlcli.Run(args[1:], stdin, stdout, stderr, newClient)
-	case "planner":
-		return plannercli.RunWithInputConfig(args[1:], stdin, stdout, stderr, newPlannerClient, plannercli.Config{
-			DefaultRoleCommand: []string{executablePath(), "role"},
-		})
 	case "work":
 		return workcli.Run(args[1:], stdin, stdout, stderr, newWorkClient, workcli.Config{
 			DefaultRoleCommand: []string{executablePath(), "role"},
@@ -93,10 +88,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 func newClient(socketPath string, timeout time.Duration) ctlcli.AgentClient {
-	return newAutoStartClient(socketPath, timeout)
-}
-
-func newPlannerClient(socketPath string, timeout time.Duration) plannercli.AgentClient {
 	return newAutoStartClient(socketPath, timeout)
 }
 
@@ -149,7 +140,6 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  daemon   Run the local runtime daemon")
 	fmt.Fprintln(w, "  ctl      Inspect and control the daemon runtime")
-	fmt.Fprintln(w, "  planner  Generate, validate, and submit planner requests")
 	fmt.Fprintln(w, "  work     Start a personal mixed-mode coding workspace")
 	fmt.Fprintln(w, "  chrome   Start a Chrome network tracking tab")
 	fmt.Fprintln(w, "  dashboard")

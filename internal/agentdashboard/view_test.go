@@ -20,25 +20,30 @@ func TestViewRendersDeterministicGroupedDashboardAtSupportedWidths(t *testing.T)
 		viewRecord("agent-cursor", "cursor", "unknown", "/repo/mobile", now.Add(-2*time.Second)),
 	}
 	records[0].Pane.SessionID = "project-alpha"
+	records[0].Pane.TabID, records[0].Pane.TabName = "tab-code", "coding"
 	records[1].Pane.SessionID = "project-alpha"
+	records[1].Pane.TabID, records[1].Pane.TabName = "tab-review", "review"
 	records[2].Pane.SessionID = "experiments"
+	records[2].Pane.TabID, records[2].Pane.TabName = "tab-lab", "lab"
 	records[3].Pane.SessionID = "experiments"
+	records[3].Pane.TabID, records[3].Pane.TabName = "tab-lab", "lab"
 
 	for _, width := range []int{80, 120} {
 		t.Run(string(rune(width)), func(t *testing.T) {
 			m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{SourceSession: "project-alpha"}))
-			m.width, m.height, m.connection, m.loaded, m.lastRefresh = width, 12, "live", true, now
+			m.width, m.height, m.connection, m.loaded, m.lastRefresh = width, 14, "live", true, now
 			m.rows = append([]transport.AgentWithPane(nil), records...)
 			m.selected, m.selectedID = 1, "agent-claude"
 			plain := ansi.Strip(m.View())
 
 			for _, want := range []string{
 				"AGENT DASHBOARD", "PROJECT  STATE  AGENT  ACCESS  SINCE",
-				"SESSION project-alpha (2)  current", "SESSION experiments (2)",
+				"project-alpha (2)  current", "experiments (2)",
+				"coding (tab-code) (1)", "review (tab-review) (1)", "lab (tab-lab) (2)",
 				"Codex", "Claude", "Gemini", "Cursor",
 				"working", "blocked", "idle", "unknown",
 				"zellij-with-codeagent", "api-server", "frontend", "mobile",
-				"01:30", "> ", "j/k move  Enter focus  R refresh  q quit",
+				"01:30", "> ", "j/k/Tab/S-Tab move  Enter focus  R refresh  q quit",
 			} {
 				if !strings.Contains(plain, want) {
 					t.Fatalf("width=%d view missing %q:\n%s", width, want, plain)
@@ -59,7 +64,7 @@ func TestViewRendersDeterministicGroupedDashboardAtSupportedWidths(t *testing.T)
 	}
 }
 
-func TestViewGroupsMissingSessionAsUngrouped(t *testing.T) {
+func TestViewGroupsMissingSessionAndTabAsUngrouped(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
 	m.width, m.height, m.connection, m.loaded, m.lastRefresh = 100, 8, "live", true, now
@@ -69,8 +74,11 @@ func TestViewGroupsMissingSessionAsUngrouped(t *testing.T) {
 	}
 
 	plain := ansi.Strip(m.View())
-	if !strings.Contains(plain, "SESSION ungrouped (2)") {
+	if !strings.Contains(plain, "ungrouped (2)") {
 		t.Fatalf("view missing ungrouped session header:\n%s", plain)
+	}
+	if strings.Count(plain, "ungrouped (2)") != 2 {
+		t.Fatalf("view missing nested ungrouped session and tab labels:\n%s", plain)
 	}
 }
 

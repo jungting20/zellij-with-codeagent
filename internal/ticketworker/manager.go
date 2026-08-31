@@ -35,6 +35,10 @@ type ManagerClient interface {
 
 type NotificationBackoff func(context.Context, time.Duration) error
 
+type WorktreePreparer interface {
+	Prepare(context.Context, string, Ticket) (string, error)
+}
+
 type ManagerOptions struct {
 	Store               ManagerStore
 	Client              ManagerClient
@@ -51,6 +55,7 @@ type ManagerOptions struct {
 	Log                 io.Writer
 	ManagerID           string
 	NotificationBackoff NotificationBackoff
+	Worktrees           WorktreePreparer
 }
 
 type managerSlotState uint8
@@ -94,6 +99,7 @@ type Manager struct {
 	log                 io.Writer
 	managerID           string
 	notificationBackoff NotificationBackoff
+	worktrees           WorktreePreparer
 	slots               []managerSlot
 	stream              *transport.EventStream
 }
@@ -169,11 +175,15 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	if notificationBackoff == nil {
 		notificationBackoff = waitNotificationBackoff
 	}
+	worktrees := opts.Worktrees
+	if worktrees == nil {
+		worktrees = GitWorktreePreparer{}
+	}
 	return &Manager{
 		store: opts.Store, client: opts.Client, config: opts.Config,
 		root: root, taskID: taskID, anchorPaneID: anchorPaneID, zellijSession: zellijSession, roleBin: roleBin,
 		startupTimeout: startupTimeout, pollInterval: pollInterval, readyPollInterval: readyPollInterval,
-		tick: opts.Tick, log: log, managerID: managerID, notificationBackoff: notificationBackoff,
+		tick: opts.Tick, log: log, managerID: managerID, notificationBackoff: notificationBackoff, worktrees: worktrees,
 		slots: make([]managerSlot, opts.Config.MaxWorkers),
 	}, nil
 }
@@ -363,12 +373,24 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 		m.requeueWithoutPane(ctx, slot)
 		return true
 	}
+	prepareCtx, cancel := context.WithTimeout(ctx, m.startupTimeout)
+	worktree, prepareErr := m.worktrees.Prepare(prepareCtx, m.root, ticket)
+	cancel()
+	if prepareErr != nil {
+		m.logTicketf("worktree", ticket, "branch=%s failed: %v", ticket.WorktreeBranch, prepareErr)
+		m.requeueWithoutPane(ctx, slot)
+		return true
+	}
+	if strings.TrimSpace(worktree) == "" {
+		m.logTicketf("worktree", ticket, "branch=%s failed: empty worktree path", ticket.WorktreeBranch)
+		m.requeueWithoutPane(ctx, slot)
+		return true
+	}
 
 	req := transport.CreatePaneRequest{
 		ID: slot.paneID, TaskID: m.taskID, ZellijSession: m.zellijSession,
 		Role: "coding-agent", Name: workerPaneName(ticket), SameTabAsPaneID: m.anchorPaneID,
-		Command: []string{m.roleBin, "role", "coding-agent", "--yolo", m.root}, CWD: m.root,
-		InitialInput: slot.prompt + "\n", InitialInputReadyText: "›",
+		Command: []string{m.roleBin, "role", "coding-agent", "--agent", ticket.Agent, "--yolo", worktree, "--", slot.prompt}, CWD: worktree,
 	}
 	slot.createRequest = req
 	createCtx, cancel := context.WithTimeout(ctx, m.startupTimeout)

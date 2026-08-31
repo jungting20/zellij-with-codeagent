@@ -172,6 +172,12 @@ func (c *Client) FocusNextAgent(ctx context.Context, req FocusNextAgentRequest) 
 	return response, err
 }
 
+func (c *Client) FocusSession(ctx context.Context, sessionID string, req FocusSessionRequest) (FocusSessionResponse, error) {
+	var response FocusSessionResponse
+	err := c.do(ctx, http.MethodPost, "/v1/sessions/"+url.PathEscape(sessionID)+"/focus", req, &response)
+	return response, err
+}
+
 func (c *Client) InspectRuntime(ctx context.Context) (InspectRuntimeResponse, error) {
 	var response InspectRuntimeResponse
 	err := c.do(ctx, http.MethodGet, "/v1/runtime", nil, &response)
