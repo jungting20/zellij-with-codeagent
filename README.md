@@ -263,9 +263,9 @@ project. Initialize it from the project root or any nested directory:
 
 Initialization creates `.zellij-agent/ticket-worker/tickets.db` and
 `.zellij-agent/worker/config.yaml` at the Git root, then adds
-`.zellij-agent/ticket-worker/` to the root `.gitignore`. It is idempotent:
-running it again preserves existing tickets, does not duplicate the ignore
-entry, and never overwrites an existing worker config.
+`.zellij-agent/ticket-worker/` and `.worktrees/` to the root `.gitignore`. It
+is idempotent: running it again preserves existing tickets, does not duplicate
+the ignore entries, and never overwrites an existing worker config.
 
 The generated worker config contains the coding-agent capacity and polling
 cadence:
@@ -289,6 +289,7 @@ Register a ticket from an approved Superpowers design and implementation plan:
   --spec docs/superpowers/specs/2026-07-17-search-design.md \
   --plan docs/superpowers/plans/2026-07-17-search.md \
   --worktree-branch feat/search \
+  --agent claude \
   --prompt $'Implement the approved search plan.\nRun the complete test suite.'
 ```
 
@@ -296,7 +297,9 @@ The worktree branch name is required and used when the ticket starts. The spec a
 `docs/superpowers/specs/` and `docs/superpowers/plans/`. A plan can be
 registered only once. The required prompt is stored with the ticket and used
 as the coding-agent instruction. The manager appends its completion-marker
-instruction automatically. Queue and lifecycle commands are:
+instruction automatically. `--agent` selects `codex`, `claude`, `gemini`,
+`cursor`, or `hermes`; it defaults to `codex` when omitted. The same option is
+available on `fast-add`. Queue and lifecycle commands are:
 
 ```bash
 ./bin/zellij-agent ticket-worker list [--status ready] [--no-prompt]
@@ -322,11 +325,11 @@ when it is not already checked out elsewhere. A matching existing worktree is
 reused after retries or manager restarts. Worktrees and branches are preserved
 after completion for review and integration. Preparation failures requeue the
 ticket without starting a coding-agent pane.
-Every coding-agent created by the manager runs in YOLO mode, bypassing Codex
-approvals and sandboxing. The complete ticket instruction, including its
-completion marker, is passed to Codex as its initial CLI prompt argument; the
-manager does not paste the prompt or synthesize an Enter keypress. The manager
-uses `--zellij-session` when supplied or
+Every coding-agent created by the manager runs in YOLO mode using the agent
+stored on that ticket. The complete ticket instruction, including its
+completion marker, is passed to the selected coding agent as its initial CLI
+prompt argument; the manager does not paste the prompt or synthesize an Enter
+keypress. The manager uses `--zellij-session` when supplied or
 `ZELLIJ_SESSION_NAME` when run inside Zellij. The unified CLI automatically
 starts the local daemon when needed.
 

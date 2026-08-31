@@ -390,7 +390,7 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 	req := transport.CreatePaneRequest{
 		ID: slot.paneID, TaskID: m.taskID, ZellijSession: m.zellijSession,
 		Role: "coding-agent", Name: workerPaneName(ticket), SameTabAsPaneID: m.anchorPaneID,
-		Command: []string{m.roleBin, "role", "coding-agent", "--yolo", worktree, "--", slot.prompt}, CWD: worktree,
+		Command: []string{m.roleBin, "role", "coding-agent", "--agent", ticket.Agent, "--yolo", worktree, "--", slot.prompt}, CWD: worktree,
 	}
 	slot.createRequest = req
 	createCtx, cancel := context.WithTimeout(ctx, m.startupTimeout)

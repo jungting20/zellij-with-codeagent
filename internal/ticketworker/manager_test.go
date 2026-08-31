@@ -18,7 +18,9 @@ import (
 )
 
 func TestManagerWaitsForAnchorThenFillsConfiguredCapacity(t *testing.T) {
-	store := &fakeManagerStore{ready: []Ticket{managerTicket(1), managerTicket(2), managerTicket(3)}}
+	tickets := []Ticket{managerTicket(1), managerTicket(2), managerTicket(3)}
+	tickets[1].Agent = "claude"
+	store := &fakeManagerStore{ready: tickets}
 	client := newFakeManagerClient()
 	client.anchorReady = false
 	stream := newFakeEventStream()
@@ -54,7 +56,8 @@ func TestManagerWaitsForAnchorThenFillsConfiguredCapacity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		wantCommand := []string{"zellij-agent", "role", "coding-agent", "--yolo", wantRoot, "--", wantPrompt}
+		wantAgent := []string{"codex", "claude"}[i]
+		wantCommand := []string{"zellij-agent", "role", "coding-agent", "--agent", wantAgent, "--yolo", wantRoot, "--", wantPrompt}
 		if len(req.Command) != len(wantCommand) {
 			t.Fatalf("command = %#v", req.Command)
 		}
@@ -1363,7 +1366,7 @@ func runManager(ctx context.Context, manager *Manager) <-chan error {
 }
 
 func managerTicket(id int64) Ticket {
-	return Ticket{ID: id, Title: "Ticket", Summary: "Summary", SpecPath: "docs/superpowers/specs/t-design.md", PlanPath: "docs/superpowers/plans/t.md", WorktreeBranch: "ticket/" + strconv.FormatInt(id, 10), Prompt: "Implement ticket.", Status: StatusInProgress}
+	return Ticket{ID: id, Title: "Ticket", Summary: "Summary", SpecPath: "docs/superpowers/specs/t-design.md", PlanPath: "docs/superpowers/plans/t.md", WorktreeBranch: "ticket/" + strconv.FormatInt(id, 10), Agent: "codex", Prompt: "Implement ticket.", Status: StatusInProgress}
 }
 
 type fakeWorktreePreparer struct{ err error }

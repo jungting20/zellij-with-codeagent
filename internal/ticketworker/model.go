@@ -32,6 +32,7 @@ var (
 	ErrInvalidArtifact       = errors.New("invalid ticket artifact")
 	ErrInvalidPrompt         = errors.New("invalid ticket prompt")
 	ErrInvalidWorktreeBranch = errors.New("invalid worktree branch")
+	ErrInvalidAgent          = errors.New("invalid ticket agent")
 	ErrNotInitialized        = errors.New("ticket-worker is not initialized; run zellij-agent ticket-worker init")
 )
 
@@ -42,6 +43,7 @@ type Ticket struct {
 	SpecPath       string     `json:"spec_path"`
 	PlanPath       string     `json:"plan_path"`
 	WorktreeBranch string     `json:"worktree_branch"`
+	Agent          string     `json:"agent"`
 	Prompt         string     `json:"prompt"`
 	Status         Status     `json:"status"`
 	CreatedAt      time.Time  `json:"created_at"`
@@ -57,5 +59,6 @@ type CreateInput struct {
 	SpecPath       string
 	PlanPath       string
 	WorktreeBranch string
+	Agent          string
 	Prompt         string
 }

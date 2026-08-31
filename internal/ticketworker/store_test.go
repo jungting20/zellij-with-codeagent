@@ -90,6 +90,33 @@ func TestAddStoresTrimmedMultilinePrompt(t *testing.T) {
 	}
 }
 
+func TestFastAddDefaultsAndValidatesAgent(t *testing.T) {
+	store, _ := newTestStore(t)
+	created, err := store.FastAdd(context.Background(), CreateInput{
+		Title: "Default agent", Summary: "Use Codex", WorktreeBranch: "ticket/default-agent", Prompt: "Implement.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Agent != "codex" {
+		t.Fatalf("Agent = %q, want codex", created.Agent)
+	}
+	created, err = store.FastAdd(context.Background(), CreateInput{
+		Title: "Claude agent", Summary: "Use Claude", WorktreeBranch: "ticket/claude-agent", Prompt: "Implement.", Agent: " claude ",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Agent != "claude" {
+		t.Fatalf("Agent = %q, want claude", created.Agent)
+	}
+	if _, err := store.FastAdd(context.Background(), CreateInput{
+		Title: "Bad agent", Summary: "Reject it", WorktreeBranch: "ticket/bad-agent", Prompt: "Implement.", Agent: "unknown",
+	}); !errors.Is(err, ErrInvalidAgent) {
+		t.Fatalf("FastAdd() error = %v, want ErrInvalidAgent", err)
+	}
+}
+
 func TestAddRejectsInvalidPrompt(t *testing.T) {
 	store, root := newTestStore(t)
 	tests := []struct {
@@ -221,6 +248,51 @@ func TestOpenMigratesVersion2AndPreservesTickets(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesVersion4TicketsToDefaultCodexAgent(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	databasePath := filepath.Join(root, "tickets.db")
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+CREATE TABLE tickets (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, summary TEXT NOT NULL,
+ spec_path TEXT NOT NULL, plan_path TEXT NOT NULL, worktree_branch TEXT NOT NULL,
+ prompt TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ started_at TEXT, completed_at TEXT, cancelled_at TEXT
+);
+INSERT INTO tickets(title, summary, spec_path, plan_path, worktree_branch, prompt, status, created_at, updated_at)
+VALUES ('Existing', 'Version four ticket', '', '', 'ticket/existing', 'Implement.', 'ready', '2026-07-17T00:00:00Z', '2026-07-17T00:00:00Z');
+PRAGMA user_version = 4;`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(context.Background(), root, databasePath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ticket, err := store.Get(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ticket.Agent != "codex" {
+		t.Fatalf("migrated Agent = %q, want codex", ticket.Agent)
+	}
+	var version int
+	if err := store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != currentSchemaVersion {
+		t.Fatalf("schema version = %d, error = %v; want %d", version, err, currentSchemaVersion)
+	}
+}
+
 func TestAddRequiresAndTrimsWorktreeBranch(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "worktree-branch")
@@ -260,7 +332,7 @@ func TestOpenRejectsUnsupportedFutureSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec("PRAGMA user_version = 5"); err != nil {
+	if _, err := store.db.Exec("PRAGMA user_version = 6"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -269,7 +341,7 @@ func TestOpenRejectsUnsupportedFutureSchemaVersion(t *testing.T) {
 
 	if _, err := Open(context.Background(), root, databasePath, func() time.Time { return fixedNow }); err == nil {
 		t.Fatal("Open() error = nil, want unsupported future schema rejection")
-	} else if got, want := err.Error(), "unsupported ticket schema version 5"; got != want {
+	} else if got, want := err.Error(), "unsupported ticket schema version 6"; got != want {
 		t.Fatalf("Open() error = %q, want %q", got, want)
 	}
 }
