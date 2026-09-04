@@ -26,6 +26,18 @@ type fakeClient struct {
 	streamErr     error
 	streamCalls   int
 	streamTypes   []string
+	pinCalls      int
+	pinAgentID    string
+	pinRequest    transport.SetAgentPinnedRequest
+	pinResponse   transport.SetAgentPinnedResponse
+	pinErr        error
+}
+
+func (f *fakeClient) SetAgentPinned(_ context.Context, agentID string, request transport.SetAgentPinnedRequest) (transport.SetAgentPinnedResponse, error) {
+	f.pinCalls++
+	f.pinAgentID = agentID
+	f.pinRequest = request
+	return f.pinResponse, f.pinErr
 }
 
 func (f *fakeClient) ListAgents(context.Context) (transport.ListAgentsResponse, error) {
@@ -217,6 +229,72 @@ func TestModelShiftTabCyclesSelectionBackward(t *testing.T) {
 	m = update(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	if m.selected != 0 || m.selectedID != "a" {
 		t.Fatalf("second Shift+Tab selected=%d id=%q, want a", m.selected, m.selectedID)
+	}
+}
+
+func TestModelSpacePinsSelectedAgentAndMovesItToTop(t *testing.T) {
+	client := &fakeClient{}
+	m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+	m = applyRefresh(t, m, []transport.AgentWithPane{
+		record("a", "codex", "idle", time.Unix(1, 0)),
+		record("b", "claude", "idle", time.Unix(2, 0)),
+	})
+	m.selected, m.selectedID = 1, "b"
+	client.pinResponse.Agent = m.rows[1].Agent
+	client.pinResponse.Agent.Pinned = true
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = concreteModel(t, next)
+	if cmd == nil || !m.pinning {
+		t.Fatalf("Space cmd=%v pinning=%t", cmd, m.pinning)
+	}
+	next, _ = m.Update(cmd())
+	m = concreteModel(t, next)
+	if client.pinAgentID != "b" || !client.pinRequest.Pinned {
+		t.Fatalf("pin request id=%q request=%#v", client.pinAgentID, client.pinRequest)
+	}
+	if m.pinning {
+		t.Fatal("pinning remained true after response")
+	}
+	if got := rowIDs(m.rows); !reflect.DeepEqual(got, []string{"b", "a"}) {
+		t.Fatalf("rows=%#v", got)
+	}
+	if m.selectedID != "b" || m.selected != 0 || !m.rows[0].Agent.Pinned {
+		t.Fatalf("selection=%d/%q row=%#v", m.selected, m.selectedID, m.rows[0])
+	}
+}
+
+func TestModelSpaceUnpinsAndPinFailureKeepsOrder(t *testing.T) {
+	client := &fakeClient{}
+	m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+	pinned := record("b", "claude", "idle", time.Unix(2, 0))
+	pinned.Agent.Pinned = true
+	m = applyRefresh(t, m, []transport.AgentWithPane{
+		record("a", "codex", "idle", time.Unix(1, 0)), pinned,
+	})
+	client.pinResponse.Agent = pinned.Agent
+	client.pinResponse.Agent.Pinned = false
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = concreteModel(t, next)
+	next, _ = m.Update(cmd())
+	m = concreteModel(t, next)
+	if client.pinRequest.Pinned {
+		t.Fatalf("unpin request=%#v", client.pinRequest)
+	}
+	if got := rowIDs(m.rows); !reflect.DeepEqual(got, []string{"a", "b"}) {
+		t.Fatalf("rows=%#v", got)
+	}
+
+	m.selected, m.selectedID = 1, "b"
+	client.pinErr = errors.New("daemon unavailable")
+	before := rowIDs(m.rows)
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = concreteModel(t, next)
+	next, _ = m.Update(cmd())
+	m = concreteModel(t, next)
+	if got := rowIDs(m.rows); !reflect.DeepEqual(got, before) || !strings.Contains(m.statusText, "pin failed") {
+		t.Fatalf("rows=%#v status=%q", got, m.statusText)
 	}
 }
 

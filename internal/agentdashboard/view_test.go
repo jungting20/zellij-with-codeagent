@@ -43,7 +43,7 @@ func TestViewRendersDeterministicGroupedDashboardAtSupportedWidths(t *testing.T)
 				"Codex", "Claude", "Gemini", "Cursor",
 				"working", "blocked", "idle", "unknown",
 				"zellij-with-codeagent", "api-server", "frontend", "mobile",
-				"01:30", "> ", "j/k/Tab/S-Tab move  Enter focus  R refresh  q quit",
+				"01:30", "> ", "Space pin/unpin", "Enter focus", "R refresh", "q quit",
 			} {
 				if !strings.Contains(plain, want) {
 					t.Fatalf("width=%d view missing %q:\n%s", width, want, plain)
@@ -97,6 +97,35 @@ func TestViewRendersAccessAndDefaultsEmptyAccessToFull(t *testing.T) {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("view missing %q:\n%s", want, plain)
 		}
+	}
+}
+
+func TestViewRendersPinnedSectionMarkerAndSpaceHint(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m.width, m.height, m.connection, m.loaded, m.lastRefresh = 100, 10, "live", true, now
+	pinned := viewRecord("agent-pinned", "claude", "idle", "/repo/pinned", now.Add(-time.Minute))
+	pinned.Agent.Pinned = true
+	m.rows = []transport.AgentWithPane{
+		pinned,
+		viewRecord("agent-normal", "codex", "working", "/repo/normal", now.Add(-time.Minute)),
+	}
+
+	plain := ansi.Strip(m.View())
+	for _, want := range []string{"PINNED (1)", "* pinned", "Space pin/unpin"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("view missing %q:\n%s", want, plain)
+		}
+	}
+}
+
+func TestDisplayIndexForAgentSkipsGroupHeaders(t *testing.T) {
+	rows := []displayRow{
+		{kind: displayPinned, count: 1},
+		{kind: displayAgent, agentIndex: 0},
+	}
+	if got := displayIndexForAgent(rows, 0); got != 1 {
+		t.Fatalf("displayIndexForAgent() = %d, want pinned agent row at 1", got)
 	}
 }
 

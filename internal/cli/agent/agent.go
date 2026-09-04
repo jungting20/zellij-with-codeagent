@@ -35,6 +35,7 @@ type AgentClient interface {
 	StartAgent(context.Context, transport.StartAgentRequest) (transport.StartAgentResponse, error)
 	ClosePane(context.Context, string) (transport.ClosePaneResponse, error)
 	FocusNextAgent(context.Context, transport.FocusNextAgentRequest) (transport.FocusNextAgentResponse, error)
+	FocusPreviousAgent(context.Context, transport.FocusPreviousAgentRequest) (transport.FocusPreviousAgentResponse, error)
 	agentdashboard.Client
 }
 
@@ -63,6 +64,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 		return runStart(args[1:], stdin, stdout, stderr, newClient, cfg)
 	case "next":
 		return runNext(args[1:], stdout, stderr, newClient, cfg)
+	case "prev":
+		return runPrevious(args[1:], stdout, stderr, newClient, cfg)
 	case "dashboard":
 		return runDashboard(args[1:], stdin, stdout, stderr, newClient, cfg)
 	default:
@@ -122,6 +125,70 @@ func runNext(args []string, stdout, stderr io.Writer, newClient ClientFactory, c
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "agent next failed via socket %s: %v\n", *socket, err)
+		return 1
+	}
+	if !response.Focused {
+		return 0
+	}
+
+	focusedPaneID := response.Agent.Agent.PaneID
+	if focusedPaneID == "" {
+		focusedPaneID = response.Agent.Pane.ID
+	}
+	fmt.Fprintf(stdout, "focused agent=%s kind=%s pane=%s\n", response.Agent.Agent.ID, response.Agent.Agent.Kind, focusedPaneID)
+	return 0
+}
+
+func runPrevious(args []string, stdout, stderr io.Writer, newClient ClientFactory, cfg Config) int {
+	if len(args) == 1 && isHelp(args[0]) {
+		printPreviousUsage(stdout)
+		return 0
+	}
+	fs := flag.NewFlagSet("agent prev", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	socket := fs.String("socket", cli.DefaultSocketPath, "agentd Unix socket path")
+	timeout := fs.Duration("timeout", defaultTimeout, "request timeout")
+	idleOnly := fs.Bool("idle-only", false, "cycle only through idle agents")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "agent prev does not accept positional arguments")
+		return 2
+	}
+	if *timeout <= 0 {
+		fmt.Fprintln(stderr, "agent prev --timeout must be positive")
+		return 2
+	}
+	if cfg.Getenv == nil {
+		fmt.Fprintln(stderr, "agent prev configuration error: Getenv is required")
+		return 1
+	}
+	session := strings.TrimSpace(cfg.Getenv("ZELLIJ_SESSION_NAME"))
+	paneID := normalizeZellijPaneID(cfg.Getenv("ZELLIJ_PANE_ID"))
+	if session == "" || paneID == "" {
+		fmt.Fprintln(stderr, "agent prev must run inside a Zellij pane (ZELLIJ_SESSION_NAME and ZELLIJ_PANE_ID are required)")
+		return 2
+	}
+	if newClient == nil {
+		fmt.Fprintln(stderr, "agent prev client is not configured")
+		return 1
+	}
+	client := newClient(*socket, *timeout)
+	if isNilAgentClient(client) {
+		fmt.Fprintln(stderr, "agent prev client is not configured")
+		return 1
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	response, err := client.FocusPreviousAgent(ctx, transport.FocusPreviousAgentRequest{
+		SourceSession:      session,
+		SourceZellijPaneID: paneID,
+		IdleOnly:           *idleOnly,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "agent prev failed via socket %s: %v\n", *socket, err)
 		return 1
 	}
 	if !response.Focused {
@@ -561,6 +628,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  start   Manage a coding agent in the current Zellij pane")
 	fmt.Fprintln(w, "  next    Focus the next managed coding agent")
+	fmt.Fprintln(w, "  prev    Focus the previous managed coding agent")
 	fmt.Fprintln(w, "  dashboard  Show and focus managed coding agents")
 	fmt.Fprintln(w)
 	printStartSummary(w)
@@ -570,6 +638,16 @@ func printUsage(w io.Writer) {
 
 func printNextUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: zellij-agent agent next [--socket PATH --timeout DURATION --idle-only]")
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  --socket PATH\n    agentd Unix socket path (default %q)\n", cli.DefaultSocketPath)
+	fmt.Fprintln(w, "  --timeout DURATION")
+	fmt.Fprintln(w, "    request timeout (default 10s; must be positive)")
+	fmt.Fprintln(w, "  --idle-only")
+	fmt.Fprintln(w, "    cycle only through agents whose detected state is idle")
+}
+
+func printPreviousUsage(w io.Writer) {
+	fmt.Fprintln(w, "Usage: zellij-agent agent prev [--socket PATH --timeout DURATION --idle-only]")
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "  --socket PATH\n    agentd Unix socket path (default %q)\n", cli.DefaultSocketPath)
 	fmt.Fprintln(w, "  --timeout DURATION")
@@ -591,7 +669,7 @@ func printDashboardUsage(w io.Writer) {
 	fmt.Fprintln(w, "  --focus AGENT_ID")
 	fmt.Fprintln(w, "    focus one agent and exit; requires --output json")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Keys: j/k/Tab move, Enter focus and exit, R refresh, q quit")
+	fmt.Fprintln(w, "Keys: j/k/Tab move, Space pin/unpin, Enter focus and exit, R refresh, q quit")
 }
 
 func printStartUsage(w io.Writer) {

@@ -166,9 +166,21 @@ func (c *Client) FocusAgent(ctx context.Context, agentID string, req FocusAgentR
 	return response, err
 }
 
+func (c *Client) SetAgentPinned(ctx context.Context, agentID string, req SetAgentPinnedRequest) (SetAgentPinnedResponse, error) {
+	var response SetAgentPinnedResponse
+	err := c.do(ctx, http.MethodPost, "/v1/agents/"+url.PathEscape(agentID)+"/pin", req, &response)
+	return response, err
+}
+
 func (c *Client) FocusNextAgent(ctx context.Context, req FocusNextAgentRequest) (FocusNextAgentResponse, error) {
 	var response FocusNextAgentResponse
 	err := c.do(ctx, http.MethodPost, "/v1/agents/next", req, &response)
+	return response, err
+}
+
+func (c *Client) FocusPreviousAgent(ctx context.Context, req FocusPreviousAgentRequest) (FocusPreviousAgentResponse, error) {
+	var response FocusPreviousAgentResponse
+	err := c.do(ctx, http.MethodPost, "/v1/agents/prev", req, &response)
 	return response, err
 }
 

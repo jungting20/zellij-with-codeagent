@@ -148,6 +148,10 @@ func (c *fakeAgentClient) FocusAgent(context.Context, string, transport.FocusAge
 	return transport.FocusAgentResponse{}, nil
 }
 
+func (c *fakeAgentClient) SetAgentPinned(context.Context, string, transport.SetAgentPinnedRequest) (transport.SetAgentPinnedResponse, error) {
+	return transport.SetAgentPinnedResponse{}, nil
+}
+
 func (c *fakeAgentClient) FocusSession(context.Context, string, transport.FocusSessionRequest) (transport.FocusSessionResponse, error) {
 	return transport.FocusSessionResponse{}, nil
 }
@@ -155,6 +159,10 @@ func (c *fakeAgentClient) FocusSession(context.Context, string, transport.FocusS
 func (c *fakeAgentClient) FocusNextAgent(_ context.Context, request transport.FocusNextAgentRequest) (transport.FocusNextAgentResponse, error) {
 	c.nextRequest = request
 	return c.nextResponse, nil
+}
+
+func (c *fakeAgentClient) FocusPreviousAgent(context.Context, transport.FocusPreviousAgentRequest) (transport.FocusPreviousAgentResponse, error) {
+	return transport.FocusPreviousAgentResponse{}, nil
 }
 
 func (c *fakeAgentClient) StreamEvents(context.Context) (*transport.EventStream, error) {

@@ -138,6 +138,30 @@ func TestRunNextFocusesNextAgentWithZellijContext(t *testing.T) {
 	}
 }
 
+func TestRunPrevFocusesPreviousAgentWithZellijContext(t *testing.T) {
+	client := &testClient{prevResponse: focusedNext("agent-1", "codex", "agent-1", "pane-1")}
+	var stdout, stderr bytes.Buffer
+
+	code := Run(
+		[]string{"prev", "--socket", "/tmp/prev.sock", "--timeout", "3s", "--idle-only"},
+		strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{Getenv: mapGetenv(map[string]string{
+			"ZELLIJ_SESSION_NAME": " session-b ",
+			"ZELLIJ_PANE_ID":      " 8 ",
+		})},
+	)
+
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	want := transport.FocusPreviousAgentRequest{SourceSession: "session-b", SourceZellijPaneID: "terminal_8", IdleOnly: true}
+	if !reflect.DeepEqual(client.prevRequest, want) {
+		t.Fatalf("FocusPreviousAgent request=%#v, want %#v", client.prevRequest, want)
+	}
+	if stdout.String() != "focused agent=agent-1 kind=codex pane=agent-1\n" || client.prevCalls != 1 {
+		t.Fatalf("calls=%d stdout=%q", client.prevCalls, stdout.String())
+	}
+}
+
 func TestRunNextFallsBackToPaneID(t *testing.T) {
 	client := &testClient{nextResponse: focusedNext("agent-2", "claude", "", "pane-2")}
 	var stdout, stderr bytes.Buffer
@@ -227,13 +251,14 @@ func TestRunNextReportsClientError(t *testing.T) {
 	}
 }
 
-func TestRunHelpDocumentsNextContract(t *testing.T) {
+func TestRunHelpDocumentsNavigationContract(t *testing.T) {
 	tests := []struct {
 		args []string
 		want []string
 	}{
-		{args: []string{"--help"}, want: []string{"next"}},
+		{args: []string{"--help"}, want: []string{"next", "prev"}},
 		{args: []string{"next", "--help"}, want: []string{"next", "--socket PATH", "--timeout DURATION"}},
+		{args: []string{"prev", "--help"}, want: []string{"prev", "--socket PATH", "--timeout DURATION", "--idle-only"}},
 	}
 	for _, tt := range tests {
 		var stdout, stderr bytes.Buffer
@@ -754,6 +779,10 @@ type testClient struct {
 	nextResponse     transport.FocusNextAgentResponse
 	nextErr          error
 	nextCalls        int
+	prevRequest      transport.FocusPreviousAgentRequest
+	prevResponse     transport.FocusPreviousAgentResponse
+	prevErr          error
+	prevCalls        int
 	socket           string
 	timeout          time.Duration
 	deadline         time.Time
@@ -819,6 +848,10 @@ func (c *testClient) FocusAgent(_ context.Context, agentID string, request trans
 	return c.focusResponse, c.focusErr
 }
 
+func (c *testClient) SetAgentPinned(context.Context, string, transport.SetAgentPinnedRequest) (transport.SetAgentPinnedResponse, error) {
+	return transport.SetAgentPinnedResponse{}, nil
+}
+
 func (c *testClient) FocusSession(context.Context, string, transport.FocusSessionRequest) (transport.FocusSessionResponse, error) {
 	return transport.FocusSessionResponse{}, nil
 }
@@ -828,6 +861,12 @@ func (c *testClient) FocusNextAgent(ctx context.Context, request transport.Focus
 	c.nextRequest = request
 	c.nextDeadline, c.nextHasDeadline = ctx.Deadline()
 	return c.nextResponse, c.nextErr
+}
+
+func (c *testClient) FocusPreviousAgent(_ context.Context, request transport.FocusPreviousAgentRequest) (transport.FocusPreviousAgentResponse, error) {
+	c.prevCalls++
+	c.prevRequest = request
+	return c.prevResponse, c.prevErr
 }
 
 func (c *testClient) StreamEvents(context.Context) (*transport.EventStream, error) {
@@ -897,12 +936,20 @@ func (*serviceBackedClient) FocusAgent(context.Context, string, transport.FocusA
 	return transport.FocusAgentResponse{}, nil
 }
 
+func (*serviceBackedClient) SetAgentPinned(context.Context, string, transport.SetAgentPinnedRequest) (transport.SetAgentPinnedResponse, error) {
+	return transport.SetAgentPinnedResponse{}, nil
+}
+
 func (*serviceBackedClient) FocusSession(context.Context, string, transport.FocusSessionRequest) (transport.FocusSessionResponse, error) {
 	return transport.FocusSessionResponse{}, nil
 }
 
 func (*serviceBackedClient) FocusNextAgent(context.Context, transport.FocusNextAgentRequest) (transport.FocusNextAgentResponse, error) {
 	return transport.FocusNextAgentResponse{}, nil
+}
+
+func (*serviceBackedClient) FocusPreviousAgent(context.Context, transport.FocusPreviousAgentRequest) (transport.FocusPreviousAgentResponse, error) {
+	return transport.FocusPreviousAgentResponse{}, nil
 }
 
 func (*serviceBackedClient) StreamEvents(context.Context) (*transport.EventStream, error) {

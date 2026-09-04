@@ -55,6 +55,22 @@ func TestServerAgentRoutes(t *testing.T) {
 		t.Fatalf("FocusAgent request = %#v", service.agentFocusReq)
 	}
 
+	pin := httptest.NewRecorder()
+	server.ServeHTTP(pin, httptest.NewRequest(http.MethodPost, "/v1/agents/agent%2F1/pin", strings.NewReader(`{"pinned":true}`)))
+	if pin.Code != http.StatusOK {
+		t.Fatalf("pin status = %d, want 200; body=%s", pin.Code, pin.Body.String())
+	}
+	if service.agentPinReq.AgentID != "agent/1" || !service.agentPinReq.Pinned {
+		t.Fatalf("SetAgentPinned request = %#v", service.agentPinReq)
+	}
+	var pinResponse SetAgentPinnedResponse
+	if err := json.Unmarshal(pin.Body.Bytes(), &pinResponse); err != nil {
+		t.Fatalf("decode pin response: %v", err)
+	}
+	if !pinResponse.Agent.Pinned {
+		t.Fatalf("pin response = %#v", pinResponse)
+	}
+
 	next := httptest.NewRecorder()
 	server.ServeHTTP(next, httptest.NewRequest(http.MethodPost, "/v1/agents/next", strings.NewReader(`{"source_session":"physical-b","source_zellij_pane_id":"terminal_8","idle_only":true}`)))
 	if next.Code != http.StatusOK {
@@ -72,6 +88,15 @@ func TestServerAgentRoutes(t *testing.T) {
 	}
 	if !nextResponse.Focused || nextResponse.Agent.Agent.ID != "agent-2" {
 		t.Fatalf("FocusNextAgent response = %#v", nextResponse)
+	}
+
+	previous := httptest.NewRecorder()
+	server.ServeHTTP(previous, httptest.NewRequest(http.MethodPost, "/v1/agents/prev", strings.NewReader(`{"source_session":"physical-b","source_zellij_pane_id":"terminal_8","idle_only":true}`)))
+	if previous.Code != http.StatusOK || service.agentPreviousCalls != 1 {
+		t.Fatalf("previous status=%d calls=%d body=%s", previous.Code, service.agentPreviousCalls, previous.Body.String())
+	}
+	if service.agentPreviousReq.SourceZellijSession != "physical-b" || service.agentPreviousReq.SourceZellijPaneID != "terminal_8" || !service.agentPreviousReq.IdleOnly {
+		t.Fatalf("FocusPreviousAgent request = %#v", service.agentPreviousReq)
 	}
 
 	doubleEscaped := httptest.NewRecorder()
@@ -124,6 +149,7 @@ func TestServerFocusNextAgentReturnsSuccessfulNoOp(t *testing.T) {
 func TestServerAgentRoutesRejectTrailingJSONWithoutDispatch(t *testing.T) {
 	validStart := `{"kind":"codex","cwd":"/tmp","source_session":"physical-a","source_zellij_pane_id":"terminal_2"}`
 	validFocus := `{"source_session":"physical-a","source_zellij_pane_id":"terminal_2"}`
+	validPin := `{"pinned":true}`
 	validNext := `{"source_session":"physical-b","source_zellij_pane_id":"terminal_8"}`
 	tests := []struct {
 		name string
@@ -134,8 +160,12 @@ func TestServerAgentRoutesRejectTrailingJSONWithoutDispatch(t *testing.T) {
 		{name: "start second object", path: "/v1/agents", body: validStart + ` {}`},
 		{name: "focus junk", path: "/v1/agents/agent-1/focus", body: validFocus + ` junk`},
 		{name: "focus second object", path: "/v1/agents/agent-1/focus", body: validFocus + ` {}`},
+		{name: "pin junk", path: "/v1/agents/agent-1/pin", body: validPin + ` junk`},
+		{name: "pin second object", path: "/v1/agents/agent-1/pin", body: validPin + ` {}`},
 		{name: "next junk", path: "/v1/agents/next", body: validNext + ` junk`},
 		{name: "next second object", path: "/v1/agents/next", body: validNext + ` {}`},
+		{name: "prev junk", path: "/v1/agents/prev", body: validNext + ` junk`},
+		{name: "prev second object", path: "/v1/agents/prev", body: validNext + ` {}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -146,8 +176,8 @@ func TestServerAgentRoutesRejectTrailingJSONWithoutDispatch(t *testing.T) {
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
 			}
-			if service.agentStartCalls != 0 || service.agentFocusCalls != 0 || service.agentNextCalls != 0 {
-				t.Fatalf("service dispatch start=%d focus=%d next=%d, want zero", service.agentStartCalls, service.agentFocusCalls, service.agentNextCalls)
+			if service.agentStartCalls != 0 || service.agentFocusCalls != 0 || service.agentNextCalls != 0 || service.agentPreviousCalls != 0 {
+				t.Fatalf("service dispatch start=%d focus=%d next=%d prev=%d, want zero", service.agentStartCalls, service.agentFocusCalls, service.agentNextCalls, service.agentPreviousCalls)
 			}
 		})
 	}
@@ -160,12 +190,16 @@ func TestServerAgentRoutesRejectInvalidMethodShapeAndJSON(t *testing.T) {
 	}{
 		{name: "collection put", method: http.MethodPut, path: "/v1/agents", wantStatus: http.StatusMethodNotAllowed},
 		{name: "focus get", method: http.MethodGet, path: "/v1/agents/agent-1/focus", wantStatus: http.StatusMethodNotAllowed},
+		{name: "pin get", method: http.MethodGet, path: "/v1/agents/agent-1/pin", wantStatus: http.StatusMethodNotAllowed},
 		{name: "next get", method: http.MethodGet, path: "/v1/agents/next", wantStatus: http.StatusMethodNotAllowed},
+		{name: "prev get", method: http.MethodGet, path: "/v1/agents/prev", wantStatus: http.StatusMethodNotAllowed},
 		{name: "unknown action", method: http.MethodPost, path: "/v1/agents/agent-1/stop", body: `{}`, wantStatus: http.StatusNotFound},
 		{name: "extra suffix", method: http.MethodPost, path: "/v1/agents/agent-1/focus/extra", body: `{}`, wantStatus: http.StatusBadRequest},
 		{name: "malformed start", method: http.MethodPost, path: "/v1/agents", body: `{`, wantStatus: http.StatusBadRequest},
 		{name: "malformed focus", method: http.MethodPost, path: "/v1/agents/agent-1/focus", body: `{`, wantStatus: http.StatusBadRequest},
+		{name: "malformed pin", method: http.MethodPost, path: "/v1/agents/agent-1/pin", body: `{`, wantStatus: http.StatusBadRequest},
 		{name: "malformed next", method: http.MethodPost, path: "/v1/agents/next", body: `{`, wantStatus: http.StatusBadRequest},
+		{name: "malformed prev", method: http.MethodPost, path: "/v1/agents/prev", body: `{`, wantStatus: http.StatusBadRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -176,8 +210,8 @@ func TestServerAgentRoutesRejectInvalidMethodShapeAndJSON(t *testing.T) {
 			if response.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d; body=%s", response.Code, tt.wantStatus, response.Body.String())
 			}
-			if service.agentFocusCalls != 0 || service.agentNextCalls != 0 {
-				t.Fatalf("invalid request dispatched focus=%d next=%d", service.agentFocusCalls, service.agentNextCalls)
+			if service.agentFocusCalls != 0 || service.agentNextCalls != 0 || service.agentPreviousCalls != 0 {
+				t.Fatalf("invalid request dispatched focus=%d next=%d prev=%d", service.agentFocusCalls, service.agentNextCalls, service.agentPreviousCalls)
 			}
 		})
 	}
@@ -791,11 +825,16 @@ type fakeRuntimeService struct {
 	agentFocusReq        codingagent.FocusAgentRequest
 	agentFocusCalls      int
 	agentFocusErr        error
+	agentPinReq          codingagent.SetAgentPinnedRequest
+	agentPinCalls        int
+	agentPinErr          error
 	agentNextReq         codingagent.FocusNextAgentRequest
 	agentNextCalls       int
 	agentNextErr         error
 	agentNextResponseSet bool
 	agentNextResponse    codingagent.FocusNextAgentResponse
+	agentPreviousReq     codingagent.FocusPreviousAgentRequest
+	agentPreviousCalls   int
 	sessionFocusReq      rt.FocusSessionRequest
 	sessionFocusCalls    int
 	sessionFocusErr      error
@@ -849,6 +888,19 @@ func (f *fakeRuntimeService) FocusAgent(_ context.Context, req codingagent.Focus
 	return codingagent.FocusAgentResponse(fakeAgentResponse(codingagent.KindCodex, req.AgentID)), nil
 }
 
+func (f *fakeRuntimeService) SetAgentPinned(_ context.Context, req codingagent.SetAgentPinnedRequest) (codingagent.SetAgentPinnedResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.agentPinCalls++
+	f.agentPinReq = req
+	if f.agentPinErr != nil {
+		return codingagent.SetAgentPinnedResponse{}, f.agentPinErr
+	}
+	record := fakeAgentResponse(codingagent.KindCodex, req.AgentID).Agent.Agent
+	record.Pinned = req.Pinned
+	return codingagent.SetAgentPinnedResponse{Agent: record}, nil
+}
+
 func (f *fakeRuntimeService) FocusNextAgent(_ context.Context, req codingagent.FocusNextAgentRequest) (codingagent.FocusNextAgentResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -863,6 +915,17 @@ func (f *fakeRuntimeService) FocusNextAgent(_ context.Context, req codingagent.F
 	return codingagent.FocusNextAgentResponse{
 		Focused: true,
 		Agent:   fakeAgentResponse(codingagent.KindCodex, "agent-2").Agent,
+	}, nil
+}
+
+func (f *fakeRuntimeService) FocusPreviousAgent(_ context.Context, req codingagent.FocusPreviousAgentRequest) (codingagent.FocusPreviousAgentResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.agentPreviousCalls++
+	f.agentPreviousReq = req
+	return codingagent.FocusPreviousAgentResponse{
+		Focused: true,
+		Agent:   fakeAgentResponse(codingagent.KindCodex, "agent-1").Agent,
 	}, nil
 }
 

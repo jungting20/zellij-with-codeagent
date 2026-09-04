@@ -9,6 +9,7 @@ import (
 
 	"zellij-with-codeagent/cmd/agent-role/agentdashboard"
 	"zellij-with-codeagent/cmd/agent-role/agentnext"
+	"zellij-with-codeagent/cmd/agent-role/agentprev"
 	"zellij-with-codeagent/cmd/agent-role/coder"
 	"zellij-with-codeagent/cmd/agent-role/codingagent"
 	"zellij-with-codeagent/cmd/agent-role/console"
@@ -66,6 +67,8 @@ func Run(args []string) int {
 		return codingagent.Run(args[1:])
 	case roles.RoleAgentNext:
 		return agentnext.Run(args[1:])
+	case roles.RoleAgentPrev:
+		return agentprev.Run(args[1:])
 	case roles.RoleAgentDashboard:
 		return agentdashboard.Run(args[1:])
 	case roles.RoleLoopProjectWorker:

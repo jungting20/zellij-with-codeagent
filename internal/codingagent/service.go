@@ -59,6 +59,15 @@ type FocusAgentResponse struct {
 	Agent AgentWithPane
 }
 
+type SetAgentPinnedRequest struct {
+	AgentID ID
+	Pinned  bool
+}
+
+type SetAgentPinnedResponse struct {
+	Agent Record
+}
+
 type FocusNextAgentRequest struct {
 	SourceZellijSession string
 	SourceZellijPaneID  runtime.ZellijPaneID
@@ -70,11 +79,16 @@ type FocusNextAgentResponse struct {
 	Agent   AgentWithPane
 }
 
+type FocusPreviousAgentRequest = FocusNextAgentRequest
+type FocusPreviousAgentResponse = FocusNextAgentResponse
+
 type AgentService interface {
 	StartAgent(context.Context, StartAgentRequest) (StartAgentResponse, error)
 	ListAgents(context.Context) (ListAgentsResponse, error)
 	FocusAgent(context.Context, FocusAgentRequest) (FocusAgentResponse, error)
+	SetAgentPinned(context.Context, SetAgentPinnedRequest) (SetAgentPinnedResponse, error)
 	FocusNextAgent(context.Context, FocusNextAgentRequest) (FocusNextAgentResponse, error)
+	FocusPreviousAgent(context.Context, FocusPreviousAgentRequest) (FocusPreviousAgentResponse, error)
 }
 
 type LifecycleMonitor interface {
@@ -266,7 +280,23 @@ func (s *Service) FocusAgent(ctx context.Context, request FocusAgentRequest) (Fo
 	return s.focusAgentLocked(ctx, request)
 }
 
+func (s *Service) SetAgentPinned(_ context.Context, request SetAgentPinnedRequest) (SetAgentPinnedResponse, error) {
+	record, err := s.store.SetPinned(request.AgentID, request.Pinned)
+	if err != nil {
+		return SetAgentPinnedResponse{}, fmt.Errorf("set coding agent %q pinned: %w", request.AgentID, err)
+	}
+	return SetAgentPinnedResponse{Agent: record}, nil
+}
+
 func (s *Service) FocusNextAgent(ctx context.Context, request FocusNextAgentRequest) (FocusNextAgentResponse, error) {
+	return s.focusAdjacentAgent(ctx, request, 1)
+}
+
+func (s *Service) FocusPreviousAgent(ctx context.Context, request FocusPreviousAgentRequest) (FocusPreviousAgentResponse, error) {
+	return s.focusAdjacentAgent(ctx, request, -1)
+}
+
+func (s *Service) focusAdjacentAgent(ctx context.Context, request FocusNextAgentRequest, step int) (FocusNextAgentResponse, error) {
 	s.focusMu.Lock()
 	defer s.focusMu.Unlock()
 
@@ -279,7 +309,7 @@ func (s *Service) FocusNextAgent(ctx context.Context, request FocusNextAgentRequ
 	if err != nil {
 		return FocusNextAgentResponse{}, fmt.Errorf("list coding agents: %w", err)
 	}
-	record, ok := nextAgentRecord(records, s.lastFocusedID, s.lastSeenIdleStateChangedAt, request.IdleOnly)
+	record, ok := adjacentAgentRecord(records, s.lastFocusedID, s.lastSeenIdleStateChangedAt, request.IdleOnly, step)
 	if !ok {
 		return FocusNextAgentResponse{Focused: false}, nil
 	}
@@ -333,6 +363,10 @@ func (s *Service) focusAgentLocked(ctx context.Context, request FocusAgentReques
 }
 
 func nextAgentRecord(records []Record, current ID, lastSeenIdleStateChangedAt time.Time, idleOnly bool) (Record, bool) {
+	return adjacentAgentRecord(records, current, lastSeenIdleStateChangedAt, idleOnly, 1)
+}
+
+func adjacentAgentRecord(records []Record, current ID, lastSeenIdleStateChangedAt time.Time, idleOnly bool, step int) (Record, bool) {
 	eligible := make([]Record, 0, len(records))
 	for _, record := range records {
 		if !idleOnly || record.State == StateIdle {
@@ -358,8 +392,15 @@ func nextAgentRecord(records []Record, current ID, lastSeenIdleStateChangedAt ti
 	}
 	for index := range eligible {
 		if eligible[index].ID == current {
-			return eligible[(index+1)%len(eligible)], true
+			next := (index + step) % len(eligible)
+			if next < 0 {
+				next += len(eligible)
+			}
+			return eligible[next], true
 		}
+	}
+	if step < 0 {
+		return eligible[len(eligible)-1], true
 	}
 	return eligible[0], true
 }

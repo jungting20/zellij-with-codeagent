@@ -623,6 +623,32 @@ func TestServiceListAgentsReturnsRuntimeFailureWithoutDeletingRecords(t *testing
 	}
 }
 
+func TestServiceSetAgentPinnedPersistsInSubsequentLists(t *testing.T) {
+	store := NewMemoryStore(nil)
+	now := time.Unix(10, 0)
+	record := Record{ID: "agent-1", Kind: KindCodex, PaneID: "pane-1", State: StateIdle, CreatedAt: now, StateChangedAt: now}
+	if _, err := store.Create(record); err != nil {
+		t.Fatal(err)
+	}
+	runtimeService := &serviceFakeRuntime{listResponse: runtime.ListPanesResponse{Panes: []runtime.Pane{{ID: "pane-1"}}}}
+	service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
+
+	response, err := service.SetAgentPinned(context.Background(), SetAgentPinnedRequest{AgentID: "agent-1", Pinned: true})
+	if err != nil {
+		t.Fatalf("SetAgentPinned() error = %v", err)
+	}
+	if !response.Agent.Pinned {
+		t.Fatalf("SetAgentPinned() = %#v", response)
+	}
+	listed, err := service.ListAgents(context.Background())
+	if err != nil {
+		t.Fatalf("ListAgents() error = %v", err)
+	}
+	if len(listed.Agents) != 1 || !listed.Agents[0].Agent.Pinned {
+		t.Fatalf("ListAgents() = %#v", listed)
+	}
+}
+
 func TestServiceListAgentsRemovesMissingPaneAfterStartedAgentBecomesActive(t *testing.T) {
 	store := NewMemoryStore(nil)
 	monitor := &serviceFakeMonitor{}
@@ -915,6 +941,40 @@ func TestServiceFocusNextAgentSelectsFirstConsecutiveAndWrappedAgents(t *testing
 		}
 		if !response.Focused || response.Agent.Agent.ID != wantID {
 			t.Fatalf("FocusNextAgent() call %d response = %#v, want focused %q", call+1, response, wantID)
+		}
+	}
+}
+
+func TestServiceFocusPreviousAgentSelectsLastConsecutiveAndWrappedAgents(t *testing.T) {
+	store := NewMemoryStore(nil)
+	seedFocusRecords(t, store)
+	service := NewService(ServiceOptions{RuntimeService: successfulFocusRuntime(), Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
+	request := FocusPreviousAgentRequest{SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1"}
+
+	for call, wantID := range []ID{"agent-3", "agent-2", "agent-1", "agent-3"} {
+		response, err := service.FocusPreviousAgent(context.Background(), request)
+		if err != nil {
+			t.Fatalf("FocusPreviousAgent() call %d error = %v", call+1, err)
+		}
+		if !response.Focused || response.Agent.Agent.ID != wantID {
+			t.Fatalf("FocusPreviousAgent() call %d response = %#v, want focused %q", call+1, response, wantID)
+		}
+	}
+}
+
+func TestServiceFocusPreviousAgentSelectsOnlyIdleAgents(t *testing.T) {
+	store := NewMemoryStore(nil)
+	seedRecordsWithStates(t, store, []State{StateWorking, StateIdle, StateBlocked, StateIdle})
+	service := NewService(ServiceOptions{RuntimeService: successfulFocusRuntime(), Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
+	request := FocusPreviousAgentRequest{SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1", IdleOnly: true}
+
+	for call, wantID := range []ID{"agent-4", "agent-2", "agent-4"} {
+		response, err := service.FocusPreviousAgent(context.Background(), request)
+		if err != nil {
+			t.Fatalf("FocusPreviousAgent() call %d error = %v", call+1, err)
+		}
+		if !response.Focused || response.Agent.Agent.ID != wantID {
+			t.Fatalf("FocusPreviousAgent() call %d response = %#v, want focused %q", call+1, response, wantID)
 		}
 	}
 }

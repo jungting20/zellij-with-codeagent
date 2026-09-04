@@ -34,7 +34,7 @@ func (m Model) View() string {
 	if width <= 0 {
 		width = 80
 	}
-	lines := []string{m.headerView(), "PROJECT  STATE  AGENT  ACCESS  SINCE"}
+	lines := []string{m.headerView(), "PIN  PROJECT  STATE  AGENT  ACCESS  SINCE"}
 	if !m.loaded {
 		lines = append(lines, "Loading agents...")
 	} else if len(m.rows) == 0 {
@@ -50,6 +50,9 @@ func (m Model) View() string {
 		for index := start; index < len(displayRows) && index < start+visible; index++ {
 			row := displayRows[index]
 			switch row.kind {
+			case displayPinned:
+				lines = append(lines, sessionStyle.Render(fmt.Sprintf("PINNED (%d)", row.count)))
+				continue
 			case displaySession:
 				lines = append(lines, m.sessionView(row.session, row.count))
 				continue
@@ -67,7 +70,7 @@ func (m Model) View() string {
 		}
 		lines = append(lines, style.Render(m.statusText))
 	}
-	lines = append(lines, "j/k/Tab/S-Tab move  Enter focus  R refresh  q quit")
+	lines = append(lines, "j/k/Tab/S-Tab move  Space pin/unpin  Enter focus  R refresh  q quit")
 	for index := range lines {
 		lines[index] = ansi.Truncate(lines[index], width, "…")
 	}
@@ -89,13 +92,24 @@ type displayRowKind uint8
 
 const (
 	displayAgent displayRowKind = iota
+	displayPinned
 	displaySession
 	displayTab
 )
 
 func (m Model) displayRows() []displayRow {
 	rows := make([]displayRow, 0, len(m.rows)*3)
-	for start := 0; start < len(m.rows); {
+	start := 0
+	for start < len(m.rows) && m.rows[start].Agent.Pinned {
+		start++
+	}
+	if start > 0 {
+		rows = append(rows, displayRow{kind: displayPinned, count: start})
+		for index := 0; index < start; index++ {
+			rows = append(rows, displayRow{kind: displayAgent, agentIndex: index})
+		}
+	}
+	for start < len(m.rows) {
 		session := sessionName(m.rows[start])
 		sessionEnd := start + 1
 		for sessionEnd < len(m.rows) && sessionName(m.rows[sessionEnd]) == session {
@@ -121,7 +135,7 @@ func (m Model) displayRows() []displayRow {
 
 func displayIndexForAgent(rows []displayRow, agentIndex int) int {
 	for index, row := range rows {
-		if row.agentIndex == agentIndex {
+		if row.kind == displayAgent && row.agentIndex == agentIndex {
 			return index
 		}
 	}
@@ -164,14 +178,18 @@ func (m Model) rowView(record transport.AgentWithPane, selected bool, width int)
 	if now.IsZero() {
 		now = time.Now()
 	}
-	projectWidth := maxInt(8, width-48)
-	line := "    " + padCell(projectName(record.Pane.CWD), projectWidth) +
+	projectWidth := maxInt(8, width-50)
+	pin := " "
+	if record.Agent.Pinned {
+		pin = "*"
+	}
+	line := "    " + pin + " " + padCell(projectName(record.Pane.CWD), projectWidth) +
 		"  " + padCell(stateView(record.Agent.State), 10) +
 		"  " + padCell(agentName(record.Agent.Kind), 12) +
 		"  " + padCell(accessName(record.Agent.Access), 9) +
 		"  " + elapsed(now, record.Agent.StateChangedAt)
 	if selected {
-		line = "  > " + strings.TrimPrefix(line, "    ")
+		line = ">   " + strings.TrimPrefix(line, "    ")
 		return selectedStyle.Render(line)
 	}
 	return line

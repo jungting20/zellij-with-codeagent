@@ -25,6 +25,7 @@ agent start CLI
 - daemon 소유의 `idle`, `working`, `blocked`, `unknown` 상태 감지
 - 코딩 에이전트 전용 dashboard
 - 선택한 agent pane으로 focus 이동
+- 선택한 agent를 목록 상단에 pin/unpin
 - 상태 변경 이벤트 발행
 
 ### 제외
@@ -214,6 +215,7 @@ j/k move  Enter focus  R refresh  q quit
 
 - `j`, `k`, 방향키: 선택 이동
 - `Enter`: 선택한 agent의 pane으로 focus
+- `Space`: 선택한 agent를 목록 상단에 pin하거나 pin 해제
 - `R`: 즉시 새로고침
 - `q`, `Ctrl-C`: 종료
 

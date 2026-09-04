@@ -192,6 +192,25 @@ func TestLookupAgentNext(t *testing.T) {
 	}
 }
 
+func TestLookupAgentPrev(t *testing.T) {
+	spec, ok := Lookup(RoleAgentPrev)
+	if !ok {
+		t.Fatal("Lookup(RoleAgentPrev) ok = false, want true")
+	}
+	if spec.Usage != "agent-prev [--socket PATH --timeout DURATION --idle-only]" {
+		t.Fatalf("usage = %q, want agent-prev usage", spec.Usage)
+	}
+	want := []string{"--socket", "--timeout", "--idle-only"}
+	if len(spec.Arguments) != len(want) {
+		t.Fatalf("arguments = %#v, want %d optional arguments", spec.Arguments, len(want))
+	}
+	for i, name := range want {
+		if spec.Arguments[i].Name != name || spec.Arguments[i].Required {
+			t.Fatalf("arguments[%d] = %#v, want optional %s", i, spec.Arguments[i], name)
+		}
+	}
+}
+
 func TestLookupAgentDashboard(t *testing.T) {
 	spec, ok := Lookup(RoleAgentDashboard)
 	if !ok {

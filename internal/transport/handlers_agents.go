@@ -41,12 +41,27 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, BadRequest("agent id and action are required"), http.StatusBadRequest)
 		return
 	}
-	if action != "focus" {
+	if action != "focus" && action != "pin" {
 		writeAPIError(w, APIError{Code: CodeNotFound, Message: "agent action not found"}, http.StatusNotFound)
 		return
 	}
 	if r.Method != http.MethodPost {
-		writeAPIError(w, BadRequest("focus requires POST"), http.StatusMethodNotAllowed)
+		writeAPIError(w, BadRequest(action+" requires POST"), http.StatusMethodNotAllowed)
+		return
+	}
+	if action == "pin" {
+		var request SetAgentPinnedRequest
+		if !decodeRequest(w, r, &request) {
+			return
+		}
+		ctx, cancel := s.requestContext(r)
+		defer cancel()
+		response, err := s.service.SetAgentPinned(ctx, request.ToCodingAgent(agentID))
+		if err != nil {
+			writeRuntimeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, SetAgentPinnedFromCodingAgent(response))
 		return
 	}
 	var request FocusAgentRequest
@@ -75,6 +90,25 @@ func (s *Server) handleNextAgent(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := s.requestContext(r)
 	defer cancel()
 	response, err := s.service.FocusNextAgent(ctx, request.ToCodingAgent())
+	if err != nil {
+		writeRuntimeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, FocusNextAgentFromCodingAgent(response))
+}
+
+func (s *Server) handlePreviousAgent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, BadRequest("previous focus requires POST"), http.StatusMethodNotAllowed)
+		return
+	}
+	var request FocusPreviousAgentRequest
+	if !decodeRequest(w, r, &request) {
+		return
+	}
+	ctx, cancel := s.requestContext(r)
+	defer cancel()
+	response, err := s.service.FocusPreviousAgent(ctx, request.ToCodingAgent())
 	if err != nil {
 		writeRuntimeError(w, err)
 		return

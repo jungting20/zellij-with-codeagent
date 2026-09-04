@@ -25,6 +25,7 @@ type Record struct {
 	CWD            string
 	State          State
 	NotifyOnIdle   bool
+	Pinned         bool
 	StateReason    string
 	MatchedRule    string
 	CreatedAt      time.Time
@@ -49,5 +50,6 @@ type Store interface {
 	GetByPane(runtime.PaneID) (Record, error)
 	List() ([]Record, error)
 	UpdateState(ID, StateUpdate) (StateChange, error)
+	SetPinned(ID, bool) (Record, error)
 	Delete(ID) error
 }

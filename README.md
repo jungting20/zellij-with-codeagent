@@ -108,12 +108,13 @@ session and focus its pane, `R` to refresh, and `q` to quit. The dashboard
 shows the detected agent state (`idle`, `working`, `blocked`, or `unknown`),
 agent kind, project, and time in the current state.
 
-To cycle directly between managed agents, run `zellij-agent agent next` from
-an attached Zellij pane. By default it visits every managed agent in creation
-order. Add `--idle-only` to visit only agents whose detected state is `idle`;
+To cycle directly between managed agents, run `zellij-agent agent next` or
+`zellij-agent agent prev` from an attached Zellij pane. By default they visit
+every managed agent in forward or reverse creation order. Add `--idle-only`
+to visit only agents whose detected state is `idle`;
 that filtered mode silently does nothing when no idle agents exist. The daemon
-keeps one in-memory cursor shared by all clients, so a next request from any
-session advances the same sequence.
+keeps one in-memory cursor shared by all clients, so a navigation request from
+any session advances the same sequence.
 
 The bundled local Zellij binding is global: press `Alt+o` repeatedly to cycle
 through all managed agents, or press `Alt+p` to cycle only through idle agents.
@@ -258,26 +259,22 @@ To regenerate the defaults, delete only `.zellij-agent/worker/config.yaml` and
 run `ticket-worker init` again. Other ticket commands never create a database
 implicitly and report an initialization error until `init` succeeds.
 
-Register a ticket from an approved Superpowers design and implementation plan:
+Register a ticket directly:
 
 ```bash
 ./bin/zellij-agent ticket-worker add \
   --title "Add search" \
   --summary "Implement indexed search" \
-  --spec docs/superpowers/specs/2026-07-17-search-design.md \
-  --plan docs/superpowers/plans/2026-07-17-search.md \
   --worktree-branch feat/search \
   --agent claude \
-  --prompt $'Implement the approved search plan.\nRun the complete test suite.'
+  --prompt $'Implement indexed search.\nRun the complete test suite.'
 ```
 
-The worktree branch name is required and used when the ticket starts. The spec and plan must be existing Markdown files under
-`docs/superpowers/specs/` and `docs/superpowers/plans/`. A plan can be
-registered only once. The required prompt is stored with the ticket and used
-as the coding-agent instruction. The manager appends its completion-marker
-instruction automatically. `--agent` selects `codex`, `claude`, `gemini`,
-`cursor`, or `hermes`; it defaults to `codex` when omitted. The same option is
-available on `fast-add`. Queue and lifecycle commands are:
+The worktree branch name is required and used when the ticket starts. The
+required prompt is stored with the ticket and used as the coding-agent
+instruction. The manager appends its completion-marker instruction
+automatically. `--agent` selects `codex`, `claude`, `gemini`, `cursor`, or
+`hermes`; it defaults to `codex` when omitted. Queue and lifecycle commands are:
 
 ```bash
 ./bin/zellij-agent ticket-worker list [--status ready] [--no-prompt]

@@ -84,6 +84,37 @@ func TestClientAgentMethodsUseExactPathsMethodsAndEscaping(t *testing.T) {
 	}
 }
 
+func TestClientFocusPreviousAgentUsesExactPathAndBody(t *testing.T) {
+	var method, path, body string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.EscapedPath()
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		body = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"focused":false,"agent":{}}`))
+	}))
+	defer server.Close()
+	client := NewClient(ClientOptions{})
+	client.baseURL = server.URL
+	client.http = server.Client()
+
+	response, err := client.FocusPreviousAgent(context.Background(), FocusPreviousAgentRequest{
+		SourceSession: "physical-b", SourceZellijPaneID: "terminal_8", IdleOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Focused || method != http.MethodPost || path != "/v1/agents/prev" {
+		t.Fatalf("response=%#v method=%q path=%q", response, method, path)
+	}
+	if body != `{"source_session":"physical-b","source_zellij_pane_id":"terminal_8","idle_only":true}` {
+		t.Fatalf("request body = %q", body)
+	}
+}
+
 func TestClientFocusSessionUsesExactPathAndBody(t *testing.T) {
 	var method, path, body string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +146,35 @@ func TestClientFocusSessionUsesExactPathAndBody(t *testing.T) {
 	}
 	if response.SessionID != "loop" || response.ZellijPaneID != "terminal_0" {
 		t.Fatalf("FocusSession() = %#v", response)
+	}
+}
+
+func TestClientSetAgentPinnedUsesExactPathAndBody(t *testing.T) {
+	var method, path, body string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.EscapedPath()
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"agent":{"id":"agent/1","kind":"codex","pinned":true}}`))
+	}))
+	defer server.Close()
+	client := NewClient(ClientOptions{})
+	client.baseURL = server.URL
+	client.http = server.Client()
+
+	response, err := client.SetAgentPinned(context.Background(), "agent/1", SetAgentPinnedRequest{Pinned: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if method != http.MethodPost || path != "/v1/agents/agent%2F1/pin" || body != `{"pinned":true}` {
+		t.Fatalf("request = %s %s %s", method, path, body)
+	}
+	if !response.Agent.Pinned {
+		t.Fatalf("response = %#v", response)
 	}
 }
 

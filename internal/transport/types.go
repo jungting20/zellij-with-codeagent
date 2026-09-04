@@ -124,6 +124,14 @@ type FocusAgentResponse struct {
 	Agent AgentWithPane `json:"agent"`
 }
 
+type SetAgentPinnedRequest struct {
+	Pinned bool `json:"pinned"`
+}
+
+type SetAgentPinnedResponse struct {
+	Agent Agent `json:"agent"`
+}
+
 type FocusNextAgentRequest struct {
 	SourceSession      string `json:"source_session"`
 	SourceZellijPaneID string `json:"source_zellij_pane_id"`
@@ -134,6 +142,9 @@ type FocusNextAgentResponse struct {
 	Focused bool          `json:"focused"`
 	Agent   AgentWithPane `json:"agent"`
 }
+
+type FocusPreviousAgentRequest = FocusNextAgentRequest
+type FocusPreviousAgentResponse = FocusNextAgentResponse
 
 type FocusSessionRequest struct {
 	SourceSession      string `json:"source_session"`
@@ -151,6 +162,7 @@ type Agent struct {
 	Access         string    `json:"access"`
 	PaneID         string    `json:"pane_id"`
 	State          string    `json:"state"`
+	Pinned         bool      `json:"pinned"`
 	StateReason    string    `json:"state_reason,omitempty"`
 	MatchedRule    string    `json:"matched_rule,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
@@ -364,6 +376,10 @@ func (req FocusAgentRequest) ToCodingAgent(id string) codingagent.FocusAgentRequ
 	}
 }
 
+func (req SetAgentPinnedRequest) ToCodingAgent(id string) codingagent.SetAgentPinnedRequest {
+	return codingagent.SetAgentPinnedRequest{AgentID: codingagent.ID(id), Pinned: req.Pinned}
+}
+
 func (req FocusNextAgentRequest) ToCodingAgent() codingagent.FocusNextAgentRequest {
 	return codingagent.FocusNextAgentRequest{
 		SourceZellijSession: req.SourceSession,
@@ -379,6 +395,7 @@ func AgentFromCodingAgent(record codingagent.Record) Agent {
 		Access:         string(record.AccessMode),
 		PaneID:         string(record.PaneID),
 		State:          string(record.State),
+		Pinned:         record.Pinned,
 		StateReason:    record.StateReason,
 		MatchedRule:    record.MatchedRule,
 		CreatedAt:      record.CreatedAt,
@@ -404,6 +421,10 @@ func ListAgentsFromCodingAgent(response codingagent.ListAgentsResponse) ListAgen
 
 func FocusAgentFromCodingAgent(response codingagent.FocusAgentResponse) FocusAgentResponse {
 	return FocusAgentResponse{Agent: AgentWithPaneFromCodingAgent(response.Agent)}
+}
+
+func SetAgentPinnedFromCodingAgent(response codingagent.SetAgentPinnedResponse) SetAgentPinnedResponse {
+	return SetAgentPinnedResponse{Agent: AgentFromCodingAgent(response.Agent)}
 }
 
 func FocusNextAgentFromCodingAgent(response codingagent.FocusNextAgentResponse) FocusNextAgentResponse {

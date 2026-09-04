@@ -170,22 +170,6 @@ func (s *Store) Add(ctx context.Context, input CreateInput) (Ticket, error) {
 	if err != nil {
 		return Ticket{}, err
 	}
-	spec, err := s.artifactPath(input.SpecPath, filepath.Join("docs", "superpowers", "specs"))
-	if err != nil {
-		return Ticket{}, ErrInvalidArtifact
-	}
-	plan, err := s.artifactPath(input.PlanPath, filepath.Join("docs", "superpowers", "plans"))
-	if err != nil {
-		return Ticket{}, ErrInvalidArtifact
-	}
-	return s.insert(ctx, title, summary, spec, plan, branch, agent, prompt)
-}
-
-func (s *Store) FastAdd(ctx context.Context, input CreateInput) (Ticket, error) {
-	title, summary, branch, agent, prompt, err := normalizeCreateInput(input)
-	if err != nil {
-		return Ticket{}, err
-	}
 	return s.insert(ctx, title, summary, "", "", branch, agent, prompt)
 }
 
@@ -447,34 +431,6 @@ var allowedTransitions = map[Action]map[Status]Status{
 	ActionDone:   {StatusInProgress: StatusDone},
 	ActionCancel: {StatusReady: StatusCancelled, StatusInProgress: StatusCancelled},
 	ActionReopen: {StatusDone: StatusReady, StatusCancelled: StatusReady},
-}
-
-func (s *Store) artifactPath(input, requiredDirectory string) (string, error) {
-	candidate := input
-	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(s.root, candidate)
-	}
-	abs, err := filepath.Abs(candidate)
-	if err != nil {
-		return "", err
-	}
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", err
-	}
-	rel, err := filepath.Rel(s.root, resolved)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", ErrInvalidArtifact
-	}
-	required := requiredDirectory + string(filepath.Separator)
-	if !strings.HasPrefix(rel, required) || filepath.Ext(rel) != ".md" {
-		return "", ErrInvalidArtifact
-	}
-	info, err := os.Stat(resolved)
-	if err != nil || !info.Mode().IsRegular() {
-		return "", ErrInvalidArtifact
-	}
-	return filepath.ToSlash(rel), nil
 }
 
 func parseTime(value string) (time.Time, error) {

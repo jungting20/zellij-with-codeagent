@@ -92,6 +92,24 @@ func TestRunDispatchesAgentNext(t *testing.T) {
 	}
 }
 
+func TestRunDispatchesAgentPrev(t *testing.T) {
+	binDir := t.TempDir()
+	argsPath := filepath.Join(t.TempDir(), "args")
+	writeFakeProvider(t, filepath.Join(binDir, "zellij-agent"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \""+argsPath+"\"\n")
+	t.Setenv("PATH", binDir)
+
+	if code := Run([]string{"agent-prev", "--timeout", "3s", "--idle-only"}); code != 0 {
+		t.Fatalf("Run(agent-prev) = %d, want 0", code)
+	}
+	got, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(args) error = %v", err)
+	}
+	if string(got) != "agent\nprev\n--timeout\n3s\n--idle-only\n" {
+		t.Fatalf("zellij-agent args = %q, want agent prev --timeout 3s --idle-only", got)
+	}
+}
+
 func TestRunDispatchesAgentDashboard(t *testing.T) {
 	binDir := t.TempDir()
 	argsPath := filepath.Join(t.TempDir(), "args")

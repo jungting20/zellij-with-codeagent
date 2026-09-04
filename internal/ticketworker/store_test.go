@@ -43,7 +43,7 @@ func writeArtifacts(t *testing.T, root, name string) (string, string) {
 	return spec, plan
 }
 
-func TestOpenCreatesSchemaAndAddRegistersReadyTicket(t *testing.T) {
+func TestOpenCreatesSchemaAndAddRegistersReadyTicketWithoutArtifacts(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "search")
 
@@ -60,8 +60,8 @@ func TestOpenCreatesSchemaAndAddRegistersReadyTicket(t *testing.T) {
 	if got.Status != StatusReady || got.ID != 1 {
 		t.Fatalf("Add() = %#v", got)
 	}
-	if got.SpecPath != "docs/superpowers/specs/search-design.md" || got.PlanPath != "docs/superpowers/plans/search.md" {
-		t.Fatalf("stored paths = %q, %q", got.SpecPath, got.PlanPath)
+	if got.SpecPath != "" || got.PlanPath != "" {
+		t.Fatalf("stored paths = %q, %q; want empty", got.SpecPath, got.PlanPath)
 	}
 	if !got.CreatedAt.Equal(fixedNow) || !got.UpdatedAt.Equal(fixedNow) {
 		t.Fatalf("timestamps = %s, %s", got.CreatedAt, got.UpdatedAt)
@@ -90,9 +90,9 @@ func TestAddStoresTrimmedMultilinePrompt(t *testing.T) {
 	}
 }
 
-func TestFastAddDefaultsAndValidatesAgent(t *testing.T) {
+func TestAddDefaultsAndValidatesAgent(t *testing.T) {
 	store, _ := newTestStore(t)
-	created, err := store.FastAdd(context.Background(), CreateInput{
+	created, err := store.Add(context.Background(), CreateInput{
 		Title: "Default agent", Summary: "Use Codex", WorktreeBranch: "ticket/default-agent", Prompt: "Implement.",
 	})
 	if err != nil {
@@ -101,7 +101,7 @@ func TestFastAddDefaultsAndValidatesAgent(t *testing.T) {
 	if created.Agent != "codex" {
 		t.Fatalf("Agent = %q, want codex", created.Agent)
 	}
-	created, err = store.FastAdd(context.Background(), CreateInput{
+	created, err = store.Add(context.Background(), CreateInput{
 		Title: "Claude agent", Summary: "Use Claude", WorktreeBranch: "ticket/claude-agent", Prompt: "Implement.", Agent: " claude ",
 	})
 	if err != nil {
@@ -110,10 +110,10 @@ func TestFastAddDefaultsAndValidatesAgent(t *testing.T) {
 	if created.Agent != "claude" {
 		t.Fatalf("Agent = %q, want claude", created.Agent)
 	}
-	if _, err := store.FastAdd(context.Background(), CreateInput{
+	if _, err := store.Add(context.Background(), CreateInput{
 		Title: "Bad agent", Summary: "Reject it", WorktreeBranch: "ticket/bad-agent", Prompt: "Implement.", Agent: "unknown",
 	}); !errors.Is(err, ErrInvalidAgent) {
-		t.Fatalf("FastAdd() error = %v, want ErrInvalidAgent", err)
+		t.Fatalf("Add() error = %v, want ErrInvalidAgent", err)
 	}
 }
 
@@ -235,8 +235,8 @@ func TestOpenMigratesVersion2AndPreservesTickets(t *testing.T) {
 		t.Fatalf("migrated ticket = %#v, want %#v", got, created)
 	}
 	for _, title := range []string{"Fast one", "Fast two"} {
-		if _, err := migrated.FastAdd(context.Background(), CreateInput{WorktreeBranch: "ticket/test", Title: title, Summary: "After migration", Prompt: "Implement."}); err != nil {
-			t.Fatalf("FastAdd(%q) after migration error = %v", title, err)
+		if _, err := migrated.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test", Title: title, Summary: "After migration", Prompt: "Implement."}); err != nil {
+			t.Fatalf("Add(%q) after migration error = %v", title, err)
 		}
 	}
 	var version int
@@ -346,7 +346,7 @@ func TestOpenRejectsUnsupportedFutureSchemaVersion(t *testing.T) {
 	}
 }
 
-func TestAddAcceptsRepositoryRelativeArtifactPaths(t *testing.T) {
+func TestAddIgnoresLegacyArtifactPaths(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "relative")
 	relativeSpec, err := filepath.Rel(root, spec)
@@ -368,57 +368,43 @@ func TestAddAcceptsRepositoryRelativeArtifactPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SpecPath != "docs/superpowers/specs/relative-design.md" || got.PlanPath != "docs/superpowers/plans/relative.md" {
-		t.Fatalf("stored paths = %q, %q", got.SpecPath, got.PlanPath)
+	if got.SpecPath != "" || got.PlanPath != "" {
+		t.Fatalf("stored paths = %q, %q; want empty", got.SpecPath, got.PlanPath)
 	}
 }
 
-func TestAddRejectsDuplicatePlanWithoutInserting(t *testing.T) {
+func TestAddAcceptsRepeatedLegacyPlanPath(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "search")
 	input := CreateInput{WorktreeBranch: "ticket/test", Title: "Search", Summary: "Search stories.", SpecPath: spec, PlanPath: plan, Prompt: "Implement search."}
 	if _, err := store.Add(context.Background(), input); err != nil {
 		t.Fatal(err)
 	}
-	_, err := store.Add(context.Background(), input)
-	if !errors.Is(err, ErrDuplicatePlan) {
-		t.Fatalf("Add() error = %v, want ErrDuplicatePlan", err)
+	if _, err := store.Add(context.Background(), input); err != nil {
+		t.Fatalf("second Add() error = %v", err)
 	}
 }
 
-func TestFastAddAcceptsMultipleTicketsWithoutArtifacts(t *testing.T) {
+func TestAddAcceptsMultipleTicketsWithoutArtifacts(t *testing.T) {
 	store, _ := newTestStore(t)
 	for i, title := range []string{"First", "Second"} {
-		created, err := store.FastAdd(context.Background(), CreateInput{WorktreeBranch: "ticket/test",
+		created, err := store.Add(context.Background(), CreateInput{WorktreeBranch: "ticket/test",
 			Title: title, Summary: "No artifact ticket", Prompt: "Implement " + title + ".",
 		})
 		if err != nil {
-			t.Fatalf("FastAdd(%d) error = %v", i, err)
+			t.Fatalf("Add(%d) error = %v", i, err)
 		}
 		if created.SpecPath != "" || created.PlanPath != "" {
-			t.Fatalf("FastAdd(%d) paths = %q, %q; want empty", i, created.SpecPath, created.PlanPath)
+			t.Fatalf("Add(%d) paths = %q, %q; want empty", i, created.SpecPath, created.PlanPath)
 		}
 	}
 }
 
-func TestAddRejectsInvalidArtifacts(t *testing.T) {
-	store, root := newTestStore(t)
-	spec, plan := writeArtifacts(t, root, "search")
-	outside := filepath.Join(t.TempDir(), "outside.md")
-	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	symlink := filepath.Join(root, "docs", "superpowers", "plans", "outside.md")
-	if err := os.Symlink(outside, symlink); err != nil {
-		t.Fatal(err)
-	}
-
+func TestAddRejectsEmptyTitleAndSummary(t *testing.T) {
+	store, _ := newTestStore(t)
 	cases := []CreateInput{
-		{Title: "", Summary: "summary", SpecPath: spec, PlanPath: plan, WorktreeBranch: "ticket/test", Prompt: "Implement."},
-		{Title: "title", Summary: "", SpecPath: spec, PlanPath: plan, WorktreeBranch: "ticket/test", Prompt: "Implement."},
-		{Title: "title", Summary: "summary", SpecPath: filepath.Join(root, "missing.md"), PlanPath: plan, WorktreeBranch: "ticket/test", Prompt: "Implement."},
-		{Title: "title", Summary: "summary", SpecPath: spec, PlanPath: outside, WorktreeBranch: "ticket/test", Prompt: "Implement."},
-		{Title: "title", Summary: "summary", SpecPath: spec, PlanPath: symlink, WorktreeBranch: "ticket/test", Prompt: "Implement."},
+		{Title: "", Summary: "summary", WorktreeBranch: "ticket/test", Prompt: "Implement."},
+		{Title: "title", Summary: "", WorktreeBranch: "ticket/test", Prompt: "Implement."},
 	}
 	for _, input := range cases {
 		if _, err := store.Add(context.Background(), input); !errors.Is(err, ErrInvalidArtifact) {

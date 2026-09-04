@@ -19,6 +19,7 @@ const agentStateChangedEventType = "agent_state_changed"
 type Client interface {
 	ListAgents(context.Context) (transport.ListAgentsResponse, error)
 	FocusAgent(context.Context, string, transport.FocusAgentRequest) (transport.FocusAgentResponse, error)
+	SetAgentPinned(context.Context, string, transport.SetAgentPinnedRequest) (transport.SetAgentPinnedResponse, error)
 	StreamEvents(context.Context) (*transport.EventStream, error)
 }
 
@@ -40,6 +41,13 @@ type refreshResultMsg struct {
 
 type focusResultMsg struct {
 	agentID string
+	err     error
+}
+
+type pinResultMsg struct {
+	agentID string
+	pinned  bool
+	agent   transport.Agent
 	err     error
 }
 
@@ -71,6 +79,7 @@ type Model struct {
 	refreshing   bool
 	refreshDirty bool
 	focusing     bool
+	pinning      bool
 	stream       *transport.EventStream
 	connection   string
 	statusText   string
@@ -117,6 +126,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.closeStream()
 		m.quitting = true
 		return m, tea.Quit
+	case pinResultMsg:
+		m.pinning = false
+		if msg.err != nil {
+			m.statusText = "pin failed: " + msg.err.Error()
+			return m, nil
+		}
+		for index := range m.rows {
+			if m.rows[index].Agent.ID == msg.agentID {
+				m.rows[index].Agent.Pinned = msg.agent.Pinned
+				break
+			}
+		}
+		sortAgentRows(m.rows, m.opts.SourceSession)
+		m.restoreSelection()
+		if msg.pinned {
+			m.statusText = "pinned " + msg.agentID
+		} else {
+			m.statusText = "unpinned " + msg.agentID
+		}
+		return m, nil
 	case streamReadyMsg:
 		m.streamKnown = true
 		if msg.err != nil || msg.stream == nil {
@@ -177,6 +206,13 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "R":
 		return m, m.requestRefresh()
+	case " ":
+		if len(m.rows) == 0 || m.pinning {
+			return m, nil
+		}
+		m.pinning = true
+		agent := m.rows[m.selected].Agent
+		return m, m.pinCmd(agent.ID, !agent.Pinned)
 	case "enter":
 		if len(m.rows) == 0 || m.focusing {
 			return m, nil
@@ -224,6 +260,9 @@ func (m Model) handleRefresh(msg refreshResultMsg) (tea.Model, tea.Cmd) {
 func sortAgentRows(rows []transport.AgentWithPane, sourceSession string) {
 	sourceSession = strings.TrimSpace(sourceSession)
 	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].Agent.Pinned != rows[j].Agent.Pinned {
+			return rows[i].Agent.Pinned
+		}
 		leftSession := sessionName(rows[i])
 		rightSession := sessionName(rows[j])
 		leftCurrent := sourceSession != "" && leftSession == sourceSession
@@ -244,6 +283,13 @@ func sortAgentRows(rows []transport.AgentWithPane, sourceSession string) {
 		}
 		return rows[i].Agent.ID < rows[j].Agent.ID
 	})
+}
+
+func (m Model) pinCmd(agentID string, pinned bool) tea.Cmd {
+	return func() tea.Msg {
+		response, err := m.client.SetAgentPinned(m.ctx, agentID, transport.SetAgentPinnedRequest{Pinned: pinned})
+		return pinResultMsg{agentID: agentID, pinned: pinned, agent: response.Agent, err: err}
+	}
 }
 
 func sessionName(record transport.AgentWithPane) string {

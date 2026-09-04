@@ -157,6 +157,33 @@ func TestMemoryStoreUpdateStateIsAtomicAndOnlyStampsChanges(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreSetPinnedPersistsWithoutChangingStateTimestamp(t *testing.T) {
+	store := codingagent.NewMemoryStore(func() time.Time { return time.Unix(20, 0) })
+	record := testRecord("agent-1", "pane-1", time.Unix(10, 0))
+	if _, err := store.Create(record); err != nil {
+		t.Fatal(err)
+	}
+
+	pinned, err := store.SetPinned(record.ID, true)
+	if err != nil {
+		t.Fatalf("SetPinned(true) error = %v", err)
+	}
+	if !pinned.Pinned || !pinned.StateChangedAt.Equal(record.StateChangedAt) {
+		t.Fatalf("SetPinned(true) = %#v", pinned)
+	}
+
+	unpinned, err := store.SetPinned(record.ID, false)
+	if err != nil {
+		t.Fatalf("SetPinned(false) error = %v", err)
+	}
+	if unpinned.Pinned || !unpinned.StateChangedAt.Equal(record.StateChangedAt) {
+		t.Fatalf("SetPinned(false) = %#v", unpinned)
+	}
+	if _, err := store.SetPinned("missing", true); !errors.Is(err, codingagent.ErrNotFound) {
+		t.Fatalf("SetPinned(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestMemoryStoreValidatesRecordsAndUpdates(t *testing.T) {
 	store := codingagent.NewMemoryStore(time.Now)
 	invalid := testRecord("", "pane-1", time.Unix(10, 0))

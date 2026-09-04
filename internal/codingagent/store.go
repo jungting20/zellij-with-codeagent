@@ -116,6 +116,18 @@ func (s *memoryStore) UpdateState(id ID, update StateUpdate) (StateChange, error
 	return StateChange{Previous: previous, Current: current, Changed: true}, nil
 }
 
+func (s *memoryStore) SetPinned(id ID, pinned bool) (Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.byID[id]
+	if !ok {
+		return Record{}, fmt.Errorf("%w: %q", ErrNotFound, id)
+	}
+	record.Pinned = pinned
+	s.byID[id] = record
+	return record, nil
+}
+
 func (s *memoryStore) Delete(id ID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
