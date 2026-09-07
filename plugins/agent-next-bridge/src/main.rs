@@ -41,7 +41,7 @@ use zellij_tile::prelude::*;
 
 #[cfg(target_family = "wasm")]
 #[derive(Default)]
-struct AgentNextBridge {
+struct AgentNavigationBridge {
     model: BridgeModel,
     request_sequence: u64,
     command_in_flight: bool,
@@ -52,17 +52,17 @@ struct AgentNextBridge {
 const RETRY_DELAY_SECONDS: f64 = 0.25;
 
 #[cfg(target_family = "wasm")]
-register_plugin!(AgentNextBridge);
+register_plugin!(AgentNavigationBridge);
 
 #[cfg(target_family = "wasm")]
-impl ZellijPlugin for AgentNextBridge {
+impl ZellijPlugin for AgentNavigationBridge {
     fn load(&mut self, configuration: BTreeMap<String, String>) {
         if configuration
             .get("executable_path")
             .map(|value| value.trim().is_empty())
             .unwrap_or(true)
         {
-            eprintln!("agent-next bridge requires a non-empty executable_path configuration");
+            eprintln!("agent navigation bridge requires a non-empty executable_path configuration");
         }
         self.model = BridgeModel::new(configuration.get("executable_path").cloned());
         set_selectable(false);
@@ -84,10 +84,10 @@ impl ZellijPlugin for AgentNextBridge {
                 if self.model.queue(navigation) {
                     self.flush_ready();
                 } else {
-                    eprintln!("agent-next bridge queue is full or disabled; request ignored");
+                    eprintln!("agent navigation bridge queue is full or disabled; request ignored");
                 }
             }
-            Err(error) => eprintln!("agent-next bridge: {error}"),
+            Err(error) => eprintln!("agent navigation bridge: {error}"),
         }
         false
     }
@@ -117,7 +117,9 @@ impl ZellijPlugin for AgentNextBridge {
                 if granted {
                     self.initialize_context();
                 } else {
-                    eprintln!("agent-next bridge permissions were denied; queued work discarded");
+                    eprintln!(
+                        "agent navigation bridge permissions were denied; queued work discarded"
+                    );
                 }
                 self.flush_ready();
             }
@@ -129,7 +131,7 @@ impl ZellijPlugin for AgentNextBridge {
                         .map(String::as_str)
                         .unwrap_or("unknown");
                     eprintln!(
-                        "agent-next bridge request {request_id} failed: exit_code={exit_code:?} stderr={}",
+                        "agent navigation bridge request {request_id} failed: exit_code={exit_code:?} stderr={}",
                         String::from_utf8_lossy(&stderr)
                     );
                 }
@@ -146,7 +148,7 @@ impl ZellijPlugin for AgentNextBridge {
 }
 
 #[cfg(target_family = "wasm")]
-impl AgentNextBridge {
+impl AgentNavigationBridge {
     fn initialize_context(&mut self) {
         let focused = get_focused_pane_info().ok().map(|(_, pane_id)| pane_id);
         self.model.initialize_focused_pane(focused);
@@ -163,7 +165,7 @@ impl AgentNextBridge {
         let focused = match get_focused_pane_info() {
             Ok((_, pane_id)) => pane_id,
             Err(error) => {
-                eprintln!("agent-next bridge delayed: focused pane unavailable: {error}");
+                eprintln!("agent navigation bridge delayed: focused pane unavailable: {error}");
                 self.schedule_retry();
                 return;
             }
@@ -171,7 +173,7 @@ impl AgentNextBridge {
         let source_pane_id = match self.model.resolve_source_pane(focused) {
             Ok(source_pane_id) => source_pane_id,
             Err(error) => {
-                eprintln!("agent-next bridge delayed: {error}");
+                eprintln!("agent navigation bridge delayed: {error}");
                 self.schedule_retry();
                 return;
             }

@@ -72,6 +72,7 @@ type FocusNextAgentRequest struct {
 	SourceZellijSession string
 	SourceZellijPaneID  runtime.ZellijPaneID
 	IdleOnly            bool
+	PinnedOnly          bool
 }
 
 type FocusNextAgentResponse struct {
@@ -309,7 +310,7 @@ func (s *Service) focusAdjacentAgent(ctx context.Context, request FocusNextAgent
 	if err != nil {
 		return FocusNextAgentResponse{}, fmt.Errorf("list coding agents: %w", err)
 	}
-	record, ok := adjacentAgentRecord(records, s.lastFocusedID, s.lastSeenIdleStateChangedAt, request.IdleOnly, step)
+	record, ok := adjacentAgentRecord(records, s.lastFocusedID, s.lastSeenIdleStateChangedAt, request.IdleOnly, request.PinnedOnly, step)
 	if !ok {
 		return FocusNextAgentResponse{Focused: false}, nil
 	}
@@ -363,13 +364,13 @@ func (s *Service) focusAgentLocked(ctx context.Context, request FocusAgentReques
 }
 
 func nextAgentRecord(records []Record, current ID, lastSeenIdleStateChangedAt time.Time, idleOnly bool) (Record, bool) {
-	return adjacentAgentRecord(records, current, lastSeenIdleStateChangedAt, idleOnly, 1)
+	return adjacentAgentRecord(records, current, lastSeenIdleStateChangedAt, idleOnly, false, 1)
 }
 
-func adjacentAgentRecord(records []Record, current ID, lastSeenIdleStateChangedAt time.Time, idleOnly bool, step int) (Record, bool) {
+func adjacentAgentRecord(records []Record, current ID, lastSeenIdleStateChangedAt time.Time, idleOnly, pinnedOnly bool, step int) (Record, bool) {
 	eligible := make([]Record, 0, len(records))
 	for _, record := range records {
-		if !idleOnly || record.State == StateIdle {
+		if (!idleOnly || record.State == StateIdle) && (!pinnedOnly || record.Pinned) {
 			eligible = append(eligible, record)
 		}
 	}

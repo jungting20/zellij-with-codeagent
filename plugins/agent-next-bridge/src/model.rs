@@ -5,8 +5,16 @@ const MAX_QUEUED_REQUESTS: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Navigation {
+    Next(NavigationFilter),
+    Previous(NavigationFilter),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NavigationFilter {
     All,
     IdleOnly,
+    PinnedOnly,
+    IdleAndPinned,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -128,8 +136,20 @@ impl BridgeModel {
 
 pub fn parse_navigation(name: &str, payload: Option<&str>) -> Result<Navigation, String> {
     match (name, payload) {
-        ("agent-next", Some("all")) => Ok(Navigation::All),
-        ("agent-next", Some("idle-only")) => Ok(Navigation::IdleOnly),
+        ("agent-next", Some("all")) => Ok(Navigation::Next(NavigationFilter::All)),
+        ("agent-next", Some("idle-only")) => Ok(Navigation::Next(NavigationFilter::IdleOnly)),
+        ("agent-next", Some("pinned-only")) => Ok(Navigation::Next(NavigationFilter::PinnedOnly)),
+        ("agent-next", Some("idle-and-pinned")) => {
+            Ok(Navigation::Next(NavigationFilter::IdleAndPinned))
+        }
+        ("agent-prev", Some("all")) => Ok(Navigation::Previous(NavigationFilter::All)),
+        ("agent-prev", Some("idle-only")) => Ok(Navigation::Previous(NavigationFilter::IdleOnly)),
+        ("agent-prev", Some("pinned-only")) => {
+            Ok(Navigation::Previous(NavigationFilter::PinnedOnly))
+        }
+        ("agent-prev", Some("idle-and-pinned")) => {
+            Ok(Navigation::Previous(NavigationFilter::IdleAndPinned))
+        }
         _ => Err(format!(
             "unsupported pipe message name={name:?} payload={payload:?}"
         )),
@@ -137,9 +157,19 @@ pub fn parse_navigation(name: &str, payload: Option<&str>) -> Result<Navigation,
 }
 
 pub fn command_argv(executable: &str, navigation: Navigation) -> Vec<String> {
-    let mut argv = vec![executable.into(), "agent".into(), "next".into()];
-    if navigation == Navigation::IdleOnly {
-        argv.push("--idle-only".into());
+    let (direction, filter) = match navigation {
+        Navigation::Next(filter) => ("next", filter),
+        Navigation::Previous(filter) => ("prev", filter),
+    };
+    let mut argv = vec![executable.into(), "agent".into(), direction.into()];
+    match filter {
+        NavigationFilter::All => {}
+        NavigationFilter::IdleOnly => argv.push("--idle-only".into()),
+        NavigationFilter::PinnedOnly => argv.push("--pinned-only".into()),
+        NavigationFilter::IdleAndPinned => {
+            argv.push("--idle-only".into());
+            argv.push("--pinned-only".into());
+        }
     }
     argv
 }
@@ -167,11 +197,35 @@ mod tests {
     fn parses_supported_navigation_messages() {
         assert_eq!(
             parse_navigation("agent-next", Some("all")),
-            Ok(Navigation::All)
+            Ok(Navigation::Next(NavigationFilter::All))
         );
         assert_eq!(
             parse_navigation("agent-next", Some("idle-only")),
-            Ok(Navigation::IdleOnly)
+            Ok(Navigation::Next(NavigationFilter::IdleOnly))
+        );
+        assert_eq!(
+            parse_navigation("agent-next", Some("pinned-only")),
+            Ok(Navigation::Next(NavigationFilter::PinnedOnly))
+        );
+        assert_eq!(
+            parse_navigation("agent-next", Some("idle-and-pinned")),
+            Ok(Navigation::Next(NavigationFilter::IdleAndPinned))
+        );
+        assert_eq!(
+            parse_navigation("agent-prev", Some("all")),
+            Ok(Navigation::Previous(NavigationFilter::All))
+        );
+        assert_eq!(
+            parse_navigation("agent-prev", Some("idle-only")),
+            Ok(Navigation::Previous(NavigationFilter::IdleOnly))
+        );
+        assert_eq!(
+            parse_navigation("agent-prev", Some("pinned-only")),
+            Ok(Navigation::Previous(NavigationFilter::PinnedOnly))
+        );
+        assert_eq!(
+            parse_navigation("agent-prev", Some("idle-and-pinned")),
+            Ok(Navigation::Previous(NavigationFilter::IdleAndPinned))
         );
     }
 
@@ -181,14 +235,71 @@ mod tests {
     }
 
     #[test]
-    fn builds_expected_agent_next_command() {
+    fn builds_expected_agent_navigation_commands() {
         assert_eq!(
-            command_argv("/opt/zellij-agent", Navigation::All),
+            command_argv("/opt/zellij-agent", Navigation::Next(NavigationFilter::All)),
             vec!["/opt/zellij-agent", "agent", "next"]
         );
         assert_eq!(
-            command_argv("/opt/zellij-agent", Navigation::IdleOnly),
+            command_argv(
+                "/opt/zellij-agent",
+                Navigation::Next(NavigationFilter::IdleOnly)
+            ),
             vec!["/opt/zellij-agent", "agent", "next", "--idle-only"]
+        );
+        assert_eq!(
+            command_argv(
+                "/opt/zellij-agent",
+                Navigation::Next(NavigationFilter::PinnedOnly)
+            ),
+            vec!["/opt/zellij-agent", "agent", "next", "--pinned-only"]
+        );
+        assert_eq!(
+            command_argv(
+                "/opt/zellij-agent",
+                Navigation::Next(NavigationFilter::IdleAndPinned)
+            ),
+            vec![
+                "/opt/zellij-agent",
+                "agent",
+                "next",
+                "--idle-only",
+                "--pinned-only"
+            ]
+        );
+        assert_eq!(
+            command_argv(
+                "/opt/zellij-agent",
+                Navigation::Previous(NavigationFilter::All)
+            ),
+            vec!["/opt/zellij-agent", "agent", "prev"]
+        );
+        assert_eq!(
+            command_argv(
+                "/opt/zellij-agent",
+                Navigation::Previous(NavigationFilter::IdleOnly)
+            ),
+            vec!["/opt/zellij-agent", "agent", "prev", "--idle-only"]
+        );
+        assert_eq!(
+            command_argv(
+                "/opt/zellij-agent",
+                Navigation::Previous(NavigationFilter::PinnedOnly)
+            ),
+            vec!["/opt/zellij-agent", "agent", "prev", "--pinned-only"]
+        );
+        assert_eq!(
+            command_argv(
+                "/opt/zellij-agent",
+                Navigation::Previous(NavigationFilter::IdleAndPinned)
+            ),
+            vec![
+                "/opt/zellij-agent",
+                "agent",
+                "prev",
+                "--idle-only",
+                "--pinned-only"
+            ]
         );
     }
 
@@ -230,7 +341,7 @@ mod tests {
     #[test]
     fn first_session_update_releases_navigation_without_inherited_zellij_environment() {
         let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
-        model.queue(Navigation::All);
+        model.queue(Navigation::Next(NavigationFilter::All));
         model.set_permission(true);
 
         model.set_current_session(&[
@@ -251,7 +362,7 @@ mod tests {
             vec![ReadyJob {
                 executable: "/opt/zellij-agent".into(),
                 session_name: "fresh".into(),
-                navigation: Navigation::All,
+                navigation: Navigation::Next(NavigationFilter::All),
             }]
         );
     }
@@ -287,7 +398,7 @@ mod tests {
     #[test]
     fn permission_before_session_releases_queued_work() {
         let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
-        model.queue(Navigation::All);
+        model.queue(Navigation::Next(NavigationFilter::All));
         model.set_permission(true);
         assert!(model.take_ready().is_empty());
         model.set_session_name("work");
@@ -297,7 +408,7 @@ mod tests {
             vec![ReadyJob {
                 executable: "/opt/zellij-agent".into(),
                 session_name: "work".into(),
-                navigation: Navigation::All,
+                navigation: Navigation::Next(NavigationFilter::All),
             }]
         );
     }
@@ -305,7 +416,7 @@ mod tests {
     #[test]
     fn session_before_permission_releases_queued_work() {
         let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
-        model.queue(Navigation::IdleOnly);
+        model.queue(Navigation::Previous(NavigationFilter::IdleOnly));
         model.set_session_name("work");
         assert!(model.take_ready().is_empty());
         model.set_permission(true);
@@ -315,7 +426,7 @@ mod tests {
             vec![ReadyJob {
                 executable: "/opt/zellij-agent".into(),
                 session_name: "work".into(),
-                navigation: Navigation::IdleOnly,
+                navigation: Navigation::Previous(NavigationFilter::IdleOnly),
             }]
         );
     }
@@ -325,7 +436,7 @@ mod tests {
         let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
         model.set_permission(true);
         model.set_session_name("work");
-        model.queue(Navigation::All);
+        model.queue(Navigation::Next(NavigationFilter::All));
 
         assert_eq!(model.take_ready().len(), 1);
         assert!(model.take_ready().is_empty());
@@ -336,7 +447,7 @@ mod tests {
         let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
         model.set_permission(true);
         model.set_session_name("work");
-        model.queue(Navigation::All);
+        model.queue(Navigation::Next(NavigationFilter::All));
 
         let first = model.next_ready();
         assert_eq!(model.next_ready(), first);
@@ -348,7 +459,7 @@ mod tests {
     #[test]
     fn discards_queued_requests_when_permission_is_denied() {
         let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
-        model.queue(Navigation::All);
+        model.queue(Navigation::Next(NavigationFilter::All));
         model.set_permission(false);
         model.set_permission(true);
         model.set_session_name("work");
@@ -361,7 +472,7 @@ mod tests {
         let mut model = BridgeModel::new(Some(" \t\n ".into()));
         model.set_permission(true);
         model.set_session_name("work");
-        model.queue(Navigation::All);
+        model.queue(Navigation::Next(NavigationFilter::All));
 
         assert!(model.take_ready().is_empty());
     }
@@ -371,8 +482,8 @@ mod tests {
         let mut model = BridgeModel::new(Some("  /opt/zellij-agent  ".into()));
         model.set_permission(true);
         model.set_session_name("  work  ");
-        model.queue(Navigation::All);
-        model.queue(Navigation::All);
+        model.queue(Navigation::Next(NavigationFilter::All));
+        model.queue(Navigation::Previous(NavigationFilter::PinnedOnly));
 
         assert_eq!(
             model.take_ready(),
@@ -380,12 +491,12 @@ mod tests {
                 ReadyJob {
                     executable: "/opt/zellij-agent".into(),
                     session_name: "work".into(),
-                    navigation: Navigation::All,
+                    navigation: Navigation::Next(NavigationFilter::All),
                 },
                 ReadyJob {
                     executable: "/opt/zellij-agent".into(),
                     session_name: "work".into(),
-                    navigation: Navigation::All,
+                    navigation: Navigation::Previous(NavigationFilter::PinnedOnly),
                 },
             ]
         );
@@ -398,9 +509,9 @@ mod tests {
         model.set_session_name("work");
 
         for _ in 0..MAX_QUEUED_REQUESTS {
-            assert!(model.queue(Navigation::All));
+            assert!(model.queue(Navigation::Next(NavigationFilter::All)));
         }
-        assert!(!model.queue(Navigation::All));
+        assert!(!model.queue(Navigation::Next(NavigationFilter::All)));
         assert_eq!(model.take_ready().len(), MAX_QUEUED_REQUESTS);
     }
 }

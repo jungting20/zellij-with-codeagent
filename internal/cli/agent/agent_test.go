@@ -108,7 +108,7 @@ func TestRunNextFocusesNextAgentWithZellijContext(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := Run(
-		[]string{"next", "--socket", "/tmp/next.sock", "--timeout", "3s", "--idle-only"},
+		[]string{"next", "--socket", "/tmp/next.sock", "--timeout", "3s", "--idle-only", "--pinned-only"},
 		strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{
 			Getenv: mapGetenv(map[string]string{
 				"ZELLIJ_SESSION_NAME": " session-b ",
@@ -123,7 +123,7 @@ func TestRunNextFocusesNextAgentWithZellijContext(t *testing.T) {
 	if client.socket != "/tmp/next.sock" || client.timeout != 3*time.Second {
 		t.Fatalf("client socket=%q timeout=%s", client.socket, client.timeout)
 	}
-	want := transport.FocusNextAgentRequest{SourceSession: "session-b", SourceZellijPaneID: "terminal_8", IdleOnly: true}
+	want := transport.FocusNextAgentRequest{SourceSession: "session-b", SourceZellijPaneID: "terminal_8", IdleOnly: true, PinnedOnly: true}
 	if !reflect.DeepEqual(client.nextRequest, want) {
 		t.Fatalf("FocusNextAgent request=%#v, want %#v", client.nextRequest, want)
 	}
@@ -143,7 +143,7 @@ func TestRunPrevFocusesPreviousAgentWithZellijContext(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := Run(
-		[]string{"prev", "--socket", "/tmp/prev.sock", "--timeout", "3s", "--idle-only"},
+		[]string{"prev", "--socket", "/tmp/prev.sock", "--timeout", "3s", "--idle-only", "--pinned-only"},
 		strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{Getenv: mapGetenv(map[string]string{
 			"ZELLIJ_SESSION_NAME": " session-b ",
 			"ZELLIJ_PANE_ID":      " 8 ",
@@ -153,7 +153,7 @@ func TestRunPrevFocusesPreviousAgentWithZellijContext(t *testing.T) {
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	want := transport.FocusPreviousAgentRequest{SourceSession: "session-b", SourceZellijPaneID: "terminal_8", IdleOnly: true}
+	want := transport.FocusPreviousAgentRequest{SourceSession: "session-b", SourceZellijPaneID: "terminal_8", IdleOnly: true, PinnedOnly: true}
 	if !reflect.DeepEqual(client.prevRequest, want) {
 		t.Fatalf("FocusPreviousAgent request=%#v, want %#v", client.prevRequest, want)
 	}
@@ -257,8 +257,8 @@ func TestRunHelpDocumentsNavigationContract(t *testing.T) {
 		want []string
 	}{
 		{args: []string{"--help"}, want: []string{"next", "prev"}},
-		{args: []string{"next", "--help"}, want: []string{"next", "--socket PATH", "--timeout DURATION"}},
-		{args: []string{"prev", "--help"}, want: []string{"prev", "--socket PATH", "--timeout DURATION", "--idle-only"}},
+		{args: []string{"next", "--help"}, want: []string{"next", "--socket PATH", "--timeout DURATION", "--pinned-only"}},
+		{args: []string{"prev", "--help"}, want: []string{"prev", "--socket PATH", "--timeout DURATION", "--idle-only", "--pinned-only"}},
 	}
 	for _, tt := range tests {
 		var stdout, stderr bytes.Buffer

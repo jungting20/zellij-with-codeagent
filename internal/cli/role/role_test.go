@@ -80,15 +80,15 @@ func TestRunDispatchesAgentNext(t *testing.T) {
 	writeFakeProvider(t, filepath.Join(binDir, "zellij-agent"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \""+argsPath+"\"\n")
 	t.Setenv("PATH", binDir)
 
-	if code := Run([]string{"agent-next", "--timeout", "3s", "--idle-only"}); code != 0 {
+	if code := Run([]string{"agent-next", "--timeout", "3s", "--idle-only", "--pinned-only"}); code != 0 {
 		t.Fatalf("Run(agent-next) = %d, want 0", code)
 	}
 	got, err := os.ReadFile(argsPath)
 	if err != nil {
 		t.Fatalf("ReadFile(args) error = %v", err)
 	}
-	if string(got) != "agent\nnext\n--timeout\n3s\n--idle-only\n" {
-		t.Fatalf("zellij-agent args = %q, want agent next --timeout 3s --idle-only", got)
+	if string(got) != "agent\nnext\n--timeout\n3s\n--idle-only\n--pinned-only\n" {
+		t.Fatalf("zellij-agent args = %q, want agent next --timeout 3s --idle-only --pinned-only", got)
 	}
 }
 
@@ -98,15 +98,15 @@ func TestRunDispatchesAgentPrev(t *testing.T) {
 	writeFakeProvider(t, filepath.Join(binDir, "zellij-agent"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \""+argsPath+"\"\n")
 	t.Setenv("PATH", binDir)
 
-	if code := Run([]string{"agent-prev", "--timeout", "3s", "--idle-only"}); code != 0 {
+	if code := Run([]string{"agent-prev", "--timeout", "3s", "--idle-only", "--pinned-only"}); code != 0 {
 		t.Fatalf("Run(agent-prev) = %d, want 0", code)
 	}
 	got, err := os.ReadFile(argsPath)
 	if err != nil {
 		t.Fatalf("ReadFile(args) error = %v", err)
 	}
-	if string(got) != "agent\nprev\n--timeout\n3s\n--idle-only\n" {
-		t.Fatalf("zellij-agent args = %q, want agent prev --timeout 3s --idle-only", got)
+	if string(got) != "agent\nprev\n--timeout\n3s\n--idle-only\n--pinned-only\n" {
+		t.Fatalf("zellij-agent args = %q, want agent prev --timeout 3s --idle-only --pinned-only", got)
 	}
 }
 

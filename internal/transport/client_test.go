@@ -102,7 +102,7 @@ func TestClientFocusPreviousAgentUsesExactPathAndBody(t *testing.T) {
 	client.http = server.Client()
 
 	response, err := client.FocusPreviousAgent(context.Background(), FocusPreviousAgentRequest{
-		SourceSession: "physical-b", SourceZellijPaneID: "terminal_8", IdleOnly: true,
+		SourceSession: "physical-b", SourceZellijPaneID: "terminal_8", IdleOnly: true, PinnedOnly: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestClientFocusPreviousAgentUsesExactPathAndBody(t *testing.T) {
 	if response.Focused || method != http.MethodPost || path != "/v1/agents/prev" {
 		t.Fatalf("response=%#v method=%q path=%q", response, method, path)
 	}
-	if body != `{"source_session":"physical-b","source_zellij_pane_id":"terminal_8","idle_only":true}` {
+	if body != `{"source_session":"physical-b","source_zellij_pane_id":"terminal_8","idle_only":true,"pinned_only":true}` {
 		t.Fatalf("request body = %q", body)
 	}
 }

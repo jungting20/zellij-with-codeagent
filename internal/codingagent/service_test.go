@@ -979,6 +979,73 @@ func TestServiceFocusPreviousAgentSelectsOnlyIdleAgents(t *testing.T) {
 	}
 }
 
+func TestServiceFocusAdjacentAgentSelectsOnlyPinnedAgents(t *testing.T) {
+	tests := []struct {
+		name    string
+		forward bool
+		wantIDs []ID
+	}{
+		{name: "next", forward: true, wantIDs: []ID{"agent-1", "agent-3", "agent-1"}},
+		{name: "previous", wantIDs: []ID{"agent-3", "agent-1", "agent-3"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewMemoryStore(nil)
+			seedFocusRecords(t, store)
+			for _, id := range []ID{"agent-1", "agent-3"} {
+				if _, err := store.SetPinned(id, true); err != nil {
+					t.Fatalf("SetPinned(%q) error = %v", id, err)
+				}
+			}
+			service := NewService(ServiceOptions{RuntimeService: successfulFocusRuntime(), Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
+			request := FocusNextAgentRequest{SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1", PinnedOnly: true}
+
+			for call, wantID := range tt.wantIDs {
+				var response FocusNextAgentResponse
+				var err error
+				if tt.forward {
+					response, err = service.FocusNextAgent(context.Background(), request)
+				} else {
+					response, err = service.FocusPreviousAgent(context.Background(), request)
+				}
+				if err != nil {
+					t.Fatalf("focus call %d error = %v", call+1, err)
+				}
+				if !response.Focused || response.Agent.Agent.ID != wantID {
+					t.Fatalf("focus call %d response = %#v, want focused %q", call+1, response, wantID)
+				}
+			}
+		})
+	}
+}
+
+func TestServiceFocusAdjacentAgentPinnedAndIdleFiltersIntersect(t *testing.T) {
+	store := NewMemoryStore(nil)
+	seedRecordsWithStates(t, store, []State{StateWorking, StateIdle, StateIdle, StateBlocked})
+	for _, id := range []ID{"agent-1", "agent-2", "agent-4"} {
+		if _, err := store.SetPinned(id, true); err != nil {
+			t.Fatalf("SetPinned(%q) error = %v", id, err)
+		}
+	}
+	service := NewService(ServiceOptions{RuntimeService: successfulFocusRuntime(), Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
+	request := FocusNextAgentRequest{
+		SourceZellijSession: "dashboard",
+		SourceZellijPaneID:  "terminal_1",
+		IdleOnly:            true,
+		PinnedOnly:          true,
+	}
+
+	for _, focus := range []func(context.Context, FocusNextAgentRequest) (FocusNextAgentResponse, error){
+		service.FocusNextAgent,
+		service.FocusPreviousAgent,
+	} {
+		response, err := focus(context.Background(), request)
+		if err != nil || !response.Focused || response.Agent.Agent.ID != "agent-2" {
+			t.Fatalf("focus response=%#v error=%v, want only pinned idle agent-2", response, err)
+		}
+	}
+}
+
 func TestServiceFocusNextAgentSelectsOnlyIdleAgents(t *testing.T) {
 	store := NewMemoryStore(nil)
 	seedRecordsWithStates(t, store, []State{StateWorking, StateIdle, StateBlocked, StateIdle})

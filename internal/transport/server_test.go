@@ -72,14 +72,14 @@ func TestServerAgentRoutes(t *testing.T) {
 	}
 
 	next := httptest.NewRecorder()
-	server.ServeHTTP(next, httptest.NewRequest(http.MethodPost, "/v1/agents/next", strings.NewReader(`{"source_session":"physical-b","source_zellij_pane_id":"terminal_8","idle_only":true}`)))
+	server.ServeHTTP(next, httptest.NewRequest(http.MethodPost, "/v1/agents/next", strings.NewReader(`{"source_session":"physical-b","source_zellij_pane_id":"terminal_8","idle_only":true,"pinned_only":true}`)))
 	if next.Code != http.StatusOK {
 		t.Fatalf("next status = %d, want 200; body=%s", next.Code, next.Body.String())
 	}
 	if service.agentNextCalls != 1 {
 		t.Fatalf("FocusNextAgent calls = %d, want 1", service.agentNextCalls)
 	}
-	if service.agentNextReq.SourceZellijSession != "physical-b" || service.agentNextReq.SourceZellijPaneID != "terminal_8" || !service.agentNextReq.IdleOnly {
+	if service.agentNextReq.SourceZellijSession != "physical-b" || service.agentNextReq.SourceZellijPaneID != "terminal_8" || !service.agentNextReq.IdleOnly || !service.agentNextReq.PinnedOnly {
 		t.Fatalf("FocusNextAgent request = %#v", service.agentNextReq)
 	}
 	var nextResponse FocusNextAgentResponse
@@ -91,11 +91,11 @@ func TestServerAgentRoutes(t *testing.T) {
 	}
 
 	previous := httptest.NewRecorder()
-	server.ServeHTTP(previous, httptest.NewRequest(http.MethodPost, "/v1/agents/prev", strings.NewReader(`{"source_session":"physical-b","source_zellij_pane_id":"terminal_8","idle_only":true}`)))
+	server.ServeHTTP(previous, httptest.NewRequest(http.MethodPost, "/v1/agents/prev", strings.NewReader(`{"source_session":"physical-b","source_zellij_pane_id":"terminal_8","idle_only":true,"pinned_only":true}`)))
 	if previous.Code != http.StatusOK || service.agentPreviousCalls != 1 {
 		t.Fatalf("previous status=%d calls=%d body=%s", previous.Code, service.agentPreviousCalls, previous.Body.String())
 	}
-	if service.agentPreviousReq.SourceZellijSession != "physical-b" || service.agentPreviousReq.SourceZellijPaneID != "terminal_8" || !service.agentPreviousReq.IdleOnly {
+	if service.agentPreviousReq.SourceZellijSession != "physical-b" || service.agentPreviousReq.SourceZellijPaneID != "terminal_8" || !service.agentPreviousReq.IdleOnly || !service.agentPreviousReq.PinnedOnly {
 		t.Fatalf("FocusPreviousAgent request = %#v", service.agentPreviousReq)
 	}
 

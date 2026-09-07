@@ -186,7 +186,10 @@ Use the printed absolute path as one identical `file:` plugin URL in
 `load_plugins` and both `MessagePlugin` bindings. Configure the existing
 `zellij-agent` path as
 `executable_path "/Users/in05908_mac/.config/custom-cli/zellij-agent"`; send
-`agent-next` / `all` for `Alt+o` and `agent-next` / `idle-only` for `Alt+p`.
+`agent-next` / `all` for `Alt+o` and `agent-next` / `pinned-only` for `Alt+p`.
+The same plugin also accepts `agent-prev` with `all`, `idle-only`,
+`pinned-only`, or `idle-and-pinned`, delegating to the corresponding
+`zellij-agent agent prev` command. `agent-next` accepts the same four payloads.
 On first load, approve only the one-time `ReadApplicationState` and
 `RunCommands` permission request.
 
@@ -216,13 +219,23 @@ visits all four agents in creation order and wraps from the fourth agent back
 to the first. The cursor is daemon-wide and in-memory, so repeat the check from
 the other session and confirm it advances the same sequence.
 
-Press `Alt+p` repeatedly and confirm it behaves like
-`zellij-agent agent next --idle-only`: it visits only the two idle agents and
-wraps. Change one of those idle agents to `working` and confirm the remaining
-idle agent is selected. Change every agent to a non-idle state, record the
-current focus, and press `Alt+p`; confirm it leaves focus unchanged and
-produces no visible output.
-Then invoke `zellij-agent agent next` and confirm it still advances through all
+Pin at least two agents in the dashboard, then press `Alt+p` repeatedly and
+confirm it behaves like `zellij-agent agent next --pinned-only`: it visits
+only pinned agents and wraps. Then invoke
+`zellij-agent agent next --pinned-only` and
+`zellij-agent agent prev --pinned-only` repeatedly. Confirm
+that only pinned agents are visited in forward and reverse order. Add
+`--idle-only` and confirm the result is restricted to agents that are both
+pinned and idle. Unpin every agent and confirm both commands leave focus
+unchanged without visible output.
+
+Configure or send each `agent-prev` payload through the bridge and compare it
+with its CLI equivalent: `agent prev`, `agent prev --idle-only`,
+`agent prev --pinned-only`, and `agent prev --idle-only --pinned-only`.
+Confirm reverse creation-order traversal, wrapping, filtering, and the no-match
+no-op behavior.
+
+Invoke `zellij-agent agent next` and confirm it still advances through all
 managed agents. Finally, press `Tab` in a normal application pane; it must
 retain the application's normal Tab behavior.
 
