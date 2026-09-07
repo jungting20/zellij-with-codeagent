@@ -2,6 +2,7 @@ package agentdashboard
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +32,7 @@ func TestViewRendersDeterministicGroupedDashboardAtSupportedWidths(t *testing.T)
 	for _, width := range []int{80, 120} {
 		t.Run(string(rune(width)), func(t *testing.T) {
 			m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{SourceSession: "project-alpha"}))
-			m.width, m.height, m.connection, m.loaded, m.lastRefresh = width, 14, "live", true, now
+			m.width, m.height, m.connection, m.loaded, m.lastRefresh = width, 17, "live", true, now
 			m.rows = append([]transport.AgentWithPane(nil), records...)
 			m.selected, m.selectedID = 1, "agent-claude"
 			plain := ansi.Strip(m.View())
@@ -85,7 +86,7 @@ func TestViewGroupsMissingSessionAndTabAsUngrouped(t *testing.T) {
 func TestViewRendersAccessAndDefaultsEmptyAccessToFull(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
-	m.width, m.height, m.connection, m.loaded, m.lastRefresh = 100, 8, "live", true, now
+	m.width, m.height, m.connection, m.loaded, m.lastRefresh = 100, 11, "live", true, now
 	m.rows = []transport.AgentWithPane{
 		viewRecord("agent-read-only", "codex", "idle", "/repo/reviewer", now.Add(-time.Minute)),
 		viewRecord("agent-full", "codex", "working", "/repo/default", now.Add(-time.Minute)),
@@ -112,9 +113,50 @@ func TestViewRendersPinnedSectionMarkerAndSpaceHint(t *testing.T) {
 	}
 
 	plain := ansi.Strip(m.View())
-	for _, want := range []string{"PINNED (1)", "* pinned", "Space pin/unpin"} {
+	for _, want := range []string{"── PINNED (1) ─", "* pinned", "── UNPINNED (1) ─", "normal", "Space pin/unpin"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("view missing %q:\n%s", want, plain)
+		}
+	}
+	if strings.Index(plain, "* pinned") > strings.Index(plain, "── UNPINNED") ||
+		strings.Index(plain, "── UNPINNED") > strings.Index(plain, "normal") {
+		t.Fatalf("agents are outside their sections:\n%s", plain)
+	}
+}
+
+func TestViewKeepsSectionAndSelectionVisibleWhileScrolling(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	for _, pinnedCount := range []int{0, 5, 10} {
+		m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+		m.connection, m.loaded, m.lastRefresh = "live", true, now
+		for index := 0; index < 10; index++ {
+			record := viewRecord(fmt.Sprintf("agent-%d", index), "codex", "idle", fmt.Sprintf("/repo/p-%d", index), now)
+			record.Agent.Pinned = index < pinnedCount
+			m.rows = append(m.rows, record)
+		}
+		for _, width := range []int{20, 80, 120} {
+			for _, height := range []int{6, 8, 14, 24} {
+				m.width, m.height = width, height
+				for selected := range m.rows {
+					m.selected = selected
+					plain := ansi.Strip(m.View())
+					section := fmt.Sprintf("── UNPINNED (%d)", 10-pinnedCount)
+					if selected < pinnedCount {
+						section = fmt.Sprintf("── PINNED (%d)", pinnedCount)
+					}
+					if !strings.Contains(plain, section) || !strings.Contains(lineContaining(plain, "> "), fmt.Sprintf("p-%d", selected)) {
+						t.Fatalf("selection or section hidden (pinned=%d, selected=%d, %dx%d):\n%s", pinnedCount, selected, width, height, plain)
+					}
+					if strings.Count(plain, section) != 1 || len(strings.Split(plain, "\n")) > height {
+						t.Fatalf("duplicated section or overflowing height:\n%s", plain)
+					}
+					for _, line := range strings.Split(plain, "\n") {
+						if ansi.StringWidth(line) > width {
+							t.Fatalf("overflowing width: %q", line)
+						}
+					}
+				}
+			}
 		}
 	}
 }

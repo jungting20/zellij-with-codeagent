@@ -14,16 +14,18 @@ import (
 )
 
 var (
-	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
-	workingStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	blockedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	idleStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
-	unknownStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	selectedStyle = lipgloss.NewStyle().Reverse(true)
-	sessionStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("69"))
-	tabStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("75"))
-	mutedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	titleStyle           = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
+	workingStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	blockedStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	idleStyle            = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	unknownStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	selectedStyle        = lipgloss.NewStyle().Reverse(true)
+	sessionStyle         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("69"))
+	tabStyle             = lipgloss.NewStyle().Foreground(lipgloss.Color("75"))
+	mutedStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	pinnedSectionStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220"))
+	unpinnedSectionStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
+	errorStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 )
 
 func (m Model) View() string {
@@ -47,11 +49,25 @@ func (m Model) View() string {
 		}
 		selected := displayIndexForAgent(displayRows, m.selected)
 		start := viewportStart(selected, len(displayRows), visible)
+		// Keep the section identity visible when its original heading scrolls away.
+		if start > 0 && visible > 1 && !displayRows[start].isSection() {
+			visible--
+			start = viewportStart(selected, len(displayRows), visible)
+			for index := start - 1; index >= 0 && !displayRows[start].isSection(); index-- {
+				if displayRows[index].isSection() {
+					lines = append(lines, sectionView(displayRows[index], width))
+					break
+				}
+			}
+		}
 		for index := start; index < len(displayRows) && index < start+visible; index++ {
 			row := displayRows[index]
 			switch row.kind {
-			case displayPinned:
-				lines = append(lines, sessionStyle.Render(fmt.Sprintf("PINNED (%d)", row.count)))
+			case displayPinned, displayUnpinned:
+				lines = append(lines, sectionView(row, width))
+				continue
+			case displayEmpty:
+				lines = append(lines, mutedStyle.Render("    No agents"))
 				continue
 			case displaySession:
 				lines = append(lines, m.sessionView(row.session, row.count))
@@ -93,9 +109,24 @@ type displayRowKind uint8
 const (
 	displayAgent displayRowKind = iota
 	displayPinned
+	displayUnpinned
+	displayEmpty
 	displaySession
 	displayTab
 )
+
+func (row displayRow) isSection() bool {
+	return row.kind == displayPinned || row.kind == displayUnpinned
+}
+
+func sectionView(row displayRow, width int) string {
+	label, style := "PINNED", pinnedSectionStyle
+	if row.kind == displayUnpinned {
+		label, style = "UNPINNED", unpinnedSectionStyle
+	}
+	heading := fmt.Sprintf("── %s (%d) ", label, row.count)
+	return style.Render(heading + strings.Repeat("─", maxInt(0, width-ansi.StringWidth(heading))))
+}
 
 func (m Model) displayRows() []displayRow {
 	rows := make([]displayRow, 0, len(m.rows)*3)
@@ -103,11 +134,16 @@ func (m Model) displayRows() []displayRow {
 	for start < len(m.rows) && m.rows[start].Agent.Pinned {
 		start++
 	}
-	if start > 0 {
-		rows = append(rows, displayRow{kind: displayPinned, count: start})
-		for index := 0; index < start; index++ {
-			rows = append(rows, displayRow{kind: displayAgent, agentIndex: index})
-		}
+	rows = append(rows, displayRow{kind: displayPinned, count: start})
+	if start == 0 {
+		rows = append(rows, displayRow{kind: displayEmpty})
+	}
+	for index := 0; index < start; index++ {
+		rows = append(rows, displayRow{kind: displayAgent, agentIndex: index})
+	}
+	rows = append(rows, displayRow{kind: displayUnpinned, count: len(m.rows) - start})
+	if start == len(m.rows) {
+		rows = append(rows, displayRow{kind: displayEmpty})
 	}
 	for start < len(m.rows) {
 		session := sessionName(m.rows[start])
