@@ -100,7 +100,7 @@ func TestBuildPlanAutoTestRunsGoTestOnce(t *testing.T) {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
 	script := payload.Tabs[0].Panes[1].Command[2]
-	if !strings.Contains(script, "printf '$ go test ./...\\n'") || !strings.Contains(script, "go test ./...") || !strings.Contains(script, "go test finished with exit=%s") {
+	if !strings.Contains(script, "$ go test ./...") || !strings.Contains(script, "'go' 'test' './...'") || !strings.Contains(script, "finished with exit=%s") {
 		t.Fatalf("test script = %q, want auto go test execution and exit marker", script)
 	}
 }
@@ -227,7 +227,7 @@ func TestBuildPlanAutoTestRunsDetectedCommand(t *testing.T) {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
 	script := payload.Tabs[0].Panes[1].Command[2]
-	if !strings.Contains(script, "printf '$ pnpm test\\n'") || !strings.Contains(script, "'pnpm' 'test'") || !strings.Contains(script, "pnpm test finished with exit=%s") {
+	if !strings.Contains(script, "$ pnpm test") || !strings.Contains(script, "'pnpm' 'test'") || !strings.Contains(script, "finished with exit=%s") {
 		t.Fatalf("test script = %q, want detected pnpm test execution", script)
 	}
 }

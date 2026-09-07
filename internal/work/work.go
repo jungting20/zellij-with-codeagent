@@ -160,10 +160,10 @@ func testScript(autoTest bool, project ProjectDetection) string {
 			resultLabel = displayCommand(project.TestCommand[:2])
 		}
 		return strings.Join([]string{
-			fmt.Sprintf("printf '$ %s\\n'", display),
+			printLine("$ " + display),
 			shellCommand(project.TestCommand),
 			"status=$?",
-			fmt.Sprintf("printf '%s finished with exit=%%s\\n' \"$status\"", resultLabel),
+			"printf '%s finished with exit=%s\\n' " + shellQuote(resultLabel) + " \"$status\"",
 			"exec sh",
 		}, "\n")
 	}

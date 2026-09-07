@@ -14,6 +14,7 @@ const (
 type Bus struct {
 	mu       sync.RWMutex
 	closed   bool
+	done     chan struct{}
 	nextID   int
 	subs     map[int]chan Event
 	bufferN  int
@@ -32,6 +33,7 @@ func NewWithBuffer(buffer int) *Bus {
 		buffer = 1
 	}
 	return &Bus{
+		done:     make(chan struct{}),
 		subs:     make(map[int]chan Event),
 		bufferN:  buffer,
 		historyN: defaultHistory,
@@ -54,6 +56,7 @@ func (b *Bus) Subscribe(ctx context.Context) (<-chan Event, func()) {
 	b.subs[id] = ch
 	b.mu.Unlock()
 
+	unregistered := make(chan struct{})
 	cancelOnce := sync.Once{}
 	unregister := func() {
 		cancelOnce.Do(func() {
@@ -63,12 +66,17 @@ func (b *Bus) Subscribe(ctx context.Context) (<-chan Event, func()) {
 				close(c)
 			}
 			b.mu.Unlock()
+			close(unregistered)
 		})
 	}
 
 	go func() {
-		<-ctx.Done()
-		unregister()
+		select {
+		case <-ctx.Done():
+			unregister()
+		case <-unregistered:
+		case <-b.done:
+		}
 	}()
 
 	return ch, unregister
@@ -123,6 +131,7 @@ func (b *Bus) Close() {
 		return
 	}
 	b.closed = true
+	close(b.done)
 	for id, ch := range b.subs {
 		close(ch)
 		delete(b.subs, id)

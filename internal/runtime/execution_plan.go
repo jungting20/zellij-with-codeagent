@@ -234,10 +234,9 @@ func executionPlanCommand(spec ExecutionPlanPaneSpec) []string {
 
 // DefaultExecutionPlanPaneCommand returns a shell that prints a readiness marker.
 func DefaultExecutionPlanPaneCommand(paneID string) []string {
-	script := fmt.Sprintf(`pane=%q
-printf 'agentd_execution_plan_ready:%%s\n' "$pane"
-exec sh`, paneID)
-	return []string{"sh", "-lc", script}
+	const script = `printf 'agentd_execution_plan_ready:%s\n' "$1"
+exec sh`
+	return []string{"sh", "-lc", script, "agentd-execution-plan", paneID}
 }
 
 func (s *Service) rollbackExecutionPlan(ctx context.Context, created []createdExecutionPlanPane) error {

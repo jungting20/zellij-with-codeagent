@@ -142,7 +142,7 @@ func TestRunSubmitsGeneratedPlan(t *testing.T) {
 	if client.payload.Session != "work-command" || len(client.payload.Tabs[0].Panes) != 5 {
 		t.Fatalf("payload = %#v, want submitted work-command plan", client.payload)
 	}
-	if !strings.Contains(client.payload.Tabs[0].Panes[1].Command[2], "go test finished with exit=%s") {
+	if !strings.Contains(client.payload.Tabs[0].Panes[1].Command[2], "finished with exit=%s") {
 		t.Fatalf("test command = %q, want auto-test marker", client.payload.Tabs[0].Panes[1].Command[2])
 	}
 	firstLine, _, _ := strings.Cut(stdout.String(), "\n")

@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -14,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -258,36 +258,41 @@ func (c *Client) streamEvents(ctx context.Context, types []string) (*EventStream
 		return nil, decodeClientError(response)
 	}
 
+	streamCtx, cancel := context.WithCancel(ctx)
+	closeStream := sync.OnceValue(func() error {
+		cancel()
+		return response.Body.Close()
+	})
 	events := make(chan Event)
 	errs := make(chan error, 1)
 	go func() {
 		defer close(events)
 		defer close(errs)
-		defer response.Body.Close()
+		defer closeStream()
 
-		scanner := bufio.NewScanner(response.Body)
-		for scanner.Scan() {
+		// Decode complete events without Scanner's 64 KiB token limit.
+		decoder := json.NewDecoder(response.Body)
+		for {
 			var event Event
-			if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-				errs <- err
+			if err := decoder.Decode(&event); err != nil {
+				if !errors.Is(err, io.EOF) {
+					errs <- err
+				}
 				return
 			}
 			select {
 			case events <- event:
-			case <-ctx.Done():
-				errs <- ctx.Err()
+			case <-streamCtx.Done():
+				errs <- streamCtx.Err()
 				return
 			}
-		}
-		if err := scanner.Err(); err != nil {
-			errs <- err
 		}
 	}()
 
 	return &EventStream{
 		Events: events,
 		Errors: errs,
-		Close:  response.Body.Close,
+		Close:  closeStream,
 	}, nil
 }
 
