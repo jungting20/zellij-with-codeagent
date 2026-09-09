@@ -373,24 +373,28 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 		m.requeueWithoutPane(ctx, slot)
 		return true
 	}
-	prepareCtx, cancel := context.WithTimeout(ctx, m.startupTimeout)
-	worktree, prepareErr := m.worktrees.Prepare(prepareCtx, m.root, ticket)
-	cancel()
-	if prepareErr != nil {
-		m.logTicketf("worktree", ticket, "branch=%s failed: %v", ticket.WorktreeBranch, prepareErr)
-		m.requeueWithoutPane(ctx, slot)
-		return true
-	}
-	if strings.TrimSpace(worktree) == "" {
-		m.logTicketf("worktree", ticket, "branch=%s failed: empty worktree path", ticket.WorktreeBranch)
-		m.requeueWithoutPane(ctx, slot)
-		return true
+	workingDirectory := m.root
+	if ticket.Worktree {
+		prepareCtx, cancel := context.WithTimeout(ctx, m.startupTimeout)
+		worktree, prepareErr := m.worktrees.Prepare(prepareCtx, m.root, ticket)
+		cancel()
+		if prepareErr != nil {
+			m.logTicketf("worktree", ticket, "branch=%s failed: %v", ticket.WorktreeBranch, prepareErr)
+			m.requeueWithoutPane(ctx, slot)
+			return true
+		}
+		if strings.TrimSpace(worktree) == "" {
+			m.logTicketf("worktree", ticket, "branch=%s failed: empty worktree path", ticket.WorktreeBranch)
+			m.requeueWithoutPane(ctx, slot)
+			return true
+		}
+		workingDirectory = worktree
 	}
 
 	req := transport.CreatePaneRequest{
 		ID: slot.paneID, TaskID: m.taskID, ZellijSession: m.zellijSession,
 		Role: "coding-agent", Name: workerPaneName(ticket), SameTabAsPaneID: m.anchorPaneID,
-		Command: []string{m.roleBin, "role", "coding-agent", "--agent", ticket.Agent, "--yolo", worktree, "--", slot.prompt}, CWD: worktree,
+		Command: []string{m.roleBin, "role", "coding-agent", "--agent", ticket.Agent, "--yolo", workingDirectory, "--", slot.prompt}, CWD: workingDirectory,
 	}
 	slot.createRequest = req
 	createCtx, cancel := context.WithTimeout(ctx, m.startupTimeout)

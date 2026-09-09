@@ -223,6 +223,7 @@ func runAdd(ctx context.Context, store *ticketworker.Store, args []string, stdou
 	title := flags.String("title", "", "ticket title")
 	summary := flags.String("summary", "", "ticket summary")
 	worktreeBranch := flags.String("worktree-branch", "", "worktree branch name")
+	worktree := flags.Bool("worktree", false, "run the ticket in a dedicated worktree")
 	agent := flags.String("agent", "codex", "coding agent kind")
 	prompt := flags.String("prompt", "", "coding-agent prompt")
 	jsonOutput := flags.Bool("json", false, "write JSON")
@@ -239,6 +240,7 @@ func runAdd(ctx context.Context, store *ticketworker.Store, args []string, stdou
 		Title:          *title,
 		Summary:        *summary,
 		WorktreeBranch: *worktreeBranch,
+		Worktree:       *worktree,
 		Agent:          *agent,
 		Prompt:         *prompt,
 	})
@@ -364,7 +366,7 @@ func reportTicket(stdout, stderr io.Writer, jsonOutput bool, value ticketworker.
 		}
 		return ExitOK
 	}
-	if _, err := fmt.Fprintf(stdout, "ID: %d\nStatus: %s\nTitle: %s\nSummary: %s\nSpec: %s\nPlan: %s\nWorktree branch: %s\nAgent: %s\nPrompt:\n%s\n", value.ID, value.Status, value.Title, value.Summary, value.SpecPath, value.PlanPath, value.WorktreeBranch, value.Agent, value.Prompt); err != nil {
+	if _, err := fmt.Fprintf(stdout, "ID: %d\nStatus: %s\nTitle: %s\nSummary: %s\nSpec: %s\nPlan: %s\nWorktree: %t\nWorktree branch: %s\nAgent: %s\nPrompt:\n%s\n", value.ID, value.Status, value.Title, value.Summary, value.SpecPath, value.PlanPath, value.Worktree, value.WorktreeBranch, value.Agent, value.Prompt); err != nil {
 		return reportError(stderr, false, fmt.Errorf("write output: %w", err))
 	}
 	return ExitOK
@@ -394,12 +396,12 @@ func reportTickets(stdout, stderr io.Writer, jsonOutput, noPrompt bool, values [
 	}
 	for _, value := range values {
 		if noPrompt {
-			if _, err := fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\t%s\t%s\n", value.ID, value.Status, value.Agent, value.Title, value.WorktreeBranch, value.PlanPath); err != nil {
+			if _, err := fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\t%t\t%s\t%s\n", value.ID, value.Status, value.Agent, value.Title, value.Worktree, value.WorktreeBranch, value.PlanPath); err != nil {
 				return reportError(stderr, false, fmt.Errorf("write output: %w", err))
 			}
 			continue
 		}
-		if _, err := fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n", value.ID, value.Status, value.Agent, value.Title, value.WorktreeBranch, value.PlanPath, escapeListField(value.Prompt)); err != nil {
+		if _, err := fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\t%t\t%s\t%s\t%s\n", value.ID, value.Status, value.Agent, value.Title, value.Worktree, value.WorktreeBranch, value.PlanPath, escapeListField(value.Prompt)); err != nil {
 			return reportError(stderr, false, fmt.Errorf("write output: %w", err))
 		}
 	}

@@ -92,6 +92,35 @@ func TestManagerRequeuesTicketWhenWorktreePreparationFails(t *testing.T) {
 	}
 }
 
+func TestManagerRunsWithoutWorktreeFromRepositoryRoot(t *testing.T) {
+	ticket := managerTicket(43)
+	ticket.Worktree = false
+	store := &fakeManagerStore{ready: []Ticket{ticket}}
+	client := newFakeManagerClient()
+	client.streams = []*fakeEventStream{newFakeEventStream()}
+	preparer := &countingWorktreePreparer{}
+	manager := newTestManager(t, store, client, 1)
+	manager.worktrees = preparer
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runManager(ctx, manager)
+	waitFor(t, func() bool { return len(client.created()) == 1 })
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() shutdown error = %v", err)
+	}
+	if preparer.calls != 0 {
+		t.Fatalf("worktree Prepare calls = %d, want 0", preparer.calls)
+	}
+	req := client.created()[0]
+	if req.CWD != "/repo" {
+		t.Fatalf("CWD = %q, want repository root", req.CWD)
+	}
+	if got := req.Command[6]; got != "/repo" {
+		t.Fatalf("coding-agent path = %q, want repository root", got)
+	}
+}
+
 func TestManagerRejectsWrongAnchorIdentityAndDoesNotClaim(t *testing.T) {
 	for name, identity := range map[string][2]string{
 		"wrong task":    {"other-task", "physical-a"},
@@ -1366,7 +1395,14 @@ func runManager(ctx context.Context, manager *Manager) <-chan error {
 }
 
 func managerTicket(id int64) Ticket {
-	return Ticket{ID: id, Title: "Ticket", Summary: "Summary", SpecPath: "docs/superpowers/specs/t-design.md", PlanPath: "docs/superpowers/plans/t.md", WorktreeBranch: "ticket/" + strconv.FormatInt(id, 10), Agent: "codex", Prompt: "Implement ticket.", Status: StatusInProgress}
+	return Ticket{ID: id, Title: "Ticket", Summary: "Summary", SpecPath: "docs/superpowers/specs/t-design.md", PlanPath: "docs/superpowers/plans/t.md", WorktreeBranch: "ticket/" + strconv.FormatInt(id, 10), Worktree: true, Agent: "codex", Prompt: "Implement ticket.", Status: StatusInProgress}
+}
+
+type countingWorktreePreparer struct{ calls int }
+
+func (f *countingWorktreePreparer) Prepare(_ context.Context, root string, ticket Ticket) (string, error) {
+	f.calls++
+	return root + "/.worktrees/ticket-" + strconv.FormatInt(ticket.ID, 10), nil
 }
 
 type fakeWorktreePreparer struct{ err error }

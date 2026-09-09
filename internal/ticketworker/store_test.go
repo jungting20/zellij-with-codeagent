@@ -117,6 +117,32 @@ func TestAddDefaultsAndValidatesAgent(t *testing.T) {
 	}
 }
 
+func TestAddDefaultsWorktreeToFalseAndPersistsSelection(t *testing.T) {
+	store, _ := newTestStore(t)
+	withoutWorktree, err := store.Add(context.Background(), CreateInput{
+		Title: "Shared checkout", Summary: "Use repository root", WorktreeBranch: "ticket/shared", Prompt: "Implement.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withoutWorktree.Worktree {
+		t.Fatal("Worktree = true, want false by default")
+	}
+	withWorktree, err := store.Add(context.Background(), CreateInput{
+		Title: "Isolated checkout", Summary: "Use worktree", WorktreeBranch: "ticket/isolated", Worktree: true, Prompt: "Implement.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(context.Background(), withWorktree.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Worktree {
+		t.Fatal("Get().Worktree = false, want true")
+	}
+}
+
 func TestAddRejectsInvalidPrompt(t *testing.T) {
 	store, root := newTestStore(t)
 	tests := []struct {
@@ -293,6 +319,43 @@ PRAGMA user_version = 4;`)
 	}
 }
 
+func TestOpenMigratesVersion5TicketsToDefaultWorktreeFalse(t *testing.T) {
+	store, root := newTestStore(t)
+	created, err := store.Add(context.Background(), CreateInput{
+		Title: "Existing", Summary: "Version five ticket", WorktreeBranch: "ticket/existing", Worktree: true, Prompt: "Implement.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("ALTER TABLE tickets DROP COLUMN worktree"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("PRAGMA user_version = 5"); err != nil {
+		t.Fatal(err)
+	}
+	databasePath := filepath.Join(root, ".local", "tickets.db")
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := Open(context.Background(), root, databasePath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+	got, err := migrated.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Worktree {
+		t.Fatal("migrated Worktree = true, want false")
+	}
+	var version int
+	if err := migrated.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != currentSchemaVersion {
+		t.Fatalf("schema version = %d, error = %v; want %d", version, err, currentSchemaVersion)
+	}
+}
+
 func TestAddRequiresAndTrimsWorktreeBranch(t *testing.T) {
 	store, root := newTestStore(t)
 	spec, plan := writeArtifacts(t, root, "worktree-branch")
@@ -332,7 +395,7 @@ func TestOpenRejectsUnsupportedFutureSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec("PRAGMA user_version = 6"); err != nil {
+	if _, err := store.db.Exec("PRAGMA user_version = 7"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -341,7 +404,7 @@ func TestOpenRejectsUnsupportedFutureSchemaVersion(t *testing.T) {
 
 	if _, err := Open(context.Background(), root, databasePath, func() time.Time { return fixedNow }); err == nil {
 		t.Fatal("Open() error = nil, want unsupported future schema rejection")
-	} else if got, want := err.Error(), "unsupported ticket schema version 6"; got != want {
+	} else if got, want := err.Error(), "unsupported ticket schema version 7"; got != want {
 		t.Fatalf("Open() error = %q, want %q", got, want)
 	}
 }

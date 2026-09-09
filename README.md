@@ -273,15 +273,18 @@ Register a ticket directly:
   --title "Add search" \
   --summary "Implement indexed search" \
   --worktree-branch feat/search \
+  --worktree \
   --agent claude \
   --prompt $'Implement indexed search.\nRun the complete test suite.'
 ```
 
-The worktree branch name is required and used when the ticket starts. The
-required prompt is stored with the ticket and used as the coding-agent
-instruction. The manager appends its completion-marker instruction
-automatically. `--agent` selects `codex`, `claude`, `gemini`, `cursor`, or
-`hermes`; it defaults to `codex` when omitted. Queue and lifecycle commands are:
+The worktree branch name is required. Pass `--worktree` to run the ticket in a
+dedicated worktree on that branch; the option defaults to `false`, so tickets
+otherwise run from the repository root. The required prompt is stored with the
+ticket and used as the coding-agent instruction. The manager appends its
+completion-marker instruction automatically. `--agent` selects `codex`,
+`claude`, `gemini`, `cursor`, or `hermes`; it defaults to `codex` when omitted.
+Queue and lifecycle commands are:
 
 ```bash
 ./bin/zellij-agent ticket-worker list [--status ready] [--no-prompt]
@@ -300,13 +303,14 @@ workers share the bottom 50% side by side; Zellij reflows that row whenever a
 worker opens or closes. A borderless `zellij:compact-bar` pane remains at the
 bottom in both layouts. The manager claims the oldest `ready` tickets, starts
 up to `max_workers` coding-agent panes, and continues polling for new tickets.
-Before starting each pane, it creates a persistent Git worktree at
-`.worktrees/ticket-<ID>` on the ticket's `worktree_branch`. A missing branch is
-created from the repository's current `HEAD`; an existing branch is attached
-when it is not already checked out elsewhere. A matching existing worktree is
-reused after retries or manager restarts. Worktrees and branches are preserved
-after completion for review and integration. Preparation failures requeue the
-ticket without starting a coding-agent pane.
+Tickets without the `worktree` option run directly from the repository root.
+For tickets registered with `--worktree`, the manager creates a persistent Git
+worktree at `.worktrees/ticket-<ID>` on the ticket's `worktree_branch`. A
+missing branch is created from the repository's current `HEAD`; an existing
+branch is attached when it is not already checked out elsewhere. A matching
+existing worktree is reused after retries or manager restarts. Worktrees and
+branches are preserved after completion for review and integration.
+Preparation failures requeue the ticket without starting a coding-agent pane.
 Every coding-agent created by the manager runs in YOLO mode using the agent
 stored on that ticket. The complete ticket instruction, including its
 completion marker, is passed to the selected coding agent as its initial CLI

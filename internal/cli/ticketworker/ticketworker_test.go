@@ -280,6 +280,19 @@ func TestAddJSONRegistersReadyTicketFromNestedDirectory(t *testing.T) {
 	if got.WorktreeBranch != "ticket/test" {
 		t.Fatalf("worktree branch = %q", got.WorktreeBranch)
 	}
+	if got.Worktree {
+		t.Fatal("worktree = true, want false by default")
+	}
+}
+
+func TestAddStoresWorktreeOption(t *testing.T) {
+	h := newHarness(t)
+	if got := h.run(t, "add", "--title", "Isolated", "--summary", "Use worktree", "--worktree-branch", "ticket/isolated", "--worktree", "--prompt", "Implement.", "--json"); got != ExitOK {
+		t.Fatalf("add exit = %d, stderr = %s", got, h.stderr.String())
+	}
+	if !decodeTicket(t, h.stdout.Bytes()).Worktree {
+		t.Fatal("worktree = false, want true")
+	}
 }
 
 func TestAddRegistersMultipleTicketsWithoutArtifacts(t *testing.T) {
@@ -376,7 +389,7 @@ func TestTicketJSONUsesExactSnakeCaseKeys(t *testing.T) {
 		t.Fatalf("decode raw ticket JSON %q: %v", h.stdout.Bytes(), err)
 	}
 	wantKeys := []string{
-		"id", "title", "summary", "spec_path", "plan_path", "worktree_branch", "agent", "prompt", "status",
+		"id", "title", "summary", "spec_path", "plan_path", "worktree_branch", "worktree", "agent", "prompt", "status",
 		"created_at", "updated_at", "started_at", "completed_at", "cancelled_at",
 	}
 	if len(raw) != len(wantKeys) {
@@ -554,7 +567,7 @@ func TestHumanListIncludesEscapedPromptColumn(t *testing.T) {
 	if got := h.run(t, "list"); got != ExitOK {
 		t.Fatalf("list exit = %d, stderr = %s", got, h.stderr.String())
 	}
-	if got, want := h.stdout.String(), "1\tready\tcodex\tPrompt title\tticket/test\t\t첫째\\\\literal\\n둘째\\t셋째\\r끝\n"; got != want {
+	if got, want := h.stdout.String(), "1\tready\tcodex\tPrompt title\tfalse\tticket/test\t\t첫째\\\\literal\\n둘째\\t셋째\\r끝\n"; got != want {
 		t.Fatalf("list output = %q, want %q", got, want)
 	}
 }
@@ -567,7 +580,7 @@ func TestHumanListNoPromptOmitsPromptColumn(t *testing.T) {
 	if got := h.run(t, "list", "--no-prompt"); got != ExitOK {
 		t.Fatalf("list exit = %d, stderr = %s", got, h.stderr.String())
 	}
-	if got, want := h.stdout.String(), "1\tready\tcodex\tHidden prompt\tticket/test\t\n"; got != want {
+	if got, want := h.stdout.String(), "1\tready\tcodex\tHidden prompt\tfalse\tticket/test\t\n"; got != want {
 		t.Fatalf("list output = %q, want %q", got, want)
 	}
 }
@@ -603,7 +616,7 @@ func TestHumanOutputContract(t *testing.T) {
 	if got := h.run(t, "show", "1"); got != ExitOK {
 		t.Fatalf("show exit = %d, stderr = %s", got, h.stderr.String())
 	}
-	for _, value := range []string{"ID: 1", "Status: ready", "Title: Human title", "Summary: Human summary", "Spec: " + created.SpecPath, "Plan: " + created.PlanPath, "Worktree branch: " + created.WorktreeBranch, "Agent: codex", "Prompt:\n" + created.Prompt} {
+	for _, value := range []string{"ID: 1", "Status: ready", "Title: Human title", "Summary: Human summary", "Spec: " + created.SpecPath, "Plan: " + created.PlanPath, "Worktree: false", "Worktree branch: " + created.WorktreeBranch, "Agent: codex", "Prompt:\n" + created.Prompt} {
 		if !strings.Contains(h.stdout.String(), value) {
 			t.Fatalf("show output %q does not contain %q", h.stdout.String(), value)
 		}
@@ -612,7 +625,7 @@ func TestHumanOutputContract(t *testing.T) {
 	if got := h.run(t, "list"); got != ExitOK {
 		t.Fatalf("list exit = %d, stderr = %s", got, h.stderr.String())
 	}
-	if got, want := h.stdout.String(), "1\tready\tcodex\tHuman title\tticket/test\t\tImplement Human title.\n"; got != want {
+	if got, want := h.stdout.String(), "1\tready\tcodex\tHuman title\tfalse\tticket/test\t\tImplement Human title.\n"; got != want {
 		t.Fatalf("list output = %q, want %q", got, want)
 	}
 }

@@ -43,6 +43,7 @@ type Ticket struct {
 	SpecPath       string     `json:"spec_path"`
 	PlanPath       string     `json:"plan_path"`
 	WorktreeBranch string     `json:"worktree_branch"`
+	Worktree       bool       `json:"worktree"`
 	Agent          string     `json:"agent"`
 	Prompt         string     `json:"prompt"`
 	Status         Status     `json:"status"`
@@ -59,6 +60,7 @@ type CreateInput struct {
 	SpecPath       string
 	PlanPath       string
 	WorktreeBranch string
+	Worktree       bool
 	Agent          string
 	Prompt         string
 }
