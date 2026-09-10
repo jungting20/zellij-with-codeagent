@@ -1457,3 +1457,12 @@ func TestServerSessionsAndTabs(t *testing.T) {
 		t.Fatalf("focus session response = %#v", focused)
 	}
 }
+
+func (f *fakeRuntimeService) SetAgentTaskAlias(_ context.Context, req codingagent.SetAgentTaskAliasRequest) (codingagent.SetAgentTaskAliasResponse, error) {
+	if !req.TaskAlias.Valid() {
+		return codingagent.SetAgentTaskAliasResponse{}, codingagent.ErrInvalidTaskAlias
+	}
+	record := fakeAgentResponse(codingagent.KindCodex, req.AgentID).Agent.Agent
+	record.TaskAlias = req.TaskAlias
+	return codingagent.SetAgentTaskAliasResponse{Agent: record}, nil
+}

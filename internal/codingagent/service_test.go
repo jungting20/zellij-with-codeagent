@@ -1660,3 +1660,41 @@ func TestServiceStartAgentDoesNotMutateExtraArgs(t *testing.T) {
 		t.Fatalf("ExtraArgs mutated: %v", extra)
 	}
 }
+
+func TestTaskAliasEnumPersistsWithoutChangingLifecycle(t *testing.T) {
+	store := NewMemoryStore(nil)
+	now := time.Unix(10, 0)
+	record := Record{ID: "agent-1", Kind: KindCodex, PaneID: "pane-1", State: StateIdle, Pinned: true, CreatedAt: now, StateChangedAt: now}
+	if _, err := store.Create(record); err != nil {
+		t.Fatal(err)
+	}
+	runtimeService := &serviceFakeRuntime{listResponse: runtime.ListPanesResponse{Panes: []runtime.Pane{{ID: "pane-1"}}}}
+	service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
+	for _, alias := range TaskAliases() {
+		response, err := service.SetAgentTaskAlias(context.Background(), SetAgentTaskAliasRequest{AgentID: record.ID, TaskAlias: alias})
+		if err != nil || response.Agent.TaskAlias != alias {
+			t.Fatalf("set %q: %#v %v", alias, response, err)
+		}
+		if _, err := store.UpdateState(record.ID, StateUpdate{State: StateIdle}); err != nil {
+			t.Fatal(err)
+		}
+		listed, err := service.ListAgents(context.Background())
+		if err != nil || len(listed.Agents) != 1 {
+			t.Fatalf("list: %#v %v", listed, err)
+		}
+		got := listed.Agents[0].Agent
+		if got.TaskAlias != alias || !got.Pinned || !got.StateChangedAt.Equal(now) {
+			t.Fatalf("state update lost alias or altered lifecycle: %#v", got)
+		}
+	}
+	if _, err := service.SetAgentTaskAlias(context.Background(), SetAgentTaskAliasRequest{AgentID: record.ID, TaskAlias: "free text"}); !errors.Is(err, ErrInvalidTaskAlias) {
+		t.Fatalf("invalid alias error: %v", err)
+	}
+	if _, err := service.SetAgentTaskAlias(context.Background(), SetAgentTaskAliasRequest{AgentID: "missing", TaskAlias: TaskAliasReview}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing agent error: %v", err)
+	}
+	response, err := service.SetAgentTaskAlias(context.Background(), SetAgentTaskAliasRequest{AgentID: record.ID, TaskAlias: TaskAliasNone})
+	if err != nil || response.Agent.TaskAlias != "" {
+		t.Fatal("clear alias failed")
+	}
+}

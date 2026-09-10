@@ -977,3 +977,11 @@ func started(id, kind, pane string, command []string, cwd string) transport.Star
 		Pane:  transport.Pane{ID: pane, Command: append([]string(nil), command...), CWD: cwd},
 	}}
 }
+
+func (*testClient) SetAgentTaskAlias(context.Context, string, transport.SetAgentTaskAliasRequest) (transport.SetAgentTaskAliasResponse, error) {
+	return transport.SetAgentTaskAliasResponse{}, nil
+}
+
+func (*serviceBackedClient) SetAgentTaskAlias(context.Context, string, transport.SetAgentTaskAliasRequest) (transport.SetAgentTaskAliasResponse, error) {
+	return transport.SetAgentTaskAliasResponse{}, nil
+}

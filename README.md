@@ -111,10 +111,28 @@ the selected agent's pane and terminate its process. This key is inactive
 in the pinned area. Below 100 terminal columns, only the
 active area is shown, with the same area-switching keys.
 
-Use `j`/`k` or the up/down arrow keys to select an agent within an area, `Enter` to switch to its
+Use `1`–`9` to select the correspondingly numbered agent across both areas,
+starting with pinned agents and continuing through unpinned agents. Selecting
+a number also activates its area. Group headings do not count, and scrolling
+does not renumber entries. Use `j`/`k` or the up/down arrow
+keys to reach the remaining agents. Press `Enter` to switch to the selected agent's
 session and focus its pane, `R` to refresh, and `q` to quit. The dashboard
 shows the detected agent state (`idle`, `working`, `blocked`, or `unknown`),
 agent kind, project, and time in the current state.
+
+Press `a` on an agent in either area to choose a fixed task alias:
+미지정, 구현, 버그 수정, 리팩터링, 테스트, 리뷰, 문서, or 조사.
+Use up/down or `j`/`k`, then `Enter` to apply or `Esc` to cancel. Choosing
+미지정 clears the alias. The alias appears before the project name, independently
+of the detected agent state, and is retained across dashboard refreshes and
+reopening while the daemon is running. Like pins, aliases are stored in daemon
+memory and reset when the daemon restarts.
+
+The bottom area shows the latest three state changes observed while the
+dashboard is open, such as `api-server: 작업 중 → 입력 대기 · 2분 전`.
+Events and polling updates are deduplicated, and history survives refreshes
+and agent removal for the current dashboard session. Short windows show fewer
+entries to keep the selected agent visible.
 
 To cycle directly between managed agents, run `zellij-agent agent next` or
 `zellij-agent agent prev` from an attached Zellij pane. By default they visit

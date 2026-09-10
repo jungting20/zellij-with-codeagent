@@ -34,6 +34,10 @@ type fakeClient struct {
 	closeCalls    int
 	closePaneID   string
 	closeErr      error
+	aliasCalls    int
+	aliasAgentID  string
+	aliasRequest  transport.SetAgentTaskAliasRequest
+	aliasErr      error
 }
 
 func (f *fakeClient) ClosePane(_ context.Context, paneID string) (transport.ClosePaneResponse, error) {
@@ -596,4 +600,56 @@ func TestModelStopIgnoresPinnedEmptyAndBusyAreas(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestModelNumberKeysSelectAcrossAreas(t *testing.T) {
+	client := &fakeClient{}
+	m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+	var rows []transport.AgentWithPane
+	for i := 0; i < 10; i++ {
+		row := record(string(rune('a'+i)), "codex", "idle", time.Unix(int64(i), 0))
+		row.Agent.Pinned = i < 3
+		rows = append(rows, row)
+	}
+	m = applyRefresh(t, m, rows)
+	for _, key := range []rune{'1', '9', '2', '8', '3', '4', '5', '6', '7'} {
+		next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		m = concreteModel(t, next)
+		want := string('a' + key - '1')
+		if cmd != nil || m.selectedID != want || m.focusPinned != (key <= '3') || m.quitting {
+			t.Fatalf("key=%c selection=%q pinned=%t", key, m.selectedID, m.focusPinned)
+		}
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.selectedID != "c" {
+		t.Fatalf("pin selection lost: %q", m.selectedID)
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.selectedID != "g" {
+		t.Fatalf("normal selection lost: %q", m.selectedID)
+	}
+	if client.focusCalls != 0 || client.closeCalls != 0 || client.pinCalls != 0 {
+		t.Fatal("number key invoked an action")
+	}
+}
+
+func TestModelNumberKeysIgnoreMissingEntries(t *testing.T) {
+	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	for _, rows := range [][]transport.AgentWithPane{nil, {record("a", "codex", "idle", time.Now())}} {
+		m = applyRefresh(t, m, rows)
+		before := m.selectedID
+		for _, key := range []rune{'0', '2', '9'} {
+			next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+			m = concreteModel(t, next)
+			if cmd != nil || m.selectedID != before {
+				t.Fatalf("missing number %c changed selection", key)
+			}
+		}
+	}
+}
+
+func (f *fakeClient) SetAgentTaskAlias(_ context.Context, agentID string, request transport.SetAgentTaskAliasRequest) (transport.SetAgentTaskAliasResponse, error) {
+	f.aliasCalls++
+	f.aliasAgentID, f.aliasRequest = agentID, request
+	return transport.SetAgentTaskAliasResponse{Agent: transport.Agent{ID: agentID, TaskAlias: request.TaskAlias}}, f.aliasErr
 }

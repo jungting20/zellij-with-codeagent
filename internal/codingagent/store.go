@@ -128,6 +128,21 @@ func (s *memoryStore) SetPinned(id ID, pinned bool) (Record, error) {
 	return record, nil
 }
 
+func (s *memoryStore) SetTaskAlias(id ID, alias TaskAlias) (Record, error) {
+	if !alias.Valid() {
+		return Record{}, fmt.Errorf("%w: %q", ErrInvalidTaskAlias, alias)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.byID[id]
+	if !ok {
+		return Record{}, fmt.Errorf("%w: %q", ErrNotFound, id)
+	}
+	record.TaskAlias = alias
+	s.byID[id] = record
+	return record, nil
+}
+
 func (s *memoryStore) Delete(id ID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -141,6 +156,9 @@ func (s *memoryStore) Delete(id ID) error {
 }
 
 func validateRecord(record Record) error {
+	if !record.TaskAlias.Valid() {
+		return fmt.Errorf("%w: %q", ErrInvalidTaskAlias, record.TaskAlias)
+	}
 	if record.ID == "" || record.Kind == "" || record.PaneID == "" {
 		return fmt.Errorf("%w: id, kind, and pane id are required", ErrInvalidRecord)
 	}

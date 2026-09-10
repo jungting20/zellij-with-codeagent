@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"zellij-with-codeagent/internal/codingagent"
 )
 
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
@@ -41,12 +42,27 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, BadRequest("agent id and action are required"), http.StatusBadRequest)
 		return
 	}
-	if action != "focus" && action != "pin" {
+	if action != "focus" && action != "pin" && action != "task-alias" {
 		writeAPIError(w, APIError{Code: CodeNotFound, Message: "agent action not found"}, http.StatusNotFound)
 		return
 	}
 	if r.Method != http.MethodPost {
 		writeAPIError(w, BadRequest(action+" requires POST"), http.StatusMethodNotAllowed)
+		return
+	}
+	if action == "task-alias" {
+		var request SetAgentTaskAliasRequest
+		if !decodeRequest(w, r, &request) {
+			return
+		}
+		ctx, cancel := s.requestContext(r)
+		defer cancel()
+		response, err := s.service.SetAgentTaskAlias(ctx, codingagent.SetAgentTaskAliasRequest{AgentID: codingagent.ID(agentID), TaskAlias: codingagent.TaskAlias(request.TaskAlias)})
+		if err != nil {
+			writeRuntimeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, SetAgentTaskAliasResponse{Agent: AgentFromCodingAgent(response.Agent)})
 		return
 	}
 	if action == "pin" {

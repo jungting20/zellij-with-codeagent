@@ -124,6 +124,14 @@ type FocusAgentResponse struct {
 	Agent AgentWithPane `json:"agent"`
 }
 
+type SetAgentTaskAliasRequest struct {
+	TaskAlias string `json:"task_alias"`
+}
+
+type SetAgentTaskAliasResponse struct {
+	Agent Agent `json:"agent"`
+}
+
 type SetAgentPinnedRequest struct {
 	Pinned bool `json:"pinned"`
 }
@@ -164,6 +172,7 @@ type Agent struct {
 	PaneID         string    `json:"pane_id"`
 	State          string    `json:"state"`
 	Pinned         bool      `json:"pinned"`
+	TaskAlias      string    `json:"task_alias,omitempty"`
 	StateReason    string    `json:"state_reason,omitempty"`
 	MatchedRule    string    `json:"matched_rule,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
@@ -398,6 +407,7 @@ func AgentFromCodingAgent(record codingagent.Record) Agent {
 		PaneID:         string(record.PaneID),
 		State:          string(record.State),
 		Pinned:         record.Pinned,
+		TaskAlias:      string(record.TaskAlias),
 		StateReason:    record.StateReason,
 		MatchedRule:    record.MatchedRule,
 		CreatedAt:      record.CreatedAt,

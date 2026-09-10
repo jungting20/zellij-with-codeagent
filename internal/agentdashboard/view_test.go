@@ -307,3 +307,57 @@ func TestViewAreasScrollIndependentlyAndSurviveResize(t *testing.T) {
 		t.Fatalf("resize lost area viewports:\n%s", plain)
 	}
 }
+
+func TestViewNumbersMatchAreaSelectionAcrossScrollAndResize(t *testing.T) {
+	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	var rows []transport.AgentWithPane
+	for i := 0; i < 10; i++ {
+		row := viewRecord(fmt.Sprintf("a%d", i), "codex", "idle", fmt.Sprintf("/repo/project%d", i), time.Unix(int64(i), 0))
+		rows = append(rows, row)
+	}
+	m = applyRefresh(t, m, rows)
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'9'}})
+	for _, width := range []int{20, 80, 120} {
+		m = update(t, m, tea.WindowSizeMsg{Width: width, Height: 8})
+		plain := ansi.Strip(m.View())
+		if line := lineContaining(plain, "> 9 "); !strings.Contains(line, "project8") {
+			t.Fatalf("numbered selection hidden at width %d:\n%s", width, plain)
+		}
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	line := lineContaining(ansi.Strip(m.View()), "> ")
+	if !strings.Contains(line, ">     project9") {
+		t.Fatalf("tenth entry has a shortcut: %q", line)
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	if line := lineContaining(ansi.Strip(m.View()), "> 1 "); !strings.Contains(line, "project0") {
+		t.Fatalf("shortcut did not scroll back: %q", line)
+	}
+}
+
+func TestViewSharesNumbersBetweenPinnedAndUnpinned(t *testing.T) {
+	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	var rows []transport.AgentWithPane
+	for i := 0; i < 4; i++ {
+		row := viewRecord(fmt.Sprintf("a%d", i), "codex", "idle", fmt.Sprintf("/repo/project%d", i), time.Unix(int64(i), 0))
+		row.Agent.Pinned = i < 2
+		rows = append(rows, row)
+	}
+	m = applyRefresh(t, m, rows)
+	m.width, m.height = 120, 12
+	plain := ansi.Strip(m.View())
+	for _, want := range []string{"  1 * project0", "  2 * project1", "> 3   project2", "  4   project3"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("missing %q:\n%s", want, plain)
+		}
+	}
+	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 12})
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if !strings.Contains(ansi.Strip(m.View()), "> 2 * project1") {
+		t.Fatal("number key did not reveal pinned area in narrow view")
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	if !strings.Contains(ansi.Strip(m.View()), "> 4   project3") {
+		t.Fatal("number key did not reveal unpinned area in narrow view")
+	}
+}

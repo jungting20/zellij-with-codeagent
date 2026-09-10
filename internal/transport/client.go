@@ -508,3 +508,9 @@ func isDaemonUnavailableError(err error) bool {
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
+
+func (c *Client) SetAgentTaskAlias(ctx context.Context, agentID string, req SetAgentTaskAliasRequest) (SetAgentTaskAliasResponse, error) {
+	var response SetAgentTaskAliasResponse
+	err := c.do(ctx, http.MethodPost, "/v1/agents/"+url.PathEscape(agentID)+"/task-alias", req, &response)
+	return response, err
+}

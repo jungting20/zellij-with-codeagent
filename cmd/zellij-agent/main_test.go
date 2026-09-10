@@ -447,3 +447,7 @@ func containsValue(values []string, value string) bool {
 	}
 	return false
 }
+
+func (*fakeAgentClient) SetAgentTaskAlias(context.Context, string, transport.SetAgentTaskAliasRequest) (transport.SetAgentTaskAliasResponse, error) {
+	return transport.SetAgentTaskAliasResponse{}, nil
+}

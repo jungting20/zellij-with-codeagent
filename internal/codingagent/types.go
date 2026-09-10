@@ -26,6 +26,7 @@ type Record struct {
 	State          State
 	NotifyOnIdle   bool
 	Pinned         bool
+	TaskAlias      TaskAlias
 	StateReason    string
 	MatchedRule    string
 	CreatedAt      time.Time
@@ -51,5 +52,6 @@ type Store interface {
 	List() ([]Record, error)
 	UpdateState(ID, StateUpdate) (StateChange, error)
 	SetPinned(ID, bool) (Record, error)
+	SetTaskAlias(ID, TaskAlias) (Record, error)
 	Delete(ID) error
 }

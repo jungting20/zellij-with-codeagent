@@ -18,6 +18,7 @@ const agentStateChangedEventType = "agent_state_changed"
 
 type Client interface {
 	ClosePane(context.Context, string) (transport.ClosePaneResponse, error)
+	SetAgentTaskAlias(context.Context, string, transport.SetAgentTaskAliasRequest) (transport.SetAgentTaskAliasResponse, error)
 	ListAgents(context.Context) (transport.ListAgentsResponse, error)
 	FocusAgent(context.Context, string, transport.FocusAgentRequest) (transport.FocusAgentResponse, error)
 	SetAgentPinned(context.Context, string, transport.SetAgentPinnedRequest) (transport.SetAgentPinnedResponse, error)
@@ -82,6 +83,8 @@ type Model struct {
 	selectedID    string
 	focusPinned   bool
 	selections    [2]panelSelection
+	activities    []agentActivity
+	activityNow   time.Time
 	loaded        bool
 	lastRefresh   time.Time
 	listKnown     bool
@@ -89,15 +92,20 @@ type Model struct {
 	streamKnown   bool
 	streamHealthy bool
 
-	refreshing   bool
-	refreshDirty bool
-	focusing     bool
-	pinning      bool
-	stopping     bool
-	stream       *transport.EventStream
-	connection   string
-	statusText   string
-	quitting     bool
+	refreshing    bool
+	refreshDirty  bool
+	focusing      bool
+	pinning       bool
+	stopping      bool
+	aliasTarget   string
+	aliasProject  string
+	aliasSelected int
+	aliasSaving   bool
+	aliasError    string
+	stream        *transport.EventStream
+	connection    string
+	statusText    string
+	quitting      bool
 }
 
 func NewModel(ctx context.Context, client Client, opts Options) tea.Model {
@@ -123,6 +131,7 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.saveSelection()
+	m.activityNow = time.Now()
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -131,6 +140,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.tickCmd(), m.requestRefresh())
 	case refreshResultMsg:
 		return m.handleRefresh(msg)
+	case aliasResultMsg:
+		m.aliasSaving = false
+		if msg.err != nil {
+			m.aliasError = "별명 저장 실패: " + msg.err.Error()
+			return m, nil
+		}
+		for index := range m.rows {
+			if m.rows[index].Agent.ID == msg.agentID {
+				m.rows[index].Agent.TaskAlias = msg.alias
+			}
+		}
+		m.aliasTarget = ""
+		m.aliasError = ""
+		m.statusText = "작업 별명 저장 완료"
+		return m, nil
 	case stopResultMsg:
 		m.stopping = false
 		if msg.err != nil {
@@ -193,6 +217,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamEventMsg:
 		wait := m.waitStreamCmd()
 		if msg.event.Type == "agent_state_changed" {
+			m.recordActivity(msg.event)
 			return m, tea.Batch(wait, m.requestRefresh())
 		}
 		return m, wait
@@ -210,7 +235,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.aliasTarget != "" {
+		return m.updateAliasKey(msg)
+	}
+
 	switch msg.String() {
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		position := int(msg.String()[0] - '1')
+		if position < len(m.rows) {
+			m.selected = position
+			m.selectedID = m.rows[m.selected].Agent.ID
+			m.focusPinned = m.rows[m.selected].Agent.Pinned
+		}
+	case "a":
+		return m.openAliasPicker()
 	case "q", "ctrl+c":
 		m.closeStream()
 		m.quitting = true
@@ -290,6 +328,7 @@ func (m Model) handleRefresh(msg refreshResultMsg) (tea.Model, tea.Cmd) {
 		m.listHealthy = true
 		rows := append([]transport.AgentWithPane(nil), msg.agents.Agents...)
 		sortAgentRows(rows, m.opts.SourceSession)
+		m.recordRefreshActivities(rows)
 		m.rows = rows
 		m.loaded = true
 		m.lastRefresh = msg.at

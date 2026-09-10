@@ -486,3 +486,22 @@ func startUnixTransport(t *testing.T, service *fakeRuntimeService) (*Client, fun
 	}
 	return client, cleanup
 }
+
+func TestTaskAliasClientServerRoundTripAndEnumValidation(t *testing.T) {
+	service := newFakeRuntimeService()
+	server := httptest.NewServer(newTestServer(t, service))
+	defer server.Close()
+	client := NewClient(ClientOptions{})
+	client.baseURL, client.http = server.URL, server.Client()
+	for _, alias := range []string{"review", ""} {
+		response, err := client.SetAgentTaskAlias(context.Background(), "agent/1", SetAgentTaskAliasRequest{TaskAlias: alias})
+		if err != nil || response.Agent.ID != "agent/1" || response.Agent.TaskAlias != alias {
+			t.Fatalf("alias roundtrip: %#v %v", response, err)
+		}
+	}
+	_, err := client.SetAgentTaskAlias(context.Background(), "agent/1", SetAgentTaskAliasRequest{TaskAlias: "free text"})
+	var clientErr *ClientError
+	if !errors.As(err, &clientErr) || clientErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid enum should return HTTP 400: %v", err)
+	}
+}

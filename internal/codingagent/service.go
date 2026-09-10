@@ -59,6 +59,13 @@ type FocusAgentResponse struct {
 	Agent AgentWithPane
 }
 
+type SetAgentTaskAliasRequest struct {
+	AgentID   ID
+	TaskAlias TaskAlias
+}
+
+type SetAgentTaskAliasResponse struct{ Agent Record }
+
 type SetAgentPinnedRequest struct {
 	AgentID ID
 	Pinned  bool
@@ -88,6 +95,7 @@ type AgentService interface {
 	ListAgents(context.Context) (ListAgentsResponse, error)
 	FocusAgent(context.Context, FocusAgentRequest) (FocusAgentResponse, error)
 	SetAgentPinned(context.Context, SetAgentPinnedRequest) (SetAgentPinnedResponse, error)
+	SetAgentTaskAlias(context.Context, SetAgentTaskAliasRequest) (SetAgentTaskAliasResponse, error)
 	FocusNextAgent(context.Context, FocusNextAgentRequest) (FocusNextAgentResponse, error)
 	FocusPreviousAgent(context.Context, FocusPreviousAgentRequest) (FocusPreviousAgentResponse, error)
 }
@@ -711,3 +719,11 @@ func sequentialAgentIDGenerator() func() ID {
 
 var _ AgentService = (*Service)(nil)
 var _ runtime.RuntimeService = (*Service)(nil)
+
+func (s *Service) SetAgentTaskAlias(_ context.Context, request SetAgentTaskAliasRequest) (SetAgentTaskAliasResponse, error) {
+	record, err := s.store.SetTaskAlias(request.AgentID, request.TaskAlias)
+	if err != nil {
+		return SetAgentTaskAliasResponse{}, fmt.Errorf("set coding agent %q task alias: %w", request.AgentID, err)
+	}
+	return SetAgentTaskAliasResponse{Agent: record}, nil
+}

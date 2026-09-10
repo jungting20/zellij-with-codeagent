@@ -32,14 +32,18 @@ func (m Model) View() string {
 	if m.quitting {
 		return ""
 	}
+	if m.aliasTarget != "" {
+		return m.aliasView()
+	}
 	width := m.width
 	if width <= 0 {
 		width = 80
 	}
 	lines := []string{m.headerView()}
+	activityLines := m.activityView()
 	bodyHeight := maxInt(3, len(m.displayRows())+2)
 	if m.height > 0 {
-		bodyHeight = maxInt(1, m.height-3)
+		bodyHeight = maxInt(1, m.height-3-len(activityLines))
 	}
 	if width >= 100 {
 		leftWidth := (width - 3) * 35 / 100
@@ -52,6 +56,7 @@ func (m Model) View() string {
 	} else {
 		lines = append(lines, m.panelView(m.focusPinned, width, bodyHeight)...)
 	}
+	lines = append(lines, activityLines...)
 	if m.statusText != "" {
 		style := mutedStyle
 		if m.connection == "degraded" || strings.Contains(m.statusText, "failed") {
@@ -59,7 +64,7 @@ func (m Model) View() string {
 		}
 		lines = append(lines, style.Render(m.statusText))
 	}
-	lines = append(lines, "Tab/S-Tab area j/k move Space pin/unpin d close Enter focus R refresh q quit")
+	lines = append(lines, "Tab area 1-9/j/k a alias Space pin/unpin d close Enter focus R refresh q quit")
 	for index := range lines {
 		lines[index] = ansi.Truncate(lines[index], width, "…")
 	}
@@ -97,6 +102,13 @@ func (m Model) panelView(pinned bool, width, height int) []string {
 	selected := -1
 	selection := m.selections[panelIndex(pinned)]
 	indices := m.panelIndices(pinned)
+	numbers := make(map[int]int)
+	for _, index := range indices {
+		if index >= 9 {
+			break
+		}
+		numbers[index] = index + 1
+	}
 	if pinned == m.focusPinned && len(indices) > 0 {
 		selected = m.selected
 	} else if len(indices) > 0 {
@@ -119,7 +131,7 @@ func (m Model) panelView(pinned bool, width, height int) []string {
 			case displayTab:
 				lines = append(lines, m.tabView(row.tab, row.count))
 			default:
-				lines = append(lines, m.rowView(m.rows[row.agentIndex], pinned == m.focusPinned && row.agentIndex == selected, width))
+				lines = append(lines, m.rowView(m.rows[row.agentIndex], pinned == m.focusPinned && row.agentIndex == selected, width, numbers[row.agentIndex]))
 			}
 		}
 	}
@@ -245,7 +257,7 @@ func (m Model) headerView() string {
 	)
 }
 
-func (m Model) rowView(record transport.AgentWithPane, selected bool, width int) string {
+func (m Model) rowView(record transport.AgentWithPane, selected bool, width, number int) string {
 	now := m.lastRefresh
 	if now.IsZero() {
 		now = time.Now()
@@ -255,13 +267,25 @@ func (m Model) rowView(record transport.AgentWithPane, selected bool, width int)
 	if record.Agent.Pinned {
 		pin = "*"
 	}
-	line := "    " + pin + " " + padCell(projectName(record.Pane.CWD), projectWidth) +
+	prefix := "    "
+	if number > 0 {
+		prefix = fmt.Sprintf("  %d ", number)
+	}
+	if selected {
+		prefix = ">" + prefix[1:]
+	}
+	project := projectName(record.Pane.CWD)
+	if record.Agent.TaskAlias != "" {
+		badge := "[" + codingagent.TaskAlias(record.Agent.TaskAlias).Label() + "]"
+		project = badge + " " + project
+		projectWidth = maxInt(projectWidth, ansi.StringWidth(badge)+9)
+	}
+	line := prefix + pin + " " + padCell(project, projectWidth) +
 		"  " + padCell(stateView(record.Agent.State), 10) +
 		"  " + padCell(agentName(record.Agent.Kind), 12) +
 		"  " + padCell(accessName(record.Agent.Access), 9) +
 		"  " + elapsed(now, record.Agent.StateChangedAt)
 	if selected {
-		line = ">   " + strings.TrimPrefix(line, "    ")
 		return selectedStyle.Render(line)
 	}
 	return line
