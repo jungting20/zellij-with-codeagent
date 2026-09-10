@@ -106,7 +106,9 @@ panes through execution plans and `CreatePane` requests.
 The dashboard separates pinned agents on the left (35%) from the regular
 list on the right (65%), with independent selection and scrolling. Use
 `Tab` or `Shift+Tab` to switch areas and `Space` to pin or unpin an agent;
-the cursor stays in the current area. Below 100 terminal columns, only the
+the cursor stays in the current area. In the regular list, press `d` to close
+the selected agent's pane and terminate its process. This key is inactive
+in the pinned area. Below 100 terminal columns, only the
 active area is shown, with the same area-switching keys.
 
 Use `j`/`k` or the up/down arrow keys to select an agent within an area, `Enter` to switch to its

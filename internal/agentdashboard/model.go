@@ -17,6 +17,7 @@ const defaultRefreshInterval = 2 * time.Second
 const agentStateChangedEventType = "agent_state_changed"
 
 type Client interface {
+	ClosePane(context.Context, string) (transport.ClosePaneResponse, error)
 	ListAgents(context.Context) (transport.ListAgentsResponse, error)
 	FocusAgent(context.Context, string, transport.FocusAgentRequest) (transport.FocusAgentResponse, error)
 	SetAgentPinned(context.Context, string, transport.SetAgentPinnedRequest) (transport.SetAgentPinnedResponse, error)
@@ -40,6 +41,11 @@ type refreshResultMsg struct {
 }
 
 type focusResultMsg struct {
+	agentID string
+	err     error
+}
+
+type stopResultMsg struct {
 	agentID string
 	err     error
 }
@@ -87,6 +93,7 @@ type Model struct {
 	refreshDirty bool
 	focusing     bool
 	pinning      bool
+	stopping     bool
 	stream       *transport.EventStream
 	connection   string
 	statusText   string
@@ -124,6 +131,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.tickCmd(), m.requestRefresh())
 	case refreshResultMsg:
 		return m.handleRefresh(msg)
+	case stopResultMsg:
+		m.stopping = false
+		if msg.err != nil {
+			m.statusText = "stop failed: " + msg.err.Error()
+			return m, nil
+		}
+		rows := make([]transport.AgentWithPane, 0, len(m.rows))
+		for _, row := range m.rows {
+			if row.Agent.ID != msg.agentID {
+				rows = append(rows, row)
+			}
+		}
+		m.rows = rows
+		m.restoreSelection()
+		m.statusText = "stopped " + msg.agentID
+		return m, m.requestRefresh()
 	case focusResultMsg:
 		m.focusing = false
 		if msg.err != nil {
@@ -214,15 +237,31 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.restoreSelection()
 	case "R":
 		return m, m.requestRefresh()
+	case "d":
+		if m.focusPinned || len(m.panelIndices(false)) == 0 || m.stopping || m.pinning || m.focusing {
+			return m, nil
+		}
+		row := m.rows[m.selected]
+		paneID := row.Agent.PaneID
+		if paneID == "" {
+			paneID = row.Pane.ID
+		}
+		if paneID == "" {
+			m.statusText = "stop failed: agent has no managed pane"
+			return m, nil
+		}
+		m.stopping = true
+		m.statusText = "stopping " + row.Agent.ID
+		return m, m.stopCmd(row.Agent.ID, paneID)
 	case " ":
-		if len(m.panelIndices(m.focusPinned)) == 0 || m.pinning {
+		if len(m.panelIndices(m.focusPinned)) == 0 || m.pinning || m.stopping {
 			return m, nil
 		}
 		m.pinning = true
 		agent := m.rows[m.selected].Agent
 		return m, m.pinCmd(agent.ID, !agent.Pinned)
 	case "enter":
-		if len(m.panelIndices(m.focusPinned)) == 0 || m.focusing {
+		if len(m.panelIndices(m.focusPinned)) == 0 || m.focusing || m.stopping {
 			return m, nil
 		}
 		m.focusing = true
@@ -398,6 +437,13 @@ func (m Model) focusCmd(agentID string) tea.Cmd {
 			SourceZellijPaneID: m.opts.SourceZellijPaneID,
 		})
 		return focusResultMsg{agentID: agentID, err: err}
+	}
+}
+
+func (m Model) stopCmd(agentID, paneID string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := m.client.ClosePane(m.ctx, paneID)
+		return stopResultMsg{agentID: agentID, err: err}
 	}
 }
 

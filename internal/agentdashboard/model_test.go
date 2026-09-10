@@ -31,6 +31,15 @@ type fakeClient struct {
 	pinRequest    transport.SetAgentPinnedRequest
 	pinResponse   transport.SetAgentPinnedResponse
 	pinErr        error
+	closeCalls    int
+	closePaneID   string
+	closeErr      error
+}
+
+func (f *fakeClient) ClosePane(_ context.Context, paneID string) (transport.ClosePaneResponse, error) {
+	f.closeCalls++
+	f.closePaneID = paneID
+	return transport.ClosePaneResponse{}, f.closeErr
 }
 
 func (f *fakeClient) SetAgentPinned(_ context.Context, agentID string, request transport.SetAgentPinnedRequest) (transport.SetAgentPinnedResponse, error) {
@@ -497,4 +506,94 @@ func rowIDs(rows []transport.AgentWithPane) []string {
 		ids[i] = row.Agent.ID
 	}
 	return ids
+}
+
+func TestModelStopsOnlySelectedUnpinnedAgent(t *testing.T) {
+	client := &fakeClient{}
+	m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+	pinned := record("p", "codex", "idle", time.Unix(1, 0))
+	pinned.Agent.Pinned = true
+	a := record("a", "codex", "working", time.Unix(2, 0))
+	a.Agent.PaneID = "managed-a"
+	b := record("b", "codex", "idle", time.Unix(3, 0))
+	m = applyRefresh(t, m, []transport.AgentWithPane{pinned, a, b})
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = concreteModel(t, next)
+	if cmd == nil || !m.stopping {
+		t.Fatal("d did not start stop request")
+	}
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'d'}},
+		{Type: tea.KeySpace},
+		{Type: tea.KeyEnter},
+	} {
+		next, duplicate := m.Update(key)
+		m = concreteModel(t, next)
+		if duplicate != nil {
+			t.Fatalf("action accepted while stopping: %v", key)
+		}
+	}
+	// Navigation during the request must not change which agent is stopped.
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	next, refresh := m.Update(cmd())
+	m = concreteModel(t, next)
+	if client.closeCalls != 1 || client.closePaneID != "managed-a" {
+		t.Fatalf("close requests=%d pane=%q", client.closeCalls, client.closePaneID)
+	}
+	if m.stopping || m.quitting || m.focusPinned || m.selectedID != "b" || refresh == nil {
+		t.Fatalf("stop result selection=%q stopping=%t quitting=%t", m.selectedID, m.stopping, m.quitting)
+	}
+	if got := rowIDs(m.rows); !reflect.DeepEqual(got, []string{"p", "b"}) {
+		t.Fatalf("remaining rows=%v", got)
+	}
+}
+
+func TestModelStopFailureKeepsAgentAndAllowsRetry(t *testing.T) {
+	client := &fakeClient{closeErr: errors.New("daemon unavailable")}
+	m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+	row := record("a", "codex", "working", time.Now())
+	row.Agent.PaneID = ""
+	row.Pane.ID = "fallback-pane"
+	m = applyRefresh(t, m, []transport.AgentWithPane{row})
+	key := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}
+	next, cmd := m.Update(key)
+	m = concreteModel(t, next)
+	next, _ = m.Update(cmd())
+	m = concreteModel(t, next)
+	if client.closePaneID != "fallback-pane" || len(m.rows) != 1 || m.selectedID != "a" || m.stopping || !strings.Contains(m.statusText, "stop failed: daemon unavailable") {
+		t.Fatalf("failed stop changed state: %#v", m)
+	}
+	_, cmd = m.Update(key)
+	if cmd == nil {
+		t.Fatal("stop retry was blocked")
+	}
+}
+
+func TestModelStopIgnoresPinnedEmptyAndBusyAreas(t *testing.T) {
+	for _, scenario := range []string{"pinned", "empty", "pinning", "focusing", "missing pane"} {
+		t.Run(scenario, func(t *testing.T) {
+			client := &fakeClient{}
+			m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+			row := record("a", "codex", "working", time.Now())
+			row.Agent.Pinned = scenario == "pinned"
+			m = applyRefresh(t, m, []transport.AgentWithPane{row})
+			switch scenario {
+			case "pinned":
+				m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
+			case "empty":
+				m = applyRefresh(t, m, nil)
+			case "pinning":
+				m.pinning = true
+			case "focusing":
+				m.focusing = true
+			case "missing pane":
+				m.rows[0].Agent.PaneID, m.rows[0].Pane.ID = "", ""
+			}
+			next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+			m = concreteModel(t, next)
+			if cmd != nil || m.stopping || client.closeCalls != 0 {
+				t.Fatal("d accepted an unavailable target")
+			}
+		})
+	}
 }

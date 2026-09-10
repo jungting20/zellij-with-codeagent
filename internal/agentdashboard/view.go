@@ -59,7 +59,7 @@ func (m Model) View() string {
 		}
 		lines = append(lines, style.Render(m.statusText))
 	}
-	lines = append(lines, "Tab/S-Tab area  j/k move  Space pin/unpin  Enter focus  R refresh  q quit")
+	lines = append(lines, "Tab/S-Tab area j/k move Space pin/unpin d close Enter focus R refresh q quit")
 	for index := range lines {
 		lines[index] = ansi.Truncate(lines[index], width, "…")
 	}
