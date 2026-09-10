@@ -232,7 +232,7 @@ func TestModelShiftTabCyclesSelectionBackward(t *testing.T) {
 	}
 }
 
-func TestModelSpacePinsSelectedAgentAndMovesItToTop(t *testing.T) {
+func TestModelSpacePinsSelectedAgentAndKeepsCursorRow(t *testing.T) {
 	client := &fakeClient{}
 	m := concreteModel(t, NewModel(context.Background(), client, Options{}))
 	m = applyRefresh(t, m, []transport.AgentWithPane{
@@ -259,8 +259,37 @@ func TestModelSpacePinsSelectedAgentAndMovesItToTop(t *testing.T) {
 	if got := rowIDs(m.rows); !reflect.DeepEqual(got, []string{"b", "a"}) {
 		t.Fatalf("rows=%#v", got)
 	}
-	if m.selectedID != "b" || m.selected != 0 || !m.rows[0].Agent.Pinned {
+	if m.selectedID != "a" || m.selected != 1 || !m.rows[0].Agent.Pinned {
 		t.Fatalf("selection=%d/%q row=%#v", m.selected, m.selectedID, m.rows[0])
+	}
+	m = applyRefresh(t, m, m.rows)
+	if m.selected != 1 || m.selectedID != "a" {
+		t.Fatalf("selection after refresh=%d/%q", m.selected, m.selectedID)
+	}
+}
+
+func TestModelPinRefreshBeforeResponseKeepsCursorRow(t *testing.T) {
+	client := &fakeClient{}
+	m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+	rows := []transport.AgentWithPane{
+		record("a", "codex", "idle", time.Unix(1, 0)),
+		record("b", "claude", "idle", time.Unix(2, 0)),
+	}
+	m = applyRefresh(t, m, rows)
+	m.selected, m.selectedID = 1, "b"
+	client.pinResponse.Agent = rows[1].Agent
+	client.pinResponse.Agent.Pinned = true
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = concreteModel(t, next)
+	rows[1].Agent.Pinned = true
+	m = applyRefresh(t, m, rows)
+	if m.selected != 1 || m.selectedID != "a" {
+		t.Fatalf("selection after refresh=%d/%q", m.selected, m.selectedID)
+	}
+	next, _ = m.Update(cmd())
+	m = concreteModel(t, next)
+	if m.selected != 1 || m.selectedID != "a" || client.focusCalls != 0 || m.quitting {
+		t.Fatalf("selection after response=%d/%q focusCalls=%d quitting=%t", m.selected, m.selectedID, client.focusCalls, m.quitting)
 	}
 }
 
@@ -284,6 +313,9 @@ func TestModelSpaceUnpinsAndPinFailureKeepsOrder(t *testing.T) {
 	}
 	if got := rowIDs(m.rows); !reflect.DeepEqual(got, []string{"a", "b"}) {
 		t.Fatalf("rows=%#v", got)
+	}
+	if m.selected != 0 || m.selectedID != "a" {
+		t.Fatalf("selection after unpin=%d/%q", m.selected, m.selectedID)
 	}
 
 	m.selected, m.selectedID = 1, "b"

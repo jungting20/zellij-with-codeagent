@@ -134,6 +134,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		for index := range m.rows {
 			if m.rows[index].Agent.ID == msg.agentID {
+				if m.selectedID == msg.agentID && m.rows[index].Agent.Pinned != msg.agent.Pinned {
+					// Keep the cursor on its row instead of following the pin.
+					m.selectedID = ""
+				}
 				m.rows[index].Agent.Pinned = msg.agent.Pinned
 				break
 			}
@@ -243,6 +247,16 @@ func (m Model) handleRefresh(msg refreshResultMsg) (tea.Model, tea.Cmd) {
 		m.listHealthy = true
 		rows := append([]transport.AgentWithPane(nil), msg.agents.Agents...)
 		sortAgentRows(rows, m.opts.SourceSession)
+		if m.selected >= 0 && m.selected < len(m.rows) {
+			selected := m.rows[m.selected].Agent
+			for _, row := range rows {
+				if row.Agent.ID == selected.ID && row.Agent.Pinned != selected.Pinned {
+					// A refresh can observe the pin before its command completes.
+					m.selectedID = ""
+					break
+				}
+			}
+		}
 		m.rows = rows
 		m.loaded = true
 		m.lastRefresh = msg.at
