@@ -64,14 +64,18 @@ func (m Model) View() string {
 		}
 		lines = append(lines, style.Render(m.statusText))
 	}
-	lines = append(lines, "Tab area 1-9/j/k a alias Space pin/unpin d close Enter focus R refresh q quit")
+	lines = append(lines, "Tab j/k i input g lazygit a alias Space pin d close Enter focus R refresh q quit")
 	for index := range lines {
 		lines[index] = ansi.Truncate(lines[index], width, "…")
 	}
 	if m.height > 0 && len(lines) > m.height {
 		lines = append(lines[:m.height-1], lines[len(lines)-1])
 	}
-	return strings.Join(lines, "\n")
+	base := strings.Join(lines, "\n")
+	if m.inputPane != "" {
+		return m.inputOverlay(base)
+	}
+	return base
 }
 
 // Each area has its own viewport, derived from its remembered selection.

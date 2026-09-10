@@ -16,6 +16,7 @@ type RoleSpec struct {
 const (
 	RoleCoder               = "coder"
 	RoleEditor              = "editor"
+	RoleLazygit             = "lazygit"
 	RoleLSP                 = "lsp"
 	RoleNetworkTracker      = "network-tracker"
 	RoleConsoleTracker      = "console-tracker"
@@ -35,6 +36,7 @@ const (
 )
 
 var specs = []RoleSpec{
+
 	{
 		Name:        RoleCoder,
 		Usage:       "coder",
@@ -47,6 +49,12 @@ var specs = []RoleSpec{
 		Arguments: []ArgumentSpec{
 			{Name: "file", Required: true, Description: "Source file path to open."},
 		},
+	},
+	{
+		Name:        RoleLazygit,
+		Usage:       "lazygit <path>",
+		Description: "Opens lazygit in the specified working directory.",
+		Arguments:   []ArgumentSpec{{Name: "path", Required: true, Description: "Working directory for lazygit."}},
 	},
 	{
 		Name:        RoleLSP,

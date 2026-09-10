@@ -18,6 +18,7 @@ import (
 	"zellij-with-codeagent/cmd/agent-role/debatejudge"
 	"zellij-with-codeagent/cmd/agent-role/debateproposer"
 	"zellij-with-codeagent/cmd/agent-role/editor"
+	"zellij-with-codeagent/cmd/agent-role/lazygit"
 	"zellij-with-codeagent/cmd/agent-role/loopprojectagent"
 	"zellij-with-codeagent/cmd/agent-role/lsp"
 	"zellij-with-codeagent/cmd/agent-role/network"
@@ -49,6 +50,8 @@ func Run(args []string) int {
 
 	role := args[0]
 	switch role {
+	case roles.RoleLazygit:
+		return lazygit.Run(args[1:])
 	case roles.RoleCoder:
 		coder.Run()
 	case roles.RoleEditor:

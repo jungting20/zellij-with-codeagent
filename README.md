@@ -106,7 +106,11 @@ panes through execution plans and `CreatePane` requests.
 The dashboard separates pinned agents on the left (35%) from the regular
 list on the right (65%), with independent selection and scrolling. Use
 `Tab` or `Shift+Tab` to switch areas and `Space` to pin or unpin an agent;
-the cursor stays in the current area. In the regular list, press `d` to close
+the cursor stays in the current area. Press `i` on a selected active agent to
+open a prompt popup near that row, `Enter` to send it, or `Esc` to cancel. The dashboard stays open
+after sending; failed sends keep the prompt for retry. Press `g` to open lazygit
+in the selected pane’s working directory; exit lazygit to return to the dashboard.
+The `lazygit` executable must be available on PATH. In the regular list, press `d` to close
 the selected agent's pane and terminate its process. This key is inactive
 in the pinned area. Below 100 terminal columns, only the
 active area is shown, with the same area-switching keys.

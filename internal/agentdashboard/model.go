@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"zellij-with-codeagent/internal/transport"
@@ -17,6 +18,7 @@ const defaultRefreshInterval = 2 * time.Second
 const agentStateChangedEventType = "agent_state_changed"
 
 type Client interface {
+	SendInput(context.Context, string, transport.SendInputRequest) error
 	ClosePane(context.Context, string) (transport.ClosePaneResponse, error)
 	SetAgentTaskAlias(context.Context, string, transport.SetAgentTaskAliasRequest) (transport.SetAgentTaskAliasResponse, error)
 	ListAgents(context.Context) (transport.ListAgentsResponse, error)
@@ -73,9 +75,10 @@ type panelSelection struct {
 }
 
 type Model struct {
-	ctx    context.Context
-	client Client
-	opts   Options
+	gitRunning bool
+	ctx        context.Context
+	client     Client
+	opts       Options
 
 	width, height int
 	rows          []transport.AgentWithPane
@@ -92,20 +95,26 @@ type Model struct {
 	streamKnown   bool
 	streamHealthy bool
 
-	refreshing    bool
-	refreshDirty  bool
-	focusing      bool
-	pinning       bool
-	stopping      bool
-	aliasTarget   string
-	aliasProject  string
-	aliasSelected int
-	aliasSaving   bool
-	aliasError    string
-	stream        *transport.EventStream
-	connection    string
-	statusText    string
-	quitting      bool
+	refreshing     bool
+	refreshDirty   bool
+	focusing       bool
+	pinning        bool
+	stopping       bool
+	inputX, inputY int
+	inputPane      string
+	inputAgent     string
+	prompt         textinput.Model
+	inputSending   bool
+	inputError     string
+	aliasTarget    string
+	aliasProject   string
+	aliasSelected  int
+	aliasSaving    bool
+	aliasError     string
+	stream         *transport.EventStream
+	connection     string
+	statusText     string
+	quitting       bool
 }
 
 func NewModel(ctx context.Context, client Client, opts Options) tea.Model {
@@ -135,11 +144,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.inputPane != "" {
+			m.prompt.Width = maxInt(1, m.inputPopupWidth()-6)
+		}
 		return m, nil
 	case refreshTickMsg:
 		return m, tea.Batch(m.tickCmd(), m.requestRefresh())
 	case refreshResultMsg:
 		return m.handleRefresh(msg)
+	case lazygitResultMsg:
+		m.gitRunning = false
+		if msg.err != nil {
+			m.statusText = "lazygit failed: " + msg.err.Error()
+		} else {
+			m.statusText = "returned from lazygit"
+		}
+		return m, m.requestRefresh()
+	case inputResultMsg:
+		m.inputSending = false
+		if msg.err != nil {
+			m.inputError = "전송 실패: " + msg.err.Error()
+			return m, nil
+		}
+		m.inputPane, m.inputAgent, m.inputError = "", "", ""
+		m.prompt.Reset()
+		m.statusText = "input sent to " + msg.agentID
+		return m, nil
 	case aliasResultMsg:
 		m.aliasSaving = false
 		if msg.err != nil {
@@ -231,10 +261,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	}
+	if m.inputPane != "" {
+		var cmd tea.Cmd
+		m.prompt, cmd = m.prompt.Update(msg)
+		return m, cmd
+	}
 	return m, nil
 }
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.inputPane != "" {
+		return m.updateInputKey(msg)
+	}
 	if m.aliasTarget != "" {
 		return m.updateAliasKey(msg)
 	}
@@ -247,6 +285,10 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectedID = m.rows[m.selected].Agent.ID
 			m.focusPinned = m.rows[m.selected].Agent.Pinned
 		}
+	case "g":
+		return m.openLazygit()
+	case "i":
+		return m.openInput()
 	case "a":
 		return m.openAliasPicker()
 	case "q", "ctrl+c":

@@ -9,6 +9,7 @@ func TestAllIncludesRoleDescriptions(t *testing.T) {
 	for _, name := range []string{
 		RoleCoder,
 		RoleEditor,
+		RoleLazygit,
 		RoleLSP,
 		RoleNetworkTracker,
 		RoleConsoleTracker,

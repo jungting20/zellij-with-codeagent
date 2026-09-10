@@ -268,3 +268,14 @@ func setStdin(t *testing.T, input string) {
 		t.Fatalf("close stdin writer: %v", err)
 	}
 }
+
+func TestRunDispatchesLazygit(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "lazygit"), []byte("#!/bin/sh\nexit 7\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	if code := Run([]string{"lazygit", t.TempDir()}); code != 7 {
+		t.Fatalf("exit=%d", code)
+	}
+}

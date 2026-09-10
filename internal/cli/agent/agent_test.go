@@ -985,3 +985,9 @@ func (*testClient) SetAgentTaskAlias(context.Context, string, transport.SetAgent
 func (*serviceBackedClient) SetAgentTaskAlias(context.Context, string, transport.SetAgentTaskAliasRequest) (transport.SetAgentTaskAliasResponse, error) {
 	return transport.SetAgentTaskAliasResponse{}, nil
 }
+
+func (c *testClient) SendInput(context.Context, string, transport.SendInputRequest) error { return nil }
+
+func (c *serviceBackedClient) SendInput(ctx context.Context, paneID string, req transport.SendInputRequest) error {
+	return c.service.SendInput(ctx, runtime.SendInputRequest{PaneID: runtime.PaneID(paneID), Text: req.Text})
+}

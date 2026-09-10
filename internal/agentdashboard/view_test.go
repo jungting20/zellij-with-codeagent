@@ -45,7 +45,7 @@ func TestViewRendersDeterministicGroupedDashboardAtSupportedWidths(t *testing.T)
 				"Codex", "Claude", "Gemini", "Cursor",
 				"working", "blocked", "idle", "unknown",
 				"zellij-with-codeagent", "api-server", "frontend", "mobile",
-				"01:30", "> ", "Space pin/unpin", "d close", "Enter focus", "R refresh", "q quit",
+				"01:30", "> ", "Space pin", "i input", "g lazygit", "d close", "Enter focus", "R refresh", "q quit",
 			} {
 				if !strings.Contains(plain, want) {
 					t.Fatalf("width=%d view missing %q:\n%s", width, want, plain)
@@ -114,7 +114,7 @@ func TestViewRendersPinnedSectionMarkerAndSpaceHint(t *testing.T) {
 	}
 
 	plain := ansi.Strip(m.View())
-	for _, want := range []string{"── PINNED (1) ─", "* pinned", "── UNPINNED (1) ─", "normal", "Space pin/unpin"} {
+	for _, want := range []string{"── PINNED (1) ─", "* pinned", "── UNPINNED (1) ─", "normal", "Space pin", "i input"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("view missing %q:\n%s", want, plain)
 		}

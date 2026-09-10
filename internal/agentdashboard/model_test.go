@@ -14,6 +14,10 @@ import (
 )
 
 type fakeClient struct {
+	inputCalls    int
+	inputPane     string
+	inputRequest  transport.SendInputRequest
+	inputErr      error
 	listResponse  transport.ListAgentsResponse
 	listErr       error
 	listCalls     int
@@ -652,4 +656,10 @@ func (f *fakeClient) SetAgentTaskAlias(_ context.Context, agentID string, reques
 	f.aliasCalls++
 	f.aliasAgentID, f.aliasRequest = agentID, request
 	return transport.SetAgentTaskAliasResponse{Agent: transport.Agent{ID: agentID, TaskAlias: request.TaskAlias}}, f.aliasErr
+}
+
+func (f *fakeClient) SendInput(_ context.Context, paneID string, req transport.SendInputRequest) error {
+	f.inputCalls++
+	f.inputPane, f.inputRequest = paneID, req
+	return f.inputErr
 }
