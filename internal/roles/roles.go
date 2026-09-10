@@ -132,24 +132,26 @@ var specs = []RoleSpec{
 	},
 	{
 		Name:        RoleAgentNext,
-		Usage:       "agent-next [--socket PATH --timeout DURATION --idle-only --pinned-only]",
+		Usage:       "agent-next [--socket PATH --timeout DURATION --idle-only --pinned-only --unpinned-only]",
 		Description: "Focuses the next managed coding agent through the daemon.",
 		Arguments: []ArgumentSpec{
 			{Name: "--socket", Required: false, Description: "agentd Unix socket path."},
 			{Name: "--timeout", Required: false, Description: "Daemon request timeout."},
 			{Name: "--idle-only", Required: false, Description: "Cycle only through idle agents."},
 			{Name: "--pinned-only", Required: false, Description: "Cycle only through pinned agents."},
+			{Name: "--unpinned-only", Required: false, Description: "Cycle only through unpinned agents; mutually exclusive with --pinned-only."},
 		},
 	},
 	{
 		Name:        RoleAgentPrev,
-		Usage:       "agent-prev [--socket PATH --timeout DURATION --idle-only --pinned-only]",
+		Usage:       "agent-prev [--socket PATH --timeout DURATION --idle-only --pinned-only --unpinned-only]",
 		Description: "Focuses the previous managed coding agent through the daemon.",
 		Arguments: []ArgumentSpec{
 			{Name: "--socket", Required: false, Description: "agentd Unix socket path."},
 			{Name: "--timeout", Required: false, Description: "Daemon request timeout."},
 			{Name: "--idle-only", Required: false, Description: "Cycle only through idle agents."},
 			{Name: "--pinned-only", Required: false, Description: "Cycle only through pinned agents."},
+			{Name: "--unpinned-only", Required: false, Description: "Cycle only through unpinned agents; mutually exclusive with --pinned-only."},
 		},
 	},
 	{

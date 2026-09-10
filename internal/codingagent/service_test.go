@@ -1661,7 +1661,7 @@ func TestServiceStartAgentDoesNotMutateExtraArgs(t *testing.T) {
 	}
 }
 
-func TestTaskAliasEnumPersistsWithoutChangingLifecycle(t *testing.T) {
+func TestTaskAliasPersistsWithoutChangingLifecycle(t *testing.T) {
 	store := NewMemoryStore(nil)
 	now := time.Unix(10, 0)
 	record := Record{ID: "agent-1", Kind: KindCodex, PaneID: "pane-1", State: StateIdle, Pinned: true, CreatedAt: now, StateChangedAt: now}
@@ -1670,7 +1670,7 @@ func TestTaskAliasEnumPersistsWithoutChangingLifecycle(t *testing.T) {
 	}
 	runtimeService := &serviceFakeRuntime{listResponse: runtime.ListPanesResponse{Panes: []runtime.Pane{{ID: "pane-1"}}}}
 	service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
-	for _, alias := range TaskAliases() {
+	for _, alias := range append(TaskAliases(), TaskAlias("직접 입력 q")) {
 		response, err := service.SetAgentTaskAlias(context.Background(), SetAgentTaskAliasRequest{AgentID: record.ID, TaskAlias: alias})
 		if err != nil || response.Agent.TaskAlias != alias {
 			t.Fatalf("set %q: %#v %v", alias, response, err)
@@ -1687,7 +1687,7 @@ func TestTaskAliasEnumPersistsWithoutChangingLifecycle(t *testing.T) {
 			t.Fatalf("state update lost alias or altered lifecycle: %#v", got)
 		}
 	}
-	if _, err := service.SetAgentTaskAlias(context.Background(), SetAgentTaskAliasRequest{AgentID: record.ID, TaskAlias: "free text"}); !errors.Is(err, ErrInvalidTaskAlias) {
+	if _, err := service.SetAgentTaskAlias(context.Background(), SetAgentTaskAliasRequest{AgentID: record.ID, TaskAlias: "invalid\nlabel"}); !errors.Is(err, ErrInvalidTaskAlias) {
 		t.Fatalf("invalid alias error: %v", err)
 	}
 	if _, err := service.SetAgentTaskAlias(context.Background(), SetAgentTaskAliasRequest{AgentID: "missing", TaskAlias: TaskAliasReview}); !errors.Is(err, ErrNotFound) {
@@ -1696,5 +1696,49 @@ func TestTaskAliasEnumPersistsWithoutChangingLifecycle(t *testing.T) {
 	response, err := service.SetAgentTaskAlias(context.Background(), SetAgentTaskAliasRequest{AgentID: record.ID, TaskAlias: TaskAliasNone})
 	if err != nil || response.Agent.TaskAlias != "" {
 		t.Fatal("clear alias failed")
+	}
+}
+
+func TestUnpinnedNavigation(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		store := NewMemoryStore(nil)
+		seedRecordsWithStates(t, store, []State{StateIdle, StateWorking, StateIdle, StateIdle})
+		if _, err := store.SetPinned("agent-1", true); err != nil {
+			t.Fatal(err)
+		}
+		service := NewService(ServiceOptions{RuntimeService: successfulFocusRuntime(), Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
+		focus := service.FocusNextAgent
+		wants := []ID{"agent-2", "agent-3", "agent-4", "agent-2"}
+		if reverse {
+			focus = service.FocusPreviousAgent
+			wants = []ID{"agent-4", "agent-3", "agent-2", "agent-4"}
+		}
+		req := FocusNextAgentRequest{SourceZellijSession: "dashboard", SourceZellijPaneID: "terminal_1", UnpinnedOnly: true}
+		for _, want := range wants {
+			got, err := focus(context.Background(), req)
+			if err != nil || !got.Focused || got.Agent.Agent.ID != want {
+				t.Fatalf("got=%+v err=%v want=%s", got, err, want)
+			}
+		}
+		req.IdleOnly = true
+		for i := 0; i < 3; i++ {
+			got, err := focus(context.Background(), req)
+			if err != nil || !got.Focused || (got.Agent.Agent.ID != "agent-3" && got.Agent.Agent.ID != "agent-4") {
+				t.Fatalf("idle intersection: %+v %v", got, err)
+			}
+		}
+		for _, id := range []ID{"agent-2", "agent-3", "agent-4"} {
+			if _, err := store.SetPinned(id, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := focus(context.Background(), req)
+		if err != nil || got.Focused {
+			t.Fatalf("empty: %+v %v", got, err)
+		}
+		req.PinnedOnly = true
+		if _, err := focus(context.Background(), req); !errors.Is(err, ErrConflictingPinFilters) {
+			t.Fatalf("conflict: %v", err)
+		}
 	}
 }

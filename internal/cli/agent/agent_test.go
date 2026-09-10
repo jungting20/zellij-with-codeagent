@@ -991,3 +991,23 @@ func (c *testClient) SendInput(context.Context, string, transport.SendInputReque
 func (c *serviceBackedClient) SendInput(ctx context.Context, paneID string, req transport.SendInputRequest) error {
 	return c.service.SendInput(ctx, runtime.SendInputRequest{PaneID: runtime.PaneID(paneID), Text: req.Text})
 }
+
+func TestUnpinnedNavigationFlags(t *testing.T) {
+	for _, direction := range []string{"next", "prev"} {
+		client := &testClient{}
+		var out, stderr bytes.Buffer
+		cfg := Config{Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session", "ZELLIJ_PANE_ID": "1"})}
+		code := Run([]string{direction, "--unpinned-only", "--idle-only"}, strings.NewReader(""), &out, &stderr, testFactory(client), cfg)
+		req := client.nextRequest
+		if direction == "prev" {
+			req = client.prevRequest
+		}
+		if code != 0 || !req.UnpinnedOnly || !req.IdleOnly || req.PinnedOnly {
+			t.Fatalf("code=%d req=%+v stderr=%s", code, req, stderr.String())
+		}
+		code = Run([]string{direction, "--unpinned-only", "--pinned-only"}, strings.NewReader(""), &out, &stderr, testFactory(client), cfg)
+		if code != 2 || !strings.Contains(stderr.String(), "mutually exclusive") {
+			t.Fatalf("conflict code=%d stderr=%s", code, stderr.String())
+		}
+	}
+}

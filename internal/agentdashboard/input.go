@@ -123,6 +123,10 @@ func (m Model) inputView() string {
 }
 
 func (m Model) inputOverlay(base string) string {
+	return m.popupOverlay(base, m.inputView(), m.inputX, m.inputY)
+}
+
+func (m Model) popupOverlay(base, content string, anchorX, anchorY int) string {
 	width, height := m.width, m.height
 	if width <= 0 {
 		width = 80
@@ -134,16 +138,16 @@ func (m Model) inputOverlay(base string) string {
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
-	popup := strings.Split(m.inputView(), "\n")
+	popup := strings.Split(content, "\n")
 	popupWidth := 0
 	for _, line := range popup {
 		popupWidth = maxInt(popupWidth, ansi.StringWidth(line))
 	}
-	x := maxInt(0, minInt(m.inputX, width-popupWidth))
-	y := m.inputY + 1
+	x := maxInt(0, minInt(anchorX, width-popupWidth))
+	y := anchorY + 1
 	// Prefer below the selected row, then above it, then clamp to the screen.
 	if y+len(popup) > height {
-		y = m.inputY - len(popup)
+		y = anchorY - len(popup)
 	}
 	y = maxInt(0, minInt(y, height-len(popup)))
 	for index, line := range popup {

@@ -108,6 +108,9 @@ type Model struct {
 	inputError     string
 	aliasTarget    string
 	aliasProject   string
+	aliasCustom    bool
+	aliasPrompt    textinput.Model
+	aliasX, aliasY int
 	aliasSelected  int
 	aliasSaving    bool
 	aliasError     string
@@ -260,6 +263,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		return m.updateKey(msg)
+	}
+	if m.aliasTarget != "" && m.aliasCustom {
+		var cmd tea.Cmd
+		m.aliasPrompt, cmd = m.aliasPrompt.Update(msg)
+		return m, cmd
 	}
 	if m.inputPane != "" {
 		var cmd tea.Cmd

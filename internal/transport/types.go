@@ -145,6 +145,7 @@ type FocusNextAgentRequest struct {
 	SourceZellijPaneID string `json:"source_zellij_pane_id"`
 	IdleOnly           bool   `json:"idle_only,omitempty"`
 	PinnedOnly         bool   `json:"pinned_only,omitempty"`
+	UnpinnedOnly       bool   `json:"unpinned_only,omitempty"`
 }
 
 type FocusNextAgentResponse struct {
@@ -396,6 +397,7 @@ func (req FocusNextAgentRequest) ToCodingAgent() codingagent.FocusNextAgentReque
 		SourceZellijPaneID:  rt.ZellijPaneID(req.SourceZellijPaneID),
 		IdleOnly:            req.IdleOnly,
 		PinnedOnly:          req.PinnedOnly,
+		UnpinnedOnly:        req.UnpinnedOnly,
 	}
 }
 

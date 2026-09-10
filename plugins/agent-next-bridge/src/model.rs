@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
-use zellij_tile::prelude::{get_focused_pane, PaneId, PaneManifest, SessionInfo};
+use zellij_tile::prelude::{
+    get_focused_pane, ClientInfo, PaneId, PaneManifest, SessionInfo, TabInfo,
+};
 
 const MAX_QUEUED_REQUESTS: usize = 32;
 
@@ -15,6 +17,8 @@ pub enum NavigationFilter {
     IdleOnly,
     PinnedOnly,
     IdleAndPinned,
+    UnpinnedOnly,
+    IdleAndUnpinned,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -40,6 +44,8 @@ pub struct BridgeModel {
     permission: Permission,
     session_name: String,
     last_terminal: Option<u32>,
+    active_tab: Option<usize>,
+    panes: PaneManifest,
     queue: VecDeque<QueuedRequest>,
 }
 
@@ -59,6 +65,8 @@ impl BridgeModel {
             permission: Permission::Pending,
             session_name: String::new(),
             last_terminal: None,
+            active_tab: None,
+            panes: PaneManifest::default(),
             queue: VecDeque::new(),
         }
     }
@@ -86,6 +94,25 @@ impl BridgeModel {
 
     pub fn set_last_terminal(&mut self, last_terminal: Option<u32>) {
         self.last_terminal = last_terminal;
+    }
+
+    pub fn update_tabs(&mut self, tabs: &[TabInfo]) {
+        self.active_tab = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
+        self.remember_active_terminal();
+    }
+
+    pub fn update_panes(&mut self, panes: PaneManifest) {
+        self.panes = panes;
+        self.remember_active_terminal();
+    }
+
+    fn remember_active_terminal(&mut self) {
+        if let Some(pane_id) = self
+            .active_tab
+            .and_then(|tab| focused_terminal_in_tab(tab, &self.panes))
+        {
+            self.last_terminal = Some(pane_id);
+        }
     }
 
     pub fn initialize_focused_pane(&mut self, focused: Option<PaneId>) {
@@ -119,6 +146,10 @@ impl BridgeModel {
         })
     }
 
+    pub fn discard_pending(&mut self) {
+        self.queue.clear();
+    }
+
     pub fn complete_ready(&mut self) {
         self.queue.pop_front();
     }
@@ -142,6 +173,18 @@ pub fn parse_navigation(name: &str, payload: Option<&str>) -> Result<Navigation,
         ("agent-next", Some("idle-and-pinned")) => {
             Ok(Navigation::Next(NavigationFilter::IdleAndPinned))
         }
+        ("agent-next", Some("unpinned-only")) => {
+            Ok(Navigation::Next(NavigationFilter::UnpinnedOnly))
+        }
+        ("agent-next", Some("idle-and-unpinned")) => {
+            Ok(Navigation::Next(NavigationFilter::IdleAndUnpinned))
+        }
+        ("agent-prev", Some("unpinned-only")) => {
+            Ok(Navigation::Previous(NavigationFilter::UnpinnedOnly))
+        }
+        ("agent-prev", Some("idle-and-unpinned")) => {
+            Ok(Navigation::Previous(NavigationFilter::IdleAndUnpinned))
+        }
         ("agent-prev", Some("all")) => Ok(Navigation::Previous(NavigationFilter::All)),
         ("agent-prev", Some("idle-only")) => Ok(Navigation::Previous(NavigationFilter::IdleOnly)),
         ("agent-prev", Some("pinned-only")) => {
@@ -163,6 +206,11 @@ pub fn command_argv(executable: &str, navigation: Navigation) -> Vec<String> {
     };
     let mut argv = vec![executable.into(), "agent".into(), direction.into()];
     match filter {
+        NavigationFilter::UnpinnedOnly => argv.push("--unpinned-only".into()),
+        NavigationFilter::IdleAndUnpinned => {
+            argv.push("--idle-only".into());
+            argv.push("--unpinned-only".into());
+        }
         NavigationFilter::All => {}
         NavigationFilter::IdleOnly => argv.push("--idle-only".into()),
         NavigationFilter::PinnedOnly => argv.push("--pinned-only".into()),
@@ -183,6 +231,21 @@ pub fn source_pane_id(focused: PaneId, last_terminal: Option<u32>) -> Result<Str
     }
 }
 
+// Only infer a replacement client when there is a single unambiguous source.
+pub fn focused_client_pane(clients: &[ClientInfo]) -> Option<PaneId> {
+    clients
+        .iter()
+        .find(|client| client.is_current_client)
+        .or_else(|| {
+            if clients.len() == 1 {
+                clients.first()
+            } else {
+                None
+            }
+        })
+        .map(|client| client.pane_id)
+}
+
 pub fn focused_terminal_in_tab(tab_index: usize, pane_manifest: &PaneManifest) -> Option<u32> {
     get_focused_pane(tab_index, pane_manifest).map(|pane| pane.id)
 }
@@ -192,6 +255,106 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use zellij_tile::prelude::{PaneId, PaneInfo, PaneManifest, SessionInfo};
+
+    #[test]
+    fn tracks_terminal_from_events_in_either_order_without_host_queries() {
+        for panes_first in [false, true] {
+            let mut model = BridgeModel::default();
+            let panes = PaneManifest {
+                panes: HashMap::from([
+                    (
+                        2,
+                        vec![PaneInfo {
+                            id: 42,
+                            is_focused: true,
+                            ..Default::default()
+                        }],
+                    ),
+                    (
+                        5,
+                        vec![PaneInfo {
+                            id: 99,
+                            is_focused: true,
+                            ..Default::default()
+                        }],
+                    ),
+                ]),
+            };
+            let tabs = vec![TabInfo {
+                position: 2,
+                tab_id: 17,
+                active: true,
+                ..Default::default()
+            }];
+            if panes_first {
+                model.update_panes(panes);
+                model.update_tabs(&tabs);
+            } else {
+                model.update_tabs(&tabs);
+                model.update_panes(panes);
+            }
+            assert_eq!(
+                model.resolve_source_pane(PaneId::Plugin(1)),
+                Ok("terminal_42".into())
+            );
+            model.update_tabs(&[TabInfo {
+                position: 5,
+                active: true,
+                ..Default::default()
+            }]);
+            assert_eq!(
+                model.resolve_source_pane(PaneId::Plugin(1)),
+                Ok("terminal_99".into())
+            );
+            model.update_panes(PaneManifest {
+                panes: HashMap::from([(
+                    5,
+                    vec![PaneInfo {
+                        id: 1,
+                        is_plugin: true,
+                        is_focused: true,
+                        ..Default::default()
+                    }],
+                )]),
+            });
+            assert_eq!(
+                model.resolve_source_pane(PaneId::Plugin(1)),
+                Ok("terminal_99".into())
+            );
+        }
+    }
+
+    #[test]
+    fn recovers_focus_after_original_client_leaves() {
+        let replacement = ClientInfo::new(7, PaneId::Terminal(42), String::new(), false);
+        assert_eq!(
+            focused_client_pane(&[replacement.clone()]),
+            Some(PaneId::Terminal(42))
+        );
+        assert_eq!(focused_client_pane(&[]), None);
+        let other = ClientInfo::new(8, PaneId::Terminal(43), String::new(), false);
+        assert_eq!(focused_client_pane(&[replacement.clone(), other]), None);
+        let current = ClientInfo::new(9, PaneId::Terminal(44), String::new(), true);
+        assert_eq!(
+            focused_client_pane(&[replacement, current]),
+            Some(PaneId::Terminal(44))
+        );
+    }
+
+    #[test]
+    fn leaving_session_discards_old_keys_but_accepts_new_keys() {
+        let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
+        model.set_permission(true);
+        model.set_session_name("work");
+        model.queue(Navigation::Next(NavigationFilter::UnpinnedOnly));
+        model.discard_pending();
+        assert!(model.next_ready().is_none());
+        model.queue(Navigation::Next(NavigationFilter::PinnedOnly));
+        assert_eq!(
+            model.take_ready()[0].navigation,
+            Navigation::Next(NavigationFilter::PinnedOnly)
+        );
+    }
 
     #[test]
     fn parses_supported_navigation_messages() {
@@ -227,6 +390,21 @@ mod tests {
             parse_navigation("agent-prev", Some("idle-and-pinned")),
             Ok(Navigation::Previous(NavigationFilter::IdleAndPinned))
         );
+    }
+
+    #[test]
+    fn unpinned_payloads_build_expected_commands() {
+        for (name, direction) in [("agent-next", "next"), ("agent-prev", "prev")] {
+            for (payload, flags) in [
+                ("unpinned-only", vec!["--unpinned-only"]),
+                ("idle-and-unpinned", vec!["--idle-only", "--unpinned-only"]),
+            ] {
+                let navigation = parse_navigation(name, Some(payload)).unwrap();
+                let mut expected = vec!["/opt/zellij-agent", "agent", direction];
+                expected.extend(flags);
+                assert_eq!(command_argv("/opt/zellij-agent", navigation), expected);
+            }
+        }
     }
 
     #[test]

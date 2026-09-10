@@ -86,7 +86,12 @@ func runNext(args []string, stdout, stderr io.Writer, newClient ClientFactory, c
 	timeout := fs.Duration("timeout", defaultTimeout, "request timeout")
 	idleOnly := fs.Bool("idle-only", false, "cycle only through idle agents")
 	pinnedOnly := fs.Bool("pinned-only", false, "cycle only through pinned agents")
+	unpinnedOnly := fs.Bool("unpinned-only", false, "cycle only through unpinned agents")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *pinnedOnly && *unpinnedOnly {
+		fmt.Fprintln(stderr, "--pinned-only and --unpinned-only are mutually exclusive")
 		return 2
 	}
 	if fs.NArg() != 0 {
@@ -124,6 +129,7 @@ func runNext(args []string, stdout, stderr io.Writer, newClient ClientFactory, c
 		SourceZellijPaneID: paneID,
 		IdleOnly:           *idleOnly,
 		PinnedOnly:         *pinnedOnly,
+		UnpinnedOnly:       *unpinnedOnly,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "agent next failed via socket %s: %v\n", *socket, err)
@@ -152,7 +158,12 @@ func runPrevious(args []string, stdout, stderr io.Writer, newClient ClientFactor
 	timeout := fs.Duration("timeout", defaultTimeout, "request timeout")
 	idleOnly := fs.Bool("idle-only", false, "cycle only through idle agents")
 	pinnedOnly := fs.Bool("pinned-only", false, "cycle only through pinned agents")
+	unpinnedOnly := fs.Bool("unpinned-only", false, "cycle only through unpinned agents")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *pinnedOnly && *unpinnedOnly {
+		fmt.Fprintln(stderr, "--pinned-only and --unpinned-only are mutually exclusive")
 		return 2
 	}
 	if fs.NArg() != 0 {
@@ -190,6 +201,7 @@ func runPrevious(args []string, stdout, stderr io.Writer, newClient ClientFactor
 		SourceZellijPaneID: paneID,
 		IdleOnly:           *idleOnly,
 		PinnedOnly:         *pinnedOnly,
+		UnpinnedOnly:       *unpinnedOnly,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "agent prev failed via socket %s: %v\n", *socket, err)
@@ -641,7 +653,7 @@ func printUsage(w io.Writer) {
 }
 
 func printNextUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: zellij-agent agent next [--socket PATH --timeout DURATION --idle-only --pinned-only]")
+	fmt.Fprintln(w, "Usage: zellij-agent agent next [--socket PATH --timeout DURATION --idle-only --pinned-only --unpinned-only]")
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "  --socket PATH\n    agentd Unix socket path (default %q)\n", cli.DefaultSocketPath)
 	fmt.Fprintln(w, "  --timeout DURATION")
@@ -650,10 +662,12 @@ func printNextUsage(w io.Writer) {
 	fmt.Fprintln(w, "    cycle only through agents whose detected state is idle")
 	fmt.Fprintln(w, "  --pinned-only")
 	fmt.Fprintln(w, "    cycle only through pinned agents")
+	fmt.Fprintln(w, "  --unpinned-only")
+	fmt.Fprintln(w, "    cycle only through unpinned agents; mutually exclusive with --pinned-only")
 }
 
 func printPreviousUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: zellij-agent agent prev [--socket PATH --timeout DURATION --idle-only --pinned-only]")
+	fmt.Fprintln(w, "Usage: zellij-agent agent prev [--socket PATH --timeout DURATION --idle-only --pinned-only --unpinned-only]")
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "  --socket PATH\n    agentd Unix socket path (default %q)\n", cli.DefaultSocketPath)
 	fmt.Fprintln(w, "  --timeout DURATION")
@@ -662,6 +676,8 @@ func printPreviousUsage(w io.Writer) {
 	fmt.Fprintln(w, "    cycle only through agents whose detected state is idle")
 	fmt.Fprintln(w, "  --pinned-only")
 	fmt.Fprintln(w, "    cycle only through pinned agents")
+	fmt.Fprintln(w, "  --unpinned-only")
+	fmt.Fprintln(w, "    cycle only through unpinned agents; mutually exclusive with --pinned-only")
 }
 
 func printDashboardUsage(w io.Writer) {

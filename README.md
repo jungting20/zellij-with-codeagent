@@ -142,14 +142,16 @@ To cycle directly between managed agents, run `zellij-agent agent next` or
 `zellij-agent agent prev` from an attached Zellij pane. By default they visit
 every managed agent in forward or reverse creation order. Add `--idle-only`
 to visit only agents whose detected state is `idle`, or `--pinned-only` to
-visit only pinned agents. Combining both flags visits only agents that are
-both idle and pinned. A filtered mode silently does nothing when no matching
+visit only pinned agents. Use `--unpinned-only` to skip pinned agents.
+Either pin filter can be combined with `--idle-only`; `--pinned-only` and
+`--unpinned-only` cannot be combined. A filtered mode silently does nothing when no matching
 agent exists. The daemon
 keeps one in-memory cursor shared by all clients, so a navigation request from
 any session advances the same sequence.
 
-The bundled local Zellij binding is global: press `Alt+o` repeatedly to cycle
-through all managed agents, or press `Alt+p` to cycle only through pinned agents.
+The local Zellij bindings cycle forward: `Alt+u` visits pinned agents,
+`Alt+i` visits pinned idle agents, `Alt+o` visits unpinned agents, and
+`Alt+p` visits unpinned idle agents.
 Outside these shortcuts, `Tab` keeps its normal application behavior.
 
 ### Pane-less Agent Navigation Bridge
@@ -172,16 +174,15 @@ Configure one background plugin identity using that absolute `file:` URL in
 both `load_plugins` and each `MessagePlugin` binding, with the same
 `executable_path "/Users/in05908_mac/.config/custom-cli/zellij-agent"`. Use
 `name "agent-next"` for forward navigation or `name "agent-prev"` for reverse
-navigation. Both names accept payload `"all"`, `"idle-only"`, or
-`"pinned-only"`; payload `"idle-and-pinned"` applies both filters. The bundled
-bindings send `agent-next` / `all` for `Alt+o` and `agent-next` /
-`pinned-only` for `Alt+p`. The first load requests only
+navigation. Both names accept payloads `"all"`, `"idle-only"`, `"pinned-only"`,
+`"idle-and-pinned"`, `"unpinned-only"`, and `"idle-and-unpinned"`.
+The local `Alt+u/i/o/p` bindings use the last four payloads respectively. The first load requests only
 `ReadApplicationState` and `RunCommands`; approve those permissions once for
 this plugin identity.
 
-Both shortcuts use this hidden background bridge, create no terminal panes,
+All four shortcuts use this hidden background bridge, create no terminal panes,
 and delegate to the existing `zellij-agent agent next` CLI command
-(`Alt+p` adds `--pinned-only`). Messages named `agent-prev` delegate to
+with the corresponding pin and idle filters. Messages named `agent-prev` delegate to
 `zellij-agent agent prev` with the payload's matching filter. Verify this by
 comparing `zellij action list-panes --all` inventories before and after each
 shortcut.

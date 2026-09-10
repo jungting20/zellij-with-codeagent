@@ -179,10 +179,10 @@ func TestLookupAgentNext(t *testing.T) {
 	if !ok {
 		t.Fatal("Lookup(RoleAgentNext) ok = false, want true")
 	}
-	if spec.Usage != "agent-next [--socket PATH --timeout DURATION --idle-only --pinned-only]" {
+	if spec.Usage != "agent-next [--socket PATH --timeout DURATION --idle-only --pinned-only --unpinned-only]" {
 		t.Fatalf("usage = %q, want agent-next usage", spec.Usage)
 	}
-	want := []string{"--socket", "--timeout", "--idle-only", "--pinned-only"}
+	want := []string{"--socket", "--timeout", "--idle-only", "--pinned-only", "--unpinned-only"}
 	if len(spec.Arguments) != len(want) {
 		t.Fatalf("arguments = %#v, want %d optional arguments", spec.Arguments, len(want))
 	}
@@ -198,10 +198,10 @@ func TestLookupAgentPrev(t *testing.T) {
 	if !ok {
 		t.Fatal("Lookup(RoleAgentPrev) ok = false, want true")
 	}
-	if spec.Usage != "agent-prev [--socket PATH --timeout DURATION --idle-only --pinned-only]" {
+	if spec.Usage != "agent-prev [--socket PATH --timeout DURATION --idle-only --pinned-only --unpinned-only]" {
 		t.Fatalf("usage = %q, want agent-prev usage", spec.Usage)
 	}
-	want := []string{"--socket", "--timeout", "--idle-only", "--pinned-only"}
+	want := []string{"--socket", "--timeout", "--idle-only", "--pinned-only", "--unpinned-only"}
 	if len(spec.Arguments) != len(want) {
 		t.Fatalf("arguments = %#v, want %d optional arguments", spec.Arguments, len(want))
 	}

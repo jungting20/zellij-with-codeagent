@@ -17,12 +17,13 @@ import (
 )
 
 var (
-	ErrInvalidAgentKind     = errors.New("invalid coding agent kind")
-	ErrInvalidAgentCWD      = errors.New("invalid coding agent cwd")
-	ErrAgentSourceRequired  = errors.New("coding agent source Zellij context is required")
-	ErrAgentIDRequired      = errors.New("coding agent id is required")
-	ErrAgentRuntimeRequired = errors.New("coding agent runtime service is required")
-	ErrAgentMonitorRequired = errors.New("coding agent lifecycle monitor is required")
+	ErrConflictingPinFilters = errors.New("pinned-only and unpinned-only are mutually exclusive")
+	ErrInvalidAgentKind      = errors.New("invalid coding agent kind")
+	ErrInvalidAgentCWD       = errors.New("invalid coding agent cwd")
+	ErrAgentSourceRequired   = errors.New("coding agent source Zellij context is required")
+	ErrAgentIDRequired       = errors.New("coding agent id is required")
+	ErrAgentRuntimeRequired  = errors.New("coding agent runtime service is required")
+	ErrAgentMonitorRequired  = errors.New("coding agent lifecycle monitor is required")
 )
 
 type AgentWithPane struct {
@@ -80,6 +81,7 @@ type FocusNextAgentRequest struct {
 	SourceZellijPaneID  runtime.ZellijPaneID
 	IdleOnly            bool
 	PinnedOnly          bool
+	UnpinnedOnly        bool
 }
 
 type FocusNextAgentResponse struct {
@@ -309,6 +311,9 @@ func (s *Service) focusAdjacentAgent(ctx context.Context, request FocusNextAgent
 	s.focusMu.Lock()
 	defer s.focusMu.Unlock()
 
+	if request.PinnedOnly && request.UnpinnedOnly {
+		return FocusNextAgentResponse{}, ErrConflictingPinFilters
+	}
 	sourceSession := strings.TrimSpace(request.SourceZellijSession)
 	sourcePaneID := runtime.ZellijPaneID(strings.TrimSpace(string(request.SourceZellijPaneID)))
 	if sourceSession == "" || sourcePaneID == "" {
@@ -318,7 +323,7 @@ func (s *Service) focusAdjacentAgent(ctx context.Context, request FocusNextAgent
 	if err != nil {
 		return FocusNextAgentResponse{}, fmt.Errorf("list coding agents: %w", err)
 	}
-	record, ok := adjacentAgentRecord(records, s.lastFocusedID, s.lastSeenIdleStateChangedAt, request.IdleOnly, request.PinnedOnly, step)
+	record, ok := adjacentAgentRecord(records, s.lastFocusedID, s.lastSeenIdleStateChangedAt, request.IdleOnly, request.PinnedOnly, request.UnpinnedOnly, step)
 	if !ok {
 		return FocusNextAgentResponse{Focused: false}, nil
 	}
@@ -372,13 +377,13 @@ func (s *Service) focusAgentLocked(ctx context.Context, request FocusAgentReques
 }
 
 func nextAgentRecord(records []Record, current ID, lastSeenIdleStateChangedAt time.Time, idleOnly bool) (Record, bool) {
-	return adjacentAgentRecord(records, current, lastSeenIdleStateChangedAt, idleOnly, false, 1)
+	return adjacentAgentRecord(records, current, lastSeenIdleStateChangedAt, idleOnly, false, false, 1)
 }
 
-func adjacentAgentRecord(records []Record, current ID, lastSeenIdleStateChangedAt time.Time, idleOnly, pinnedOnly bool, step int) (Record, bool) {
+func adjacentAgentRecord(records []Record, current ID, lastSeenIdleStateChangedAt time.Time, idleOnly, pinnedOnly, unpinnedOnly bool, step int) (Record, bool) {
 	eligible := make([]Record, 0, len(records))
 	for _, record := range records {
-		if (!idleOnly || record.State == StateIdle) && (!pinnedOnly || record.Pinned) {
+		if (!idleOnly || record.State == StateIdle) && (!pinnedOnly || record.Pinned) && (!unpinnedOnly || !record.Pinned) {
 			eligible = append(eligible, record)
 		}
 	}

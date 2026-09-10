@@ -117,3 +117,63 @@ func TestAliasPickerAndBadgeFitSmallWindows(t *testing.T) {
 		}
 	}
 }
+
+func TestCustomAliasPopupKeepsDashboardAndCapturedTarget(t *testing.T) {
+	client := &fakeClient{}
+	m := inputModel(t, client, false)
+	m.width, m.height, m.loaded = 120, 24, true
+	base := strings.Split(ansi.Strip(m.View()), "\n")
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	view := strings.Split(ansi.Strip(m.View()), "\n")
+	if strings.TrimRight(view[0], " ") != strings.TrimRight(base[0], " ") || !strings.Contains(view[m.aliasY+1], "╭") {
+		t.Fatalf("popup should open below selected row:\n%s", m.View())
+	}
+	for range codingagent.TaskAliases() {
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if !strings.Contains(m.View(), "직접입력") {
+		t.Fatal(m.View())
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("한글 q j k 태그")})
+	client.aliasErr = errors.New("unavailable")
+	next, save := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = concreteModel(t, next)
+	if save == nil {
+		t.Fatal("custom alias not submitted")
+	}
+	m = update(t, m, save())
+	if !m.aliasCustom || m.aliasPrompt.Value() != "한글 q j k 태그" {
+		t.Fatal("lost custom input on failure")
+	}
+	client.aliasErr = nil
+	m.rows = []transport.AgentWithPane{record("other", "codex", "idle", time.Now())}
+	next, save = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = concreteModel(t, next)
+	m = update(t, m, save())
+	if client.aliasAgentID != "target" || client.aliasRequest.TaskAlias != "한글 q j k 태그" || m.aliasTarget != "" {
+		t.Fatalf("wrong custom alias save: %+v", client)
+	}
+}
+
+func TestCustomAliasPreselectAndCancel(t *testing.T) {
+	client := &fakeClient{}
+	m := inputModel(t, client, false)
+	m.rows[0].Agent.TaskAlias = "사용자 태그"
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	if m.aliasSelected != len(codingagent.TaskAliases()) {
+		t.Fatal("custom option not preselected")
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.aliasPrompt.Value() != "사용자 태그" {
+		t.Fatal("existing custom tag missing")
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.aliasCustom || m.aliasTarget == "" {
+		t.Fatal("Escape should return to picker")
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.aliasTarget != "" || client.aliasCalls != 0 {
+		t.Fatal("cancel saved alias")
+	}
+}

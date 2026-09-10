@@ -1466,3 +1466,19 @@ func (f *fakeRuntimeService) SetAgentTaskAlias(_ context.Context, req codingagen
 	record.TaskAlias = req.TaskAlias
 	return codingagent.SetAgentTaskAliasResponse{Agent: record}, nil
 }
+
+func TestUnpinnedNavigationTransport(t *testing.T) {
+	service := newFakeRuntimeService()
+	server := newTestServer(t, service)
+	for _, direction := range []string{"next", "prev"} {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/agents/"+direction, strings.NewReader(`{"source_session":"s","source_zellij_pane_id":"terminal_1","unpinned_only":true,"idle_only":true}`)))
+		req := service.agentNextReq
+		if direction == "prev" {
+			req = service.agentPreviousReq
+		}
+		if response.Code != http.StatusOK || !req.UnpinnedOnly || !req.IdleOnly || req.PinnedOnly {
+			t.Fatalf("status=%d req=%+v body=%s", response.Code, req, response.Body.String())
+		}
+	}
+}

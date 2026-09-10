@@ -1,8 +1,13 @@
 package codingagent
 
-import "errors"
+import (
+	"errors"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
-// TaskAlias is a fixed work category, independent of the agent's live state.
+// TaskAlias is a preset or custom work label, independent of the agent's live state.
 type TaskAlias string
 
 const (
@@ -23,12 +28,16 @@ func TaskAliases() []TaskAlias {
 }
 
 func (alias TaskAlias) Valid() bool {
-	for _, candidate := range TaskAliases() {
-		if alias == candidate {
-			return true
+	value := string(alias)
+	if !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func (alias TaskAlias) Label() string {

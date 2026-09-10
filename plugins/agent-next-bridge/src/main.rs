@@ -35,7 +35,7 @@ mod tests {
 use std::collections::BTreeMap;
 
 #[cfg(target_family = "wasm")]
-use model::{command_argv, focused_terminal_in_tab, parse_navigation, BridgeModel};
+use model::{command_argv, focused_client_pane, parse_navigation, BridgeModel};
 #[cfg(target_family = "wasm")]
 use zellij_tile::prelude::*;
 
@@ -46,6 +46,7 @@ struct AgentNavigationBridge {
     request_sequence: u64,
     command_in_flight: bool,
     retry_scheduled: bool,
+    client_query_pending: bool,
 }
 
 #[cfg(target_family = "wasm")]
@@ -70,10 +71,12 @@ impl ZellijPlugin for AgentNavigationBridge {
         subscribe(&[
             EventType::ModeUpdate,
             EventType::PaneUpdate,
+            EventType::TabUpdate,
             EventType::SessionUpdate,
             EventType::PermissionRequestResult,
             EventType::RunCommandResult,
             EventType::Timer,
+            EventType::ListClients,
         ]);
         request_permission(required_permissions());
     }
@@ -100,11 +103,11 @@ impl ZellijPlugin for AgentNavigationBridge {
                 self.flush_ready();
             }
             Event::PaneUpdate(pane_manifest) => {
-                if let Ok((tab_index, _)) = get_focused_pane_info() {
-                    if let Some(pane_id) = focused_terminal_in_tab(tab_index, &pane_manifest) {
-                        self.model.set_last_terminal(Some(pane_id));
-                    }
-                }
+                self.model.update_panes(pane_manifest);
+                self.flush_ready();
+            }
+            Event::TabUpdate(tabs) => {
+                self.model.update_tabs(&tabs);
                 self.flush_ready();
             }
             Event::SessionUpdate(sessions, _) => {
@@ -137,6 +140,19 @@ impl ZellijPlugin for AgentNavigationBridge {
                 }
                 self.flush_ready();
             }
+            Event::ListClients(clients) => {
+                if self.client_query_pending {
+                    self.client_query_pending = false;
+                    if let Some(focused) = focused_client_pane(&clients) {
+                        self.flush_with_focus(focused);
+                    } else if clients.is_empty() {
+                        // The client left this session. Do not replay old keys on reattach.
+                        self.model.discard_pending();
+                    } else {
+                        self.schedule_retry();
+                    }
+                }
+            }
             Event::Timer(_) => {
                 self.retry_scheduled = false;
                 self.flush_ready();
@@ -159,17 +175,28 @@ impl AgentNavigationBridge {
             return;
         }
 
+        if self.client_query_pending || self.model.next_ready().is_none() {
+            return;
+        }
+        match get_focused_pane_info() {
+            Ok((_, focused)) => self.flush_with_focus(focused),
+            Err(_) => {
+                // A session switch can leave this plugin bound to a departed client ID.
+                // Query live clients instead of retrying that stale ID forever.
+                self.client_query_pending = true;
+                list_clients();
+            }
+        }
+    }
+
+    fn flush_with_focus(&mut self, focused: PaneId) {
+        if self.command_in_flight {
+            return;
+        }
         let Some(job) = self.model.next_ready() else {
             return;
         };
-        let focused = match get_focused_pane_info() {
-            Ok((_, pane_id)) => pane_id,
-            Err(error) => {
-                eprintln!("agent navigation bridge delayed: focused pane unavailable: {error}");
-                self.schedule_retry();
-                return;
-            }
-        };
+        self.model.initialize_focused_pane(Some(focused));
         let source_pane_id = match self.model.resolve_source_pane(focused) {
             Ok(source_pane_id) => source_pane_id,
             Err(error) => {

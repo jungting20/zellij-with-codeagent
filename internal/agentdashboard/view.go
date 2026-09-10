@@ -32,9 +32,6 @@ func (m Model) View() string {
 	if m.quitting {
 		return ""
 	}
-	if m.aliasTarget != "" {
-		return m.aliasView()
-	}
 	width := m.width
 	if width <= 0 {
 		width = 80
@@ -72,6 +69,9 @@ func (m Model) View() string {
 		lines = append(lines[:m.height-1], lines[len(lines)-1])
 	}
 	base := strings.Join(lines, "\n")
+	if m.aliasTarget != "" {
+		return m.popupOverlay(base, m.aliasView(), m.aliasX, m.aliasY)
+	}
 	if m.inputPane != "" {
 		return m.inputOverlay(base)
 	}
