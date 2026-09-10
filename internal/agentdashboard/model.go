@@ -60,6 +60,11 @@ type streamEventMsg struct{ event transport.Event }
 type streamClosedMsg struct{ err error }
 type refreshTickMsg struct{}
 
+type panelSelection struct {
+	index int
+	id    string
+}
+
 type Model struct {
 	ctx    context.Context
 	client Client
@@ -69,6 +74,8 @@ type Model struct {
 	rows          []transport.AgentWithPane
 	selected      int
 	selectedID    string
+	focusPinned   bool
+	selections    [2]panelSelection
 	loaded        bool
 	lastRefresh   time.Time
 	listKnown     bool
@@ -108,6 +115,7 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m.saveSelection()
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -134,10 +142,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		for index := range m.rows {
 			if m.rows[index].Agent.ID == msg.agentID {
-				if m.selectedID == msg.agentID && m.rows[index].Agent.Pinned != msg.agent.Pinned {
-					// Keep the cursor on its row instead of following the pin.
-					m.selectedID = ""
-				}
 				m.rows[index].Agent.Pinned = msg.agent.Pinned
 				break
 			}
@@ -188,37 +192,37 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.closeStream()
 		m.quitting = true
 		return m, tea.Quit
-	case "up", "k":
-		if m.selected > 0 {
-			m.selected--
-			m.selectedID = m.rows[m.selected].Agent.ID
+	case "up", "k", "down", "j":
+		indices := m.panelIndices(m.focusPinned)
+		for position, index := range indices {
+			if index != m.selected {
+				continue
+			}
+			if msg.String() == "up" || msg.String() == "k" {
+				position--
+			} else {
+				position++
+			}
+			if position >= 0 && position < len(indices) {
+				m.selected = indices[position]
+				m.selectedID = m.rows[m.selected].Agent.ID
+			}
+			break
 		}
-	case "down", "j":
-		if m.selected+1 < len(m.rows) {
-			m.selected++
-			m.selectedID = m.rows[m.selected].Agent.ID
-		}
-	case "tab":
-		if len(m.rows) > 0 {
-			m.selected = (m.selected + 1) % len(m.rows)
-			m.selectedID = m.rows[m.selected].Agent.ID
-		}
-	case "shift+tab":
-		if len(m.rows) > 0 {
-			m.selected = (m.selected - 1 + len(m.rows)) % len(m.rows)
-			m.selectedID = m.rows[m.selected].Agent.ID
-		}
+	case "tab", "shift+tab":
+		m.focusPinned = !m.focusPinned
+		m.restoreSelection()
 	case "R":
 		return m, m.requestRefresh()
 	case " ":
-		if len(m.rows) == 0 || m.pinning {
+		if len(m.panelIndices(m.focusPinned)) == 0 || m.pinning {
 			return m, nil
 		}
 		m.pinning = true
 		agent := m.rows[m.selected].Agent
 		return m, m.pinCmd(agent.ID, !agent.Pinned)
 	case "enter":
-		if len(m.rows) == 0 || m.focusing {
+		if len(m.panelIndices(m.focusPinned)) == 0 || m.focusing {
 			return m, nil
 		}
 		m.focusing = true
@@ -247,16 +251,6 @@ func (m Model) handleRefresh(msg refreshResultMsg) (tea.Model, tea.Cmd) {
 		m.listHealthy = true
 		rows := append([]transport.AgentWithPane(nil), msg.agents.Agents...)
 		sortAgentRows(rows, m.opts.SourceSession)
-		if m.selected >= 0 && m.selected < len(m.rows) {
-			selected := m.rows[m.selected].Agent
-			for _, row := range rows {
-				if row.Agent.ID == selected.ID && row.Agent.Pinned != selected.Pinned {
-					// A refresh can observe the pin before its command completes.
-					m.selectedID = ""
-					break
-				}
-			}
-		}
 		m.rows = rows
 		m.loaded = true
 		m.lastRefresh = msg.at
@@ -338,24 +332,56 @@ func tabName(record transport.AgentWithPane) string {
 	}
 }
 
-func (m *Model) restoreSelection() {
-	if len(m.rows) == 0 {
-		m.selected, m.selectedID = 0, ""
-		return
+func panelIndex(pinned bool) int {
+	if pinned {
+		return 0
 	}
-	for index := range m.rows {
-		if m.rows[index].Agent.ID == m.selectedID {
-			m.selected = index
+	return 1
+}
+
+func (m Model) panelIndices(pinned bool) []int {
+	var indices []int
+	for index, row := range m.rows {
+		if row.Agent.Pinned == pinned {
+			indices = append(indices, index)
+		}
+	}
+	return indices
+}
+
+func (m *Model) saveSelection() {
+	for position, index := range m.panelIndices(m.focusPinned) {
+		if index == m.selected {
+			m.selections[panelIndex(m.focusPinned)] = panelSelection{index: position, id: m.rows[index].Agent.ID}
 			return
 		}
 	}
-	if m.selected >= len(m.rows) {
-		m.selected = len(m.rows) - 1
+}
+
+func (m *Model) restoreSelection() {
+	for _, pinned := range []bool{true, false} {
+		indices := m.panelIndices(pinned)
+		selection := &m.selections[panelIndex(pinned)]
+		if len(indices) == 0 {
+			*selection = panelSelection{}
+			if pinned == m.focusPinned {
+				m.selected, m.selectedID = 0, ""
+			}
+			continue
+		}
+		for position, index := range indices {
+			if m.rows[index].Agent.ID == selection.id {
+				selection.index = position
+				break
+			}
+		}
+		selection.index = maxInt(0, minInt(selection.index, len(indices)-1))
+		index := indices[selection.index]
+		selection.id = m.rows[index].Agent.ID
+		if pinned == m.focusPinned {
+			m.selected, m.selectedID = index, selection.id
+		}
 	}
-	if m.selected < 0 {
-		m.selected = 0
-	}
-	m.selectedID = m.rows[m.selected].Agent.ID
 }
 
 func (m Model) refreshCmd() tea.Cmd {

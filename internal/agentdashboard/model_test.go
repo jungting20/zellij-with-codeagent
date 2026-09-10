@@ -195,40 +195,61 @@ func TestModelFocusUsesSelectedAgentAndSourceContext(t *testing.T) {
 	}
 }
 
-func TestModelTabCyclesSelection(t *testing.T) {
-	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
-	m = applyRefresh(t, m, []transport.AgentWithPane{
-		record("a", "codex", "idle", time.Unix(1, 0)),
-		record("b", "claude", "idle", time.Unix(2, 0)),
-	})
-
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m = concreteModel(t, next)
-	if cmd != nil || m.focusing || m.quitting || m.selected != 1 || m.selectedID != "b" {
-		t.Fatalf("Tab cmd=%v focusing=%t quitting=%t selected=%d id=%q", cmd, m.focusing, m.quitting, m.selected, m.selectedID)
-	}
-
-	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	if m.selected != 0 || m.selectedID != "a" {
-		t.Fatalf("second Tab selected=%d id=%q, want wrapped to a", m.selected, m.selectedID)
+func TestModelTabSwitchesIndependentAreas(t *testing.T) {
+	for _, key := range []tea.KeyType{tea.KeyTab, tea.KeyShiftTab} {
+		client := &fakeClient{}
+		m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+		rows := []transport.AgentWithPane{
+			record("p1", "codex", "idle", time.Unix(1, 0)),
+			record("p2", "codex", "idle", time.Unix(2, 0)),
+			record("a", "codex", "idle", time.Unix(3, 0)),
+			record("b", "codex", "idle", time.Unix(4, 0)),
+		}
+		rows[0].Agent.Pinned, rows[1].Agent.Pinned = true, true
+		m = applyRefresh(t, m, rows)
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyDown})
+		if m.selectedID != "b" {
+			t.Fatalf("normal selection=%q", m.selectedID)
+		}
+		m = update(t, m, tea.KeyMsg{Type: key})
+		if !m.focusPinned || m.selectedID != "p1" {
+			t.Fatalf("pin selection=%q", m.selectedID)
+		}
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyDown})
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyDown})
+		if m.selectedID != "p2" {
+			t.Fatalf("navigation crossed area: %q", m.selectedID)
+		}
+		m = update(t, m, tea.KeyMsg{Type: key})
+		if m.focusPinned || m.selectedID != "b" {
+			t.Fatalf("normal selection lost: %q", m.selectedID)
+		}
+		m = applyRefresh(t, m, rows)
+		m = update(t, m, tea.KeyMsg{Type: key})
+		if !m.focusPinned || m.selectedID != "p2" {
+			t.Fatalf("pin selection lost: %q", m.selectedID)
+		}
+		if client.focusCalls != 0 || m.quitting {
+			t.Fatal("area switch focused a pane")
+		}
 	}
 }
 
-func TestModelShiftTabCyclesSelectionBackward(t *testing.T) {
-	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
-	m = applyRefresh(t, m, []transport.AgentWithPane{
-		record("a", "codex", "idle", time.Unix(1, 0)),
-		record("b", "claude", "idle", time.Unix(2, 0)),
-	})
-
-	m = update(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
-	if m.selected != 1 || m.selectedID != "b" {
-		t.Fatalf("Shift+Tab selected=%d id=%q, want wrapped to b", m.selected, m.selectedID)
+func TestModelEmptyAreaDoesNotActOnOtherArea(t *testing.T) {
+	client := &fakeClient{}
+	m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+	m = applyRefresh(t, m, []transport.AgentWithPane{record("a", "codex", "idle", time.Now())})
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	for _, key := range []tea.KeyType{tea.KeyDown, tea.KeyUp, tea.KeyEnter, tea.KeySpace} {
+		next, cmd := m.Update(tea.KeyMsg{Type: key})
+		m = concreteModel(t, next)
+		if cmd != nil || !m.focusPinned || m.selectedID != "" {
+			t.Fatalf("empty area acted on key %v", key)
+		}
 	}
-
 	m = update(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
-	if m.selected != 0 || m.selectedID != "a" {
-		t.Fatalf("second Shift+Tab selected=%d id=%q, want a", m.selected, m.selectedID)
+	if m.selectedID != "a" {
+		t.Fatalf("normal selection=%q", m.selectedID)
 	}
 }
 
@@ -301,6 +322,7 @@ func TestModelSpaceUnpinsAndPinFailureKeepsOrder(t *testing.T) {
 	m = applyRefresh(t, m, []transport.AgentWithPane{
 		record("a", "codex", "idle", time.Unix(1, 0)), pinned,
 	})
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	client.pinResponse.Agent = pinned.Agent
 	client.pinResponse.Agent.Pinned = false
 
@@ -314,10 +336,11 @@ func TestModelSpaceUnpinsAndPinFailureKeepsOrder(t *testing.T) {
 	if got := rowIDs(m.rows); !reflect.DeepEqual(got, []string{"a", "b"}) {
 		t.Fatalf("rows=%#v", got)
 	}
-	if m.selected != 0 || m.selectedID != "a" {
+	if !m.focusPinned || m.selectedID != "" {
 		t.Fatalf("selection after unpin=%d/%q", m.selected, m.selectedID)
 	}
 
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	m.selected, m.selectedID = 1, "b"
 	client.pinErr = errors.New("daemon unavailable")
 	before := rowIDs(m.rows)

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"zellij-with-codeagent/internal/transport"
@@ -118,10 +119,17 @@ func TestViewRendersPinnedSectionMarkerAndSpaceHint(t *testing.T) {
 			t.Fatalf("view missing %q:\n%s", want, plain)
 		}
 	}
-	if strings.Index(plain, "* pinned") > strings.Index(plain, "── UNPINNED") ||
-		strings.Index(plain, "── UNPINNED") > strings.Index(plain, "normal") {
-		t.Fatalf("agents are outside their sections:\n%s", plain)
+	heading := lineContaining(plain, "── PINNED")
+	if !strings.Contains(heading, " │ ") || !strings.Contains(heading, "── UNPINNED") {
+		t.Fatalf("areas are not side by side:\n%s", plain)
 	}
+	for _, line := range strings.Split(plain, "\n") {
+		parts := strings.SplitN(line, " │ ", 2)
+		if len(parts) == 2 && (strings.Contains(parts[0], "normal") || strings.Contains(parts[1], "* pinned")) {
+			t.Fatalf("agent in wrong area: %s", line)
+		}
+	}
+	t.Logf("Two-column dashboard:\n%s", plain)
 }
 
 func TestViewKeepsSectionAndSelectionVisibleWhileScrolling(t *testing.T) {
@@ -139,6 +147,7 @@ func TestViewKeepsSectionAndSelectionVisibleWhileScrolling(t *testing.T) {
 				m.width, m.height = width, height
 				for selected := range m.rows {
 					m.selected = selected
+					m.focusPinned = selected < pinnedCount
 					plain := ansi.Strip(m.View())
 					section := fmt.Sprintf("── UNPINNED (%d)", 10-pinnedCount)
 					if selected < pinnedCount {
@@ -244,4 +253,57 @@ func lineContaining(text, needle string) string {
 		}
 	}
 	return ""
+}
+
+func TestViewAreasScrollIndependentlyAndSurviveResize(t *testing.T) {
+	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	var rows []transport.AgentWithPane
+	for index := 0; index < 10; index++ {
+		for _, pinned := range []bool{true, false} {
+			name := fmt.Sprintf("normal-%d", index)
+			if pinned {
+				name = fmt.Sprintf("pin-%d", index)
+			}
+			row := viewRecord(name, "codex", "idle", "/repo/"+name, time.Unix(int64(index), 0))
+			row.Agent.Pinned = pinned
+			rows = append(rows, row)
+		}
+	}
+	m = applyRefresh(t, m, rows)
+	m.width, m.height = 120, 8
+	for index := 0; index < 8; index++ {
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	rightColumn := func(view string) string {
+		var lines []string
+		for _, line := range strings.Split(ansi.Strip(view), "\n") {
+			parts := strings.SplitN(line, " │ ", 2)
+			if len(parts) == 2 {
+				lines = append(lines, parts[1])
+			}
+		}
+		return strings.Join(lines, "\n")
+	}
+	before := rightColumn(m.View())
+	for index := 0; index < 8; index++ {
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if after := rightColumn(m.View()); before != after || !strings.Contains(after, "normal-8") {
+		t.Fatalf("inactive area scrolled:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	m = update(t, m, tea.WindowSizeMsg{Width: 60, Height: 8})
+	plain := ansi.Strip(m.View())
+	if !strings.Contains(plain, "pin-8") || strings.Contains(plain, "UNPINNED") {
+		t.Fatalf("narrow view did not retain active area:\n%s", plain)
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.selectedID != "normal-8" {
+		t.Fatalf("selection lost: %q", m.selectedID)
+	}
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 8})
+	plain = ansi.Strip(m.View())
+	if !strings.Contains(plain, "pin-8") || !strings.Contains(plain, "normal-8") {
+		t.Fatalf("resize lost area viewports:\n%s", plain)
+	}
 }

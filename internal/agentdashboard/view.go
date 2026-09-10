@@ -36,48 +36,21 @@ func (m Model) View() string {
 	if width <= 0 {
 		width = 80
 	}
-	lines := []string{m.headerView(), "PIN  PROJECT  STATE  AGENT  ACCESS  SINCE"}
-	if !m.loaded {
-		lines = append(lines, "Loading agents...")
-	} else if len(m.rows) == 0 {
-		lines = append(lines, "No managed coding agents")
+	lines := []string{m.headerView()}
+	bodyHeight := maxInt(3, len(m.displayRows())+2)
+	if m.height > 0 {
+		bodyHeight = maxInt(1, m.height-3)
+	}
+	if width >= 100 {
+		leftWidth := (width - 3) * 35 / 100
+		rightWidth := width - 3 - leftWidth
+		left := m.panelView(true, leftWidth, bodyHeight)
+		right := m.panelView(false, rightWidth, bodyHeight)
+		for index := 0; index < bodyHeight; index++ {
+			lines = append(lines, padCell(left[index], leftWidth)+" │ "+padCell(right[index], rightWidth))
+		}
 	} else {
-		displayRows := m.displayRows()
-		visible := len(displayRows)
-		if m.height > 0 {
-			visible = minInt(visible, maxInt(1, m.height-4))
-		}
-		selected := displayIndexForAgent(displayRows, m.selected)
-		start := viewportStart(selected, len(displayRows), visible)
-		// Keep the section identity visible when its original heading scrolls away.
-		if start > 0 && visible > 1 && !displayRows[start].isSection() {
-			visible--
-			start = viewportStart(selected, len(displayRows), visible)
-			for index := start - 1; index >= 0 && !displayRows[start].isSection(); index-- {
-				if displayRows[index].isSection() {
-					lines = append(lines, sectionView(displayRows[index], width))
-					break
-				}
-			}
-		}
-		for index := start; index < len(displayRows) && index < start+visible; index++ {
-			row := displayRows[index]
-			switch row.kind {
-			case displayPinned, displayUnpinned:
-				lines = append(lines, sectionView(row, width))
-				continue
-			case displayEmpty:
-				lines = append(lines, mutedStyle.Render("    No agents"))
-				continue
-			case displaySession:
-				lines = append(lines, m.sessionView(row.session, row.count))
-				continue
-			case displayTab:
-				lines = append(lines, m.tabView(row.tab, row.count))
-				continue
-			}
-			lines = append(lines, m.rowView(m.rows[row.agentIndex], row.agentIndex == m.selected, width))
-		}
+		lines = append(lines, m.panelView(m.focusPinned, width, bodyHeight)...)
 	}
 	if m.statusText != "" {
 		style := mutedStyle
@@ -86,7 +59,7 @@ func (m Model) View() string {
 		}
 		lines = append(lines, style.Render(m.statusText))
 	}
-	lines = append(lines, "j/k/Tab/S-Tab move  Space pin/unpin  Enter focus  R refresh  q quit")
+	lines = append(lines, "Tab/S-Tab area  j/k move  Space pin/unpin  Enter focus  R refresh  q quit")
 	for index := range lines {
 		lines[index] = ansi.Truncate(lines[index], width, "…")
 	}
@@ -94,6 +67,69 @@ func (m Model) View() string {
 		lines = append(lines[:m.height-1], lines[len(lines)-1])
 	}
 	return strings.Join(lines, "\n")
+}
+
+// Each area has its own viewport, derived from its remembered selection.
+func (m Model) panelView(pinned bool, width, height int) []string {
+	kind := displayUnpinned
+	if pinned {
+		kind = displayPinned
+	}
+	heading := sectionView(displayRow{kind: kind, count: len(m.panelIndices(pinned))}, width)
+	if pinned == m.focusPinned {
+		heading = selectedStyle.Render(ansi.Truncate(ansi.Strip(heading), width, "…"))
+	}
+	lines := []string{heading}
+	if height > 1 {
+		lines = append(lines, "PIN  PROJECT  STATE  AGENT  ACCESS  SINCE")
+	}
+	var rows []displayRow
+	inPanel := false
+	for _, row := range m.displayRows() {
+		if row.isSection() {
+			inPanel = row.kind == kind
+			continue
+		}
+		if inPanel {
+			rows = append(rows, row)
+		}
+	}
+	selected := -1
+	selection := m.selections[panelIndex(pinned)]
+	indices := m.panelIndices(pinned)
+	if pinned == m.focusPinned && len(indices) > 0 {
+		selected = m.selected
+	} else if len(indices) > 0 {
+		selected = indices[minInt(selection.index, len(indices)-1)]
+	}
+	visible := maxInt(0, height-len(lines))
+	start := viewportStart(displayIndexForAgent(rows, selected), len(rows), visible)
+	if !m.loaded {
+		if visible > 0 {
+			lines = append(lines, "Loading agents...")
+		}
+	} else {
+		for index := start; index < len(rows) && index < start+visible; index++ {
+			row := rows[index]
+			switch row.kind {
+			case displayEmpty:
+				lines = append(lines, mutedStyle.Render("    No agents"))
+			case displaySession:
+				lines = append(lines, m.sessionView(row.session, row.count))
+			case displayTab:
+				lines = append(lines, m.tabView(row.tab, row.count))
+			default:
+				lines = append(lines, m.rowView(m.rows[row.agentIndex], pinned == m.focusPinned && row.agentIndex == selected, width))
+			}
+		}
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	for index := range lines {
+		lines[index] = ansi.Truncate(lines[index], width, "…")
+	}
+	return lines
 }
 
 type displayRow struct {

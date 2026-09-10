@@ -103,7 +103,13 @@ dedicated dashboard:
 `ticket-worker start` is unchanged: it still creates ticket-manager and worker
 panes through execution plans and `CreatePane` requests.
 
-Use `j`/`k` or the arrow keys to select an agent, `Enter` to switch to its
+The dashboard separates pinned agents on the left (35%) from the regular
+list on the right (65%), with independent selection and scrolling. Use
+`Tab` or `Shift+Tab` to switch areas and `Space` to pin or unpin an agent;
+the cursor stays in the current area. Below 100 terminal columns, only the
+active area is shown, with the same area-switching keys.
+
+Use `j`/`k` or the up/down arrow keys to select an agent within an area, `Enter` to switch to its
 session and focus its pane, `R` to refresh, and `q` to quit. The dashboard
 shows the detected agent state (`idle`, `working`, `blocked`, or `unknown`),
 agent kind, project, and time in the current state.
