@@ -42,6 +42,8 @@ func (m Model) View() string {
 	if m.height > 0 {
 		bodyHeight = maxInt(1, m.height-3-len(activityLines))
 	}
+	outputLines := m.outputView(bodyHeight - m.listContentHeight(width))
+	bodyHeight -= len(outputLines)
 	if width >= 100 {
 		leftWidth := (width - 3) * 35 / 100
 		rightWidth := width - 3 - leftWidth
@@ -53,6 +55,7 @@ func (m Model) View() string {
 	} else {
 		lines = append(lines, m.panelView(m.focusPinned, width, bodyHeight)...)
 	}
+	lines = append(lines, outputLines...)
 	lines = append(lines, activityLines...)
 	if m.statusText != "" {
 		style := mutedStyle
@@ -76,6 +79,50 @@ func (m Model) View() string {
 		return m.inputOverlay(base)
 	}
 	return base
+}
+
+// Use only spare list space so the preview never hides agent rows.
+func (m Model) listContentHeight(width int) int {
+	counts := [2]int{2, 2} // Section and column headings.
+	pinned := false
+	for _, row := range m.displayRows() {
+		if row.isSection() {
+			pinned = row.kind == displayPinned
+			continue
+		}
+		counts[panelIndex(pinned)]++
+	}
+	if width >= 100 {
+		return maxInt(counts[0], counts[1])
+	}
+	return counts[panelIndex(m.focusPinned)]
+}
+
+func (m Model) outputView(available int) []string {
+	if available < 2 || !m.loaded || m.selected < 0 || m.selected >= len(m.rows) || len(m.panelIndices(m.focusPinned)) == 0 {
+		return nil
+	}
+	row := m.rows[m.selected]
+	// Subscription output is a rendered screen. Drop terminal escapes and
+	// trailing blank screen rows before taking the tail.
+	output := strings.ReplaceAll(ansi.Strip(row.Pane.LastOutput), "\r\n", "\n")
+	output = strings.Map(func(r rune) rune {
+		if r == '\t' {
+			return ' '
+		}
+		if r < 32 && r != '\n' || r == 127 {
+			return -1
+		}
+		return r
+	}, output)
+	output = strings.TrimRight(output, " \t\r\n")
+	if output == "" {
+		return []string{mutedStyle.Render("── Pane 출력 · " + row.Agent.ID + " ──"), mutedStyle.Render("아직 수집된 출력이 없습니다")}
+	}
+	tail := strings.Split(output, "\n")
+	count := minInt(20, minInt(available-1, len(tail)))
+	lines := []string{mutedStyle.Render(fmt.Sprintf("── Pane 출력 · %s · 마지막 %d줄 ──", row.Agent.ID, count))}
+	return append(lines, tail[len(tail)-count:]...)
 }
 
 // Each area has its own viewport, derived from its remembered selection.

@@ -95,8 +95,10 @@ func TestViewOmitsAccessColumn(t *testing.T) {
 	m.rows[0].Agent.Access = "read-only"
 
 	plain := ansi.Strip(m.View())
+	// The output preview identifies its agent, whose ID may contain access words.
+	list, _, _ := strings.Cut(plain, "── Pane 출력")
 	for _, forbidden := range []string{"ACCESS", "read-only", "full"} {
-		if strings.Contains(plain, forbidden) {
+		if strings.Contains(list, forbidden) {
 			t.Fatalf("view contains access column %q:\n%s", forbidden, plain)
 		}
 	}
@@ -253,6 +255,56 @@ func lineContaining(text, needle string) string {
 		}
 	}
 	return ""
+}
+
+func TestViewOutputUsesSpareSpaceAndFollowsSelectionAndRefresh(t *testing.T) {
+	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	rows := []transport.AgentWithPane{
+		viewRecord("first", "codex", "idle", "/repo/first", time.Now()),
+		viewRecord("second", "codex", "idle", "/repo/second", time.Now()),
+	}
+	var output []string
+	for i := 1; i <= 30; i++ {
+		output = append(output, fmt.Sprintf("output-%02d", i))
+	}
+	rows[0].Pane.LastOutput = "\x1b[31m" + strings.Join(output, "\r\n") + "\x1b[0m\n  \n\n"
+	rows[1].Pane.LastOutput = "second output"
+	m = applyRefresh(t, m, rows)
+	for _, width := range []int{20, 80, 120} {
+		for _, height := range []int{6, 12, 40} {
+			m.width, m.height = width, height
+			plain := ansi.Strip(m.View())
+			if len(strings.Split(plain, "\n")) > height || !strings.Contains(plain, "> 1 ") {
+				t.Fatalf("preview overflow or hidden selection at %dx%d:\n%s", width, height, plain)
+			}
+			for _, line := range strings.Split(plain, "\n") {
+				if ansi.StringWidth(line) > width {
+					t.Fatalf("preview exceeds width: %q", line)
+				}
+			}
+			if height == 40 && (!strings.Contains(plain, "output-11") || !strings.Contains(plain, "output-30") || strings.Contains(plain, "output-10")) {
+				t.Fatalf("preview must show last 20 non-padding screen lines:\n%s", plain)
+			}
+			if height == 12 && (!strings.Contains(plain, "output-30") || strings.Contains(plain, "output-11")) {
+				t.Fatalf("small preview must retain newest output:\n%s", plain)
+			}
+		}
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	if plain := ansi.Strip(m.View()); !strings.Contains(plain, "second output") || strings.Contains(plain, "output-30") {
+		t.Fatalf("preview did not follow selection:\n%s", plain)
+	}
+	rows[1].Pane.LastOutput = "updated output"
+	m = applyRefresh(t, m, rows)
+	if plain := ansi.Strip(m.View()); !strings.Contains(plain, "updated output") || strings.Contains(plain, "second output") {
+		t.Fatalf("preview did not follow refresh:\n%s", plain)
+	}
+	rows[1].Pane.LastOutput = ""
+	m = applyRefresh(t, m, rows)
+	if !strings.Contains(m.View(), "아직 수집된 출력이 없습니다") {
+		t.Fatal("missing empty output placeholder")
+	}
+	t.Logf("Dashboard with output preview:\n%s", ansi.Strip(m.View()))
 }
 
 func TestViewAreasScrollIndependentlyAndSurviveResize(t *testing.T) {
