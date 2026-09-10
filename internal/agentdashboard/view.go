@@ -86,7 +86,7 @@ func (m Model) panelView(pinned bool, width, height int) []string {
 	}
 	lines := []string{heading}
 	if height > 1 {
-		lines = append(lines, "PIN  PROJECT  STATE  AGENT  ACCESS  SINCE")
+		lines = append(lines, "PIN  PROJECT  STATE  AGENT  SINCE")
 	}
 	var rows []displayRow
 	inPanel := false
@@ -262,7 +262,7 @@ func (m Model) rowView(record transport.AgentWithPane, selected bool, width, num
 	if now.IsZero() {
 		now = time.Now()
 	}
-	projectWidth := maxInt(8, width-50)
+	projectWidth := maxInt(8, width-39)
 	pin := " "
 	if record.Agent.Pinned {
 		pin = "*"
@@ -283,19 +283,11 @@ func (m Model) rowView(record transport.AgentWithPane, selected bool, width, num
 	line := prefix + pin + " " + padCell(project, projectWidth) +
 		"  " + padCell(stateView(record.Agent.State), 10) +
 		"  " + padCell(agentName(record.Agent.Kind), 12) +
-		"  " + padCell(accessName(record.Agent.Access), 9) +
 		"  " + elapsed(now, record.Agent.StateChangedAt)
 	if selected {
 		return selectedStyle.Render(line)
 	}
 	return line
-}
-
-func accessName(access string) string {
-	if strings.TrimSpace(access) == "" {
-		return "full"
-	}
-	return access
 }
 
 func stateView(state string) string {

@@ -39,7 +39,7 @@ func TestViewRendersDeterministicGroupedDashboardAtSupportedWidths(t *testing.T)
 			plain := ansi.Strip(m.View())
 
 			for _, want := range []string{
-				"AGENT DASHBOARD", "PROJECT  STATE  AGENT  ACCESS  SINCE",
+				"AGENT DASHBOARD", "PROJECT  STATE  AGENT  SINCE",
 				"project-alpha (2)  current", "experiments (2)",
 				"coding (tab-code) (1)", "review (tab-review) (1)", "lab (tab-lab) (2)",
 				"Codex", "Claude", "Gemini", "Cursor",
@@ -84,7 +84,7 @@ func TestViewGroupsMissingSessionAndTabAsUngrouped(t *testing.T) {
 	}
 }
 
-func TestViewRendersAccessAndDefaultsEmptyAccessToFull(t *testing.T) {
+func TestViewOmitsAccessColumn(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
 	m.width, m.height, m.connection, m.loaded, m.lastRefresh = 100, 11, "live", true, now
@@ -95,9 +95,9 @@ func TestViewRendersAccessAndDefaultsEmptyAccessToFull(t *testing.T) {
 	m.rows[0].Agent.Access = "read-only"
 
 	plain := ansi.Strip(m.View())
-	for _, want := range []string{"PROJECT  STATE  AGENT  ACCESS  SINCE", "read-only", "full"} {
-		if !strings.Contains(plain, want) {
-			t.Fatalf("view missing %q:\n%s", want, plain)
+	for _, forbidden := range []string{"ACCESS", "read-only", "full"} {
+		if strings.Contains(plain, forbidden) {
+			t.Fatalf("view contains access column %q:\n%s", forbidden, plain)
 		}
 	}
 }
