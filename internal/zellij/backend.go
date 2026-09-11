@@ -273,3 +273,23 @@ func (b *CLIBackend) connectedSession(ctx context.Context) (string, error) {
 	}
 	return connected, nil
 }
+
+// ActiveSessions includes detached sessions and excludes exited sessions.
+func (b *CLIBackend) ActiveSessions(ctx context.Context) ([]string, error) {
+	spec := newCommand(b.binary, "", "list-sessions", "--short", "--no-formatting")
+	result, err := b.runner.Run(ctx, spec)
+	if err != nil {
+		if strings.TrimSpace(result.Stderr) == "No active zellij sessions found." || strings.TrimSpace(result.Stdout) == "No active zellij sessions found." {
+			return nil, nil
+		}
+		return nil, &CommandError{Operation: "list sessions", Spec: spec, Stderr: result.Stderr, Err: err}
+	}
+	var sessions []string
+	for _, line := range strings.Split(result.Stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.Contains(line, "EXITED") {
+			sessions = append(sessions, line)
+		}
+	}
+	return sessions, nil
+}

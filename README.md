@@ -418,6 +418,15 @@ The core operations are:
 - `Reconcile` to align registry state with live Zellij pane metadata.
 - `Cleanup` to close daemon-managed panes while preserving unmanaged panes in the same session.
 
+## Daemon persistence
+
+The daemon restores agent settings and pane records from SQLite on startup and
+saves memory changes asynchronously. The default database is
+`$XDG_STATE_HOME/zellij-agent/daemon.db`, falling back to
+`~/.local/state/zellij-agent/daemon.db`. Override it with `daemon serve --db PATH`.
+For an isolated daemon, specify both a separate `--socket` and `--db`.
+See [persistence behavior and recovery limits](docs/daemon-persistence.md).
+
 ## Transport API
 
 `zellij-agent daemon serve` exposes these local endpoints on `/tmp/agentd.sock` by default:

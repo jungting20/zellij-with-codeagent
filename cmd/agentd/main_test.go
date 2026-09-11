@@ -78,6 +78,7 @@ func TestRunInvalidArgument(t *testing.T) {
 }
 
 func TestRunServeDefaultsSocket(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var stdout, stderr bytes.Buffer
@@ -93,6 +94,7 @@ func TestRunServeDefaultsSocket(t *testing.T) {
 }
 
 func TestRunServeCanStopWithCanceledContext(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var stdout, stderr bytes.Buffer

@@ -771,3 +771,25 @@ func TestSwitchSessionWithoutSourceRejectsAmbiguousOrMissingClients(t *testing.T
 		}
 	}
 }
+
+func TestActiveSessionsIncludesDetachedAndPropagatesInspectionFailures(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		result  CommandResult
+		err     error
+		want    []string
+		wantErr bool
+	}{
+		{name: "live and exited", result: CommandResult{Stdout: "attached\ndetached\nold [EXITED]\n"}, want: []string{"attached", "detached"}},
+		{name: "empty", result: CommandResult{Stderr: "No active zellij sessions found."}, err: errors.New("exit 1")},
+		{name: "failure", result: CommandResult{Stderr: "permission denied"}, err: errors.New("exit 1"), wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &fakeRunner{results: []fakeResult{{result: test.result, err: test.err}}}
+			got, err := NewBackend(Options{Runner: runner}).ActiveSessions(context.Background())
+			if (err != nil) != test.wantErr || !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("got=%v err=%v", got, err)
+			}
+		})
+	}
+}

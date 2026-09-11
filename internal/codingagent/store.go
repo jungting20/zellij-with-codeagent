@@ -1,11 +1,13 @@
 package codingagent
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"sync"
 	"time"
+	"zellij-with-codeagent/internal/persistence"
 
 	"zellij-with-codeagent/internal/runtime"
 )
@@ -19,10 +21,11 @@ var (
 )
 
 type memoryStore struct {
-	mu     sync.RWMutex
-	now    func() time.Time
-	byID   map[ID]Record
-	byPane map[runtime.PaneID]ID
+	persist *persistence.Writer
+	mu      sync.RWMutex
+	now     func() time.Time
+	byID    map[ID]Record
+	byPane  map[runtime.PaneID]ID
 }
 
 func NewMemoryStore(now func() time.Time) Store {
@@ -51,6 +54,7 @@ func (s *memoryStore) Create(record Record) (Record, error) {
 	}
 	s.byID[record.ID] = record
 	s.byPane[record.PaneID] = record.ID
+	s.saveLocked(record)
 	return record, nil
 }
 
@@ -113,6 +117,7 @@ func (s *memoryStore) UpdateState(id ID, update StateUpdate) (StateChange, error
 	current.MatchedRule = update.MatchedRule
 	current.StateChangedAt = s.now()
 	s.byID[id] = current
+	s.saveLocked(current)
 	return StateChange{Previous: previous, Current: current, Changed: true}, nil
 }
 
@@ -125,6 +130,7 @@ func (s *memoryStore) SetPinned(id ID, pinned bool) (Record, error) {
 	}
 	record.Pinned = pinned
 	s.byID[id] = record
+	s.saveLocked(record)
 	return record, nil
 }
 
@@ -140,6 +146,7 @@ func (s *memoryStore) SetTaskAlias(id ID, alias TaskAlias) (Record, error) {
 	}
 	record.TaskAlias = alias
 	s.byID[id] = record
+	s.saveLocked(record)
 	return record, nil
 }
 
@@ -152,6 +159,9 @@ func (s *memoryStore) Delete(id ID) error {
 	}
 	delete(s.byID, id)
 	delete(s.byPane, record.PaneID)
+	if s.persist != nil {
+		s.persist.Enqueue(persistence.Change{Table: persistence.Agents, ID: string(id)})
+	}
 	return nil
 }
 
@@ -180,5 +190,33 @@ func validState(state State) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// NewPersistentMemoryStore restores records before attaching the change writer.
+func NewPersistentMemoryStore(w *persistence.Writer, now func() time.Time) (Store, error) {
+	s := NewMemoryStore(now).(*memoryStore)
+	rows, err := w.Load(persistence.Agents)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		var record Record
+		if err = json.Unmarshal(row.Data, &record); err != nil {
+			return nil, err
+		}
+		if string(record.ID) != row.ID || string(record.PaneID) != row.PaneID {
+			return nil, fmt.Errorf("agent persistence identity mismatch: %s", row.ID)
+		}
+		if _, err = s.Create(record); err != nil {
+			return nil, err
+		}
+	}
+	s.persist = w
+	return s, nil
+}
+func (s *memoryStore) saveLocked(record Record) {
+	if s.persist != nil {
+		s.persist.Enqueue(persistence.Change{Table: persistence.Agents, ID: string(record.ID), PaneID: string(record.PaneID), Value: record})
 	}
 }

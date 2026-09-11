@@ -371,3 +371,13 @@ func (m *Monitor) stopTimersLocked(entry *monitoredAgent) {
 	}
 	m.cancelIdleCandidateLocked(entry)
 }
+
+// Close stops timers after the runtime has stopped delivering observations.
+func (m *Monitor) Close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, entry := range m.monitoring {
+		m.stopTimersLocked(entry)
+	}
+	clear(m.monitoring)
+}

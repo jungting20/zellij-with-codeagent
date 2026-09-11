@@ -46,6 +46,9 @@ type Server struct {
 	httpServer         *http.Server
 	shutdown           chan struct{}
 	shutdownOnce       sync.Once
+	requestsMu         sync.Mutex
+	requests           sync.WaitGroup
+	stopping           bool
 }
 
 func NewServer(opts ServerOptions) (*Server, error) {
@@ -98,6 +101,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	case <-s.shutdown:
 		return s.stop(listener, errCh, nil)
 	case err := <-errCh:
+		s.requestsMu.Lock()
+		s.stopping = true
+		s.requestsMu.Unlock()
+		_ = s.httpServer.Close()
+		s.requests.Wait()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
@@ -106,6 +114,15 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.requestsMu.Lock()
+	if s.stopping {
+		s.requestsMu.Unlock()
+		http.Error(w, "daemon is stopping", http.StatusServiceUnavailable)
+		return
+	}
+	s.requests.Add(1)
+	s.requestsMu.Unlock()
+	defer s.requests.Done()
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/health":
 		writeJSON(w, http.StatusOK, HealthResponse{Status: "ok", Version: s.version, Capabilities: []string{CapabilityAgentAccessReadOnlyV1}})
@@ -150,12 +167,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) stop(listener net.Listener, errCh <-chan error, result error) error {
+	s.requestsMu.Lock()
+	s.stopping = true
+	s.requestsMu.Unlock()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
+		_ = s.httpServer.Close()
 		_ = listener.Close()
+		s.requests.Wait()
 		return err
 	}
+	s.requests.Wait()
 	if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

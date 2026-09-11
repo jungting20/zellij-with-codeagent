@@ -71,6 +71,8 @@ type SubscriptionManager struct {
 	opts SubscriptionManagerOptions
 
 	mu             sync.Mutex
+	closed         bool
+	workers        sync.WaitGroup
 	cancelByPaneID map[registry.PaneID]*paneSubscription
 	lastRendered   map[subscriptionKey]string
 }
@@ -180,6 +182,12 @@ func (m *SubscriptionManager) startRecord(record registry.PaneRecord) bool {
 	}
 
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		cancel()
+		close(subscription.done)
+		return false
+	}
 	existing := m.cancelByPaneID[record.ID]
 	if existing != nil && existing.key.generation == record.Generation {
 		m.mu.Unlock()
@@ -193,6 +201,7 @@ func (m *SubscriptionManager) startRecord(record registry.PaneRecord) bool {
 		close(subscription.done)
 		return true
 	}
+	m.workers.Add(1)
 	m.cancelByPaneID[record.ID] = subscription
 	m.mu.Unlock()
 
@@ -208,10 +217,11 @@ func (m *SubscriptionManager) startRecord(record registry.PaneRecord) bool {
 			subscription.cancel()
 		}
 		close(subscription.done)
+		m.workers.Done()
 		return err == nil
 	}
 
-	go m.run(record, subscription, ctx)
+	go func() { defer m.workers.Done(); m.run(record, subscription, ctx) }()
 	return false
 }
 
@@ -549,4 +559,17 @@ func (m *SubscriptionManager) publishHealthForID(logicalID registry.PaneID, msg 
 		Message: msg,
 		Time:    m.opts.Now(),
 	})
+}
+
+// Close joins all subscription workers, including canceled, replaced generations.
+func (m *SubscriptionManager) Close() {
+	m.mu.Lock()
+	m.closed = true
+	for _, subscription := range m.cancelByPaneID {
+		subscription.cancel()
+	}
+	clear(m.cancelByPaneID)
+	clear(m.lastRendered)
+	m.mu.Unlock()
+	m.workers.Wait()
 }

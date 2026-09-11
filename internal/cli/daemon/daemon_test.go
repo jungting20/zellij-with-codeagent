@@ -90,6 +90,7 @@ func TestVoiceQueueAdapterRejectsCanceledContext(t *testing.T) {
 }
 
 func TestRunContextClosesVoiceServiceAfterSocketShutdown(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	socketPath := fmt.Sprintf("/tmp/agentd-voice-daemon-%d.sock", time.Now().UnixNano())
 	defer os.Remove(socketPath)
 	service := &fakeDaemonVoiceService{closeSocketPath: socketPath, closeErr: errors.New("speaker shutdown failed")}
@@ -395,6 +396,7 @@ func TestReconcileLoopDoesNotOverlapCalls(t *testing.T) {
 }
 
 func TestRunContextServeStartsAndJoinsReconcileLoop(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	restoreDaemonServeSeams(t)
 	ticker := newDaemonFakeTicker()
 	server := &daemonFakeServeServer{started: make(chan struct{}), canceled: make(chan struct{})}
@@ -452,6 +454,7 @@ func TestRunContextServeStartsAndJoinsReconcileLoop(t *testing.T) {
 }
 
 func TestRunContextServeStartupFailureStopsAndJoinsReconcileLoop(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	restoreDaemonServeSeams(t)
 	ticker := newDaemonFakeTicker()
 	tickerCreated := make(chan struct{})
@@ -474,12 +477,16 @@ func TestRunContextServeStartupFailureStopsAndJoinsReconcileLoop(t *testing.T) {
 }
 
 func TestRunContextServeDeliversIdleVoiceFromSharedEventBus(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	restoreDaemonFactories(t)
 	restoreDaemonServeSeams(t)
 	store := codingagent.NewMemoryStore(time.Now)
 	bus := eventbus.New()
 	voiceService := &fakeDaemonVoiceService{enqueueStatus: voice.EnqueueStatusQueued}
-	newDaemonStore = func(func() time.Time) codingagent.Store { return store }
+	newDaemonMonitor = func(opts codingagent.MonitorOptions) *codingagent.Monitor {
+		store = opts.Store
+		return codingagent.NewMonitor(opts)
+	}
 	newDaemonEventBus = func() *eventbus.Bus { return bus }
 	newDaemonBackend = func() daemonBackend { return newDaemonFakeBackend() }
 	newDaemonSubscriptionRunner = func() agentruntime.SubscriptionRunner { return daemonFakeSubscriptionRunner{} }
@@ -487,16 +494,17 @@ func TestRunContextServeDeliversIdleVoiceFromSharedEventBus(t *testing.T) {
 	newDaemonVoiceService = func(io.Writer) daemonVoiceService { return voiceService }
 	t.Cleanup(func() { newDaemonVoiceService = originalVoiceFactory })
 
-	changedAt := time.Unix(7, 11)
-	_, err := store.Create(codingagent.Record{
-		ID: "agent-9", Kind: codingagent.KindClaude, PaneID: "pane-9",
-		CWD:   "/workspace/sample-project",
-		State: codingagent.StateIdle, NotifyOnIdle: true, StateChangedAt: changedAt,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	newDaemonTransportServer = func(transport.ServerOptions) (daemonServeServer, error) {
+		changedAt := time.Unix(7, 11)
+		_, err := store.Create(codingagent.Record{
+			ID: "agent-9", Kind: codingagent.KindClaude, PaneID: "pane-9",
+			CWD:   "/workspace/sample-project",
+			State: codingagent.StateIdle, NotifyOnIdle: true, StateChangedAt: changedAt,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
 		return daemonServeServerFunc(func(context.Context) error {
 			bus.Publish(eventbus.Event{
 				Type: eventbus.TypeAgentStateChanged, AgentID: "agent-9",

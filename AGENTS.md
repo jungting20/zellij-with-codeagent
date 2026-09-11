@@ -26,6 +26,13 @@ This is a Go module for a Zellij-backed agent runtime. Command entrypoints live 
 
 Use standard Go formatting: run `gofmt` on edited Go files and keep imports organized by `go fmt`/`goimports` conventions. Package names are short lowercase nouns, and tests sit beside production files with `_test.go` suffixes. Prefer explicit daemon-owned identifiers such as `PaneID`, `task_id`, and `request_id` when crossing package or transport boundaries. Keep shell scripts strict with `set -euo pipefail`, matching existing scripts.
 
+## Registry and Database Consistency
+
+- Whenever registry or coding-agent record structures change, update their SQLite persistence in the same change. Review the schema, JSON payloads, change-queue writes, startup loading, index reconstruction, and runtime recovery together; changes to in-memory fields or relationships must also survive daemon restart.
+- Keep `internal/registry/persistence.go`, `internal/codingagent/store.go`, `internal/persistence`, and recovery code aligned with the domain records. Explicitly document fields that are intentionally transient and excluded from persistence.
+- When a stored schema or payload change requires migration, increment the database schema version and implement a migration that preserves existing data. Define defaults for older records when adding fields; do not require deleting the database to upgrade.
+- Add or update persistence and restart tests for affected fields, relationships, indexes, and migrations. Update `docs/daemon-persistence.md` when the storage or recovery contract changes.
+
 ## Testing Guidelines
 
 Unit tests use Go's standard `testing` package and are named `Test...`. Run `go test ./...` before submitting code. Real Zellij tests are opt-in: use `AGENTD_ZELLIJ_INTEGRATION=1 go test ./internal/runtime -run '^TestIntegration' -v -count=1` for integration coverage, and `AGENTD_ZELLIJ_E2E=1` only for manual E2E flows that may leave panes open for inspection.

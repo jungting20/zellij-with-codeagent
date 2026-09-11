@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"zellij-with-codeagent/internal/persistence"
 )
 
 var (
@@ -21,6 +22,7 @@ type paneLocation struct {
 }
 
 type Registry struct {
+	persist        *persistence.Writer
 	mu             sync.RWMutex
 	now            func() time.Time
 	sessions       map[SessionID]SessionRecord
@@ -115,6 +117,7 @@ func (r *Registry) RegisterPane(req RegisterPaneRequest) (PaneRecord, error) {
 	tab.Panes[record.ID] = record
 	session.Tabs[req.TabID] = tab
 	r.sessions[req.SessionID] = session
+	r.saveLocked(session, tab, record, false)
 
 	r.paneToLocation[record.ID] = paneLocation{
 		SessionID: req.SessionID,
@@ -212,6 +215,7 @@ func (r *Registry) UpdateActivePaneStatusGeneration(id PaneID, generation uint64
 	session.Tabs[loc.TabID] = tab
 	session.UpdatedAt = now
 	r.sessions[loc.SessionID] = session
+	r.saveLocked(session, tab, pane, false)
 
 	return clonePaneRecord(pane), true, nil
 }
@@ -245,6 +249,7 @@ func (r *Registry) ClaimPaneClosureGeneration(id PaneID, generation uint64, stat
 	session.Tabs[loc.TabID] = tab
 	session.UpdatedAt = now
 	r.sessions[loc.SessionID] = session
+	r.saveLocked(session, tab, pane, false)
 
 	return clonePaneRecord(pane), claimed, nil
 }
@@ -270,6 +275,7 @@ func (r *Registry) updatePaneStatusGeneration(id PaneID, generation uint64, stat
 	session.Tabs[loc.TabID] = tab
 	session.UpdatedAt = now
 	r.sessions[loc.SessionID] = session
+	r.saveLocked(session, tab, pane, false)
 
 	return clonePaneRecord(pane), nil
 }
@@ -387,6 +393,7 @@ func (r *Registry) removePaneLocked(loc paneLocation, session SessionRecord, tab
 	session.UpdatedAt = now
 	r.sessions[loc.SessionID] = session
 
+	r.saveLocked(session, tab, pane, true)
 	delete(r.paneToLocation, pane.ID)
 	if pane.ZellijPaneID != "" && r.latestByZellij[pane.ZellijPaneID] == pane.ID {
 		delete(r.latestByZellij, pane.ZellijPaneID)

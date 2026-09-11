@@ -12,12 +12,16 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+
+	"github.com/google/uuid"
 
 	"zellij-with-codeagent/internal/cli"
 	"zellij-with-codeagent/internal/codingagent"
 	"zellij-with-codeagent/internal/eventbus"
+	"zellij-with-codeagent/internal/persistence"
 	"zellij-with-codeagent/internal/registry"
 	agentruntime "zellij-with-codeagent/internal/runtime"
 	"zellij-with-codeagent/internal/transport"
@@ -78,7 +82,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	return RunContext(context.Background(), args, stdout, stderr)
 }
 
-func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) (exitCode int) {
+	stderr = &serializedWriter{writer: stderr}
 	if len(args) == 0 {
 		if _, err := newRuntimeService(); err != nil {
 			fmt.Fprintf(stderr, "construct daemon service: %v\n", err)
@@ -96,19 +101,47 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintf(stdout, "agentd %s\n", version)
 		return 0
 	case "serve":
-		socketPath, ok := parseServeArgs(args[1:], stderr)
+		socketPath, dbPath, ok := parseServeArgs(args[1:], stderr)
 		if !ok {
 			return 2
 		}
+
+		dbPath, err := persistence.ResolvePath(dbPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "resolve daemon DB: %v\n", err)
+			return 1
+		}
+		writer, err := persistence.Open(dbPath, func(err error) { fmt.Fprintf(stderr, "agentd persistence: %v\n", err) })
+		if err != nil {
+			fmt.Fprintf(stderr, "open daemon DB: %v\n", err)
+			return 1
+		}
+		defer func() {
+			drainCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := writer.Close(drainCtx); err != nil {
+				fmt.Fprintf(stderr, "drain daemon DB (unsaved changes may remain): %v\n", err)
+				exitCode = 1
+			}
+		}()
 		voiceService := newDaemonVoiceService(stdout)
 		defer func() {
 			if err := voiceService.Close(); err != nil {
 				fmt.Fprintf(stderr, "close voice service: %v\n", err)
 			}
 		}()
-		bundle, err := newRuntimeBundle()
+		bundle, err := newRuntimeBundle(writer)
 		if err != nil {
 			fmt.Fprintf(stderr, "construct daemon service: %v\n", err)
+			return 1
+		}
+
+		defer bundle.stop()
+		recoveryCtx, cancelRecovery := context.WithTimeout(ctx, 30*time.Second)
+		err = bundle.recover(recoveryCtx)
+		cancelRecovery()
+		if err != nil {
+			fmt.Fprintf(stderr, "recover daemon state: %v\n", err)
 			return 1
 		}
 		service := bundle.service
@@ -166,19 +199,20 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  stop    Stop the running daemon")
 }
 
-func parseServeArgs(args []string, stderr io.Writer) (string, bool) {
+func parseServeArgs(args []string, stderr io.Writer) (string, string, bool) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	dbPath := fs.String("db", "", "SQLite state database path (default: XDG state directory)")
 	socketPath := fs.String("socket", cli.DefaultSocketPath, "agentd Unix socket path")
 	if err := fs.Parse(args); err != nil {
-		return "", false
+		return "", "", false
 	}
 	if fs.NArg() != 0 {
 		fmt.Fprintf(stderr, "unexpected arguments: %s\n", fs.Args())
 		printUsage(stderr)
-		return "", false
+		return "", "", false
 	}
-	return *socketPath, true
+	return *socketPath, *dbPath, true
 }
 
 func runStop(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -335,6 +369,8 @@ type daemonRuntimeBundle struct {
 	service transport.ServerRuntime
 	bus     *eventbus.Bus
 	store   codingagent.Store
+	recover func(context.Context) error
+	stop    func()
 }
 
 func newRuntimeService() (transport.ServerRuntime, error) {
@@ -345,7 +381,7 @@ func newRuntimeService() (transport.ServerRuntime, error) {
 	return bundle.service, nil
 }
 
-func newRuntimeBundle() (*daemonRuntimeBundle, error) {
+func newRuntimeBundle(writers ...*persistence.Writer) (*daemonRuntimeBundle, error) {
 	bus := newDaemonEventBus()
 	if bus == nil {
 		return nil, errors.New("construct daemon service: event bus is nil")
@@ -353,6 +389,19 @@ func newRuntimeBundle() (*daemonRuntimeBundle, error) {
 	store := newDaemonStore(time.Now)
 	if isNilDaemonDependency(store) {
 		return nil, errors.New("construct daemon service: agent store is nil")
+	}
+	reg := registry.New()
+	persistent := len(writers) > 0 && writers[0] != nil
+	if persistent {
+		var err error
+		store, err = codingagent.NewPersistentMemoryStore(writers[0], time.Now)
+		if err != nil {
+			return nil, err
+		}
+		reg, err = registry.NewPersistent(writers[0])
+		if err != nil {
+			return nil, err
+		}
 	}
 	detector, manifestErrors := loadDaemonDetector()
 	if detector == nil {
@@ -376,7 +425,8 @@ func newRuntimeBundle() (*daemonRuntimeBundle, error) {
 		return nil, errors.New("construct daemon service: subscription runner is nil")
 	}
 	runtimeService := newDaemonRuntimeService(agentruntime.Options{
-		Registry:           registry.New(),
+		Registry:           reg,
+		NewPaneID:          persistentPaneIDGenerator(persistent),
 		Backend:            backend,
 		SessionSwitcher:    backend,
 		EventBus:           bus,
@@ -390,11 +440,20 @@ func newRuntimeBundle() (*daemonRuntimeBundle, error) {
 		RuntimeService:   runtimeService,
 		Store:            store,
 		LifecycleMonitor: monitor,
+		NewAgentID:       persistentAgentIDGenerator(persistent),
 	})
 	if service == nil {
 		return nil, errors.New("construct daemon service: coding agent service is nil")
 	}
-	return &daemonRuntimeBundle{service: service, bus: bus, store: store}, nil
+	return &daemonRuntimeBundle{service: service, bus: bus, store: store,
+		recover: func(ctx context.Context) error {
+			if err := service.RestoreMonitoring(ctx); err != nil {
+				return err
+			}
+			return runtimeService.Recover(ctx)
+		},
+		stop: func() { runtimeService.StopObservations(); monitor.Close() },
+	}, nil
 }
 
 func isNilDaemonDependency(value any) bool {
@@ -435,4 +494,31 @@ func runReconcileLoop(
 			}
 		}
 	}
+}
+
+// Persistent daemons use restart-safe IDs; in-memory compositions retain their
+// existing deterministic generators for compatibility.
+func persistentPaneIDGenerator(enabled bool) agentruntime.PaneIDGenerator {
+	if !enabled {
+		return nil
+	}
+	return func() agentruntime.PaneID { return agentruntime.PaneID("pane-" + uuid.NewString()) }
+}
+func persistentAgentIDGenerator(enabled bool) func() codingagent.ID {
+	if !enabled {
+		return nil
+	}
+	return func() codingagent.ID { return codingagent.ID("agent-" + uuid.NewString()) }
+}
+
+// Background diagnostics share the same writer as foreground CLI errors.
+type serializedWriter struct {
+	mu     sync.Mutex
+	writer io.Writer
+}
+
+func (w *serializedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.writer.Write(p)
 }
