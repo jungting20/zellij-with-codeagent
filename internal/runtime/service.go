@@ -356,9 +356,6 @@ func (s *Service) FocusPane(ctx context.Context, req FocusPaneRequest) (FocusPan
 	sourcePaneID := strings.TrimSpace(string(req.SourceZellijPaneID))
 	targetSession := strings.TrimSpace(string(record.SessionID))
 	targetPaneID := strings.TrimSpace(string(record.ZellijPaneID))
-	if sourceSession == "" || sourcePaneID == "" {
-		return FocusPaneResponse{}, fmt.Errorf("%w: source Zellij context is required", ErrInvalidPaneTarget)
-	}
 	if targetSession == "" || targetPaneID == "" {
 		return FocusPaneResponse{}, fmt.Errorf("%w: pane %s has no Zellij target", ErrInvalidPaneTarget, record.ID)
 	}

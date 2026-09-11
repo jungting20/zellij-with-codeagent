@@ -1263,22 +1263,14 @@ func TestServiceFocusNextAgentRestartsWhenCursorAgentBecomesWorking(t *testing.T
 	}
 }
 
-func TestServiceFocusNextAgentRejectsBlankSourceBeforeListingAgents(t *testing.T) {
-	for _, request := range []FocusNextAgentRequest{
-		{SourceZellijPaneID: "terminal_1"},
-		{SourceZellijSession: "dashboard"},
-		{SourceZellijSession: "   ", SourceZellijPaneID: "  "},
-	} {
-		store := &serviceListStore{Store: NewMemoryStore(nil)}
-		runtimeService := &serviceFakeRuntime{}
-		service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
-
-		if _, err := service.FocusNextAgent(context.Background(), request); !errors.Is(err, ErrAgentSourceRequired) {
-			t.Fatalf("FocusNextAgent(%#v) error = %v, want %v", request, err, ErrAgentSourceRequired)
-		}
-		if store.listCalls != 0 || len(runtimeService.focused) != 0 {
-			t.Fatalf("blank source listed or focused agents: list=%d focus=%d", store.listCalls, len(runtimeService.focused))
-		}
+func TestServiceFocusNextAgentWithoutSource(t *testing.T) {
+	store := NewMemoryStore(nil)
+	seedFocusRecords(t, store)
+	runtimeService := &serviceFakeRuntime{}
+	service := NewService(ServiceOptions{RuntimeService: runtimeService, Store: store, LifecycleMonitor: &serviceFakeMonitor{}})
+	response, err := service.FocusNextAgent(context.Background(), FocusNextAgentRequest{})
+	if err != nil || !response.Focused || len(runtimeService.focused) != 1 {
+		t.Fatalf("response=%#v err=%v focused=%#v", response, err, runtimeService.focused)
 	}
 }
 

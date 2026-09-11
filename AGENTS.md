@@ -18,6 +18,7 @@ This is a Go module for a Zellij-backed agent runtime. Command entrypoints live 
 - The pane-less `Alt+o`/`Alt+p` Zellij bridge source lives in `plugins/agent-next-bridge/`. Its WASI entrypoint is `plugins/agent-next-bridge/src/main.rs`, and its pure behavior model is `plugins/agent-next-bridge/src/model.rs`.
 - Build, test, and atomically install the plugin with `cargo test --manifest-path plugins/agent-next-bridge/Cargo.toml` followed by `./scripts/install-agent-next-bridge.sh`.
 - The installer writes the runtime artifact to `~/.config/zellij/plugins/agent-next-bridge.wasm`. Keep Zellij configuration pointed at that installed artifact; do not reference a worktree `target/` path.
+- Whenever the plugin is modified, after successfully building and installing it, reload it in every currently running Zellij session, including detached sessions. For each live session, run `zellij --session "{session}" action start-or-reload-plugin "file:$HOME/.config/zellij/plugins/agent-next-bridge.wasm"`, replacing `{session}` with its actual name. Skip exited sessions; if no sessions are running, no reload is needed.
 - The plugin must remain a `wasm32-wasip1` executable binary exporting `_start`. Building it as a `cdylib`/`rlib` causes Zellij to fail with `could not find exported function`.
 - The bridge must invoke the public `zellij-agent agent next` CLI and must not create a transient pane or bypass the daemon/runtime boundary.
 

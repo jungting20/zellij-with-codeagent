@@ -286,6 +286,9 @@ func (s *Service) ListAgents(ctx context.Context) (ListAgentsResponse, error) {
 }
 
 func (s *Service) FocusAgent(ctx context.Context, request FocusAgentRequest) (FocusAgentResponse, error) {
+	if strings.TrimSpace(request.SourceZellijSession) == "" || strings.TrimSpace(string(request.SourceZellijPaneID)) == "" {
+		return FocusAgentResponse{}, ErrAgentSourceRequired
+	}
 	s.focusMu.Lock()
 	defer s.focusMu.Unlock()
 	return s.focusAgentLocked(ctx, request)
@@ -314,11 +317,6 @@ func (s *Service) focusAdjacentAgent(ctx context.Context, request FocusNextAgent
 	if request.PinnedOnly && request.UnpinnedOnly {
 		return FocusNextAgentResponse{}, ErrConflictingPinFilters
 	}
-	sourceSession := strings.TrimSpace(request.SourceZellijSession)
-	sourcePaneID := runtime.ZellijPaneID(strings.TrimSpace(string(request.SourceZellijPaneID)))
-	if sourceSession == "" || sourcePaneID == "" {
-		return FocusNextAgentResponse{}, ErrAgentSourceRequired
-	}
 	records, err := s.store.List()
 	if err != nil {
 		return FocusNextAgentResponse{}, fmt.Errorf("list coding agents: %w", err)
@@ -329,8 +327,8 @@ func (s *Service) focusAdjacentAgent(ctx context.Context, request FocusNextAgent
 	}
 	response, err := s.focusAgentLocked(ctx, FocusAgentRequest{
 		AgentID:             record.ID,
-		SourceZellijSession: sourceSession,
-		SourceZellijPaneID:  sourcePaneID,
+		SourceZellijSession: request.SourceZellijSession,
+		SourceZellijPaneID:  request.SourceZellijPaneID,
 	})
 	if err != nil {
 		return FocusNextAgentResponse{}, err
@@ -344,9 +342,6 @@ func (s *Service) focusAdjacentAgent(ctx context.Context, request FocusNextAgent
 func (s *Service) focusAgentLocked(ctx context.Context, request FocusAgentRequest) (FocusAgentResponse, error) {
 	sourceSession := strings.TrimSpace(request.SourceZellijSession)
 	sourcePaneID := runtime.ZellijPaneID(strings.TrimSpace(string(request.SourceZellijPaneID)))
-	if sourceSession == "" || sourcePaneID == "" {
-		return FocusAgentResponse{}, ErrAgentSourceRequired
-	}
 	s.sweepInactiveOwners()
 	record, err := s.store.Get(request.AgentID)
 	if err != nil {

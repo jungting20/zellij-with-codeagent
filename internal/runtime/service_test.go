@@ -706,8 +706,6 @@ func TestFocusPaneRejectsInvalidSourceContextOrMissingSwitcher(t *testing.T) {
 		paneID   ZellijPaneID
 		switcher bool
 	}{
-		{name: "missing source session", paneID: "terminal_2", switcher: true},
-		{name: "missing source pane", session: "dashboard-session", switcher: true},
 		{name: "missing switcher", session: "dashboard-session", paneID: "terminal_2"},
 	}
 
@@ -1656,5 +1654,18 @@ func TestService3DepthQueries(t *testing.T) {
 	_, err = service.GetTab(ctx, sessionID, "missing")
 	if !errors.Is(err, ErrTabNotFound) {
 		t.Errorf("GetTab(..., missing) error = %v, want %v", err, ErrTabNotFound)
+	}
+}
+
+func TestFocusPaneWithoutSourceDelegatesToSwitcher(t *testing.T) {
+	switcher := &fakeSessionSwitcher{}
+	service := NewService(Options{Registry: registry.New(), Backend: &fakeBackend{}, SessionSwitcher: switcher})
+	registerFocusablePane(t, service)
+	_, err := service.FocusPane(context.Background(), FocusPaneRequest{PaneID: "agent-1"})
+	if err != nil || len(switcher.requests) != 1 {
+		t.Fatalf("err=%v requests=%#v", err, switcher.requests)
+	}
+	if switcher.requests[0].SourceSession != "" || switcher.requests[0].SourcePaneID != "" {
+		t.Fatalf("unexpected source: %#v", switcher.requests[0])
 	}
 }

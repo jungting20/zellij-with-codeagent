@@ -203,14 +203,6 @@ func TestSwitchSessionRejectsMissingContextBeforeRunningCommand(t *testing.T) {
 		req  SwitchSessionRequest
 	}{
 		{
-			name: "source session",
-			req:  SwitchSessionRequest{SourcePaneID: "terminal_2", TargetSession: "target-session", TargetPaneID: "terminal_12"},
-		},
-		{
-			name: "source pane",
-			req:  SwitchSessionRequest{SourceSession: "dashboard-session", TargetSession: "target-session", TargetPaneID: "terminal_12"},
-		},
-		{
 			name: "target session",
 			req:  SwitchSessionRequest{SourceSession: "dashboard-session", SourcePaneID: "terminal_2", TargetPaneID: "terminal_12"},
 		},
@@ -748,4 +740,34 @@ func (r *fakeRunner) Run(_ context.Context, spec CommandSpec) (CommandResult, er
 	result := r.results[0]
 	r.results = r.results[1:]
 	return result.result, result.err
+}
+
+func TestSwitchSessionWithoutSourceFindsConnectedClient(t *testing.T) {
+	runner := &fakeRunner{results: []fakeResult{
+		{result: CommandResult{Stdout: "detached\nactive\n"}},
+		{result: CommandResult{Stdout: "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n"}},
+		{result: CommandResult{Stdout: "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_7 shell\n"}},
+		{},
+	}}
+	backend := NewBackend(Options{Runner: runner})
+	if err := backend.SwitchSession(context.Background(), SwitchSessionRequest{TargetSession: "target", TargetPaneID: "terminal_3"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--session", "active", "action", "switch-session", "target", "--pane-id", "terminal_3"}
+	if len(runner.commands) != 4 || !reflect.DeepEqual(runner.commands[3].Args, want) {
+		t.Fatalf("commands=%#v", runner.commands)
+	}
+}
+
+func TestSwitchSessionWithoutSourceRejectsAmbiguousOrMissingClients(t *testing.T) {
+	for _, clients := range []string{"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n", "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_1 sh\n2 terminal_2 sh\n"} {
+		runner := &fakeRunner{results: []fakeResult{{result: CommandResult{Stdout: "active\n"}}, {result: CommandResult{Stdout: clients}}}}
+		backend := NewBackend(Options{Runner: runner})
+		if err := backend.SwitchSession(context.Background(), SwitchSessionRequest{TargetSession: "target", TargetPaneID: "terminal_3"}); err == nil {
+			t.Fatal("expected client resolution error")
+		}
+		if len(runner.commands) != 2 {
+			t.Fatalf("unexpected switch: %#v", runner.commands)
+		}
+	}
 }

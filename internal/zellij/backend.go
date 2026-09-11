@@ -164,17 +164,18 @@ func (b *CLIBackend) SwitchSession(ctx context.Context, req SwitchSessionRequest
 	req.TargetSession = strings.TrimSpace(req.TargetSession)
 	req.TargetPaneID = PaneID(strings.TrimSpace(string(req.TargetPaneID)))
 
-	if req.SourceSession == "" {
-		return fmt.Errorf("source: %w", ErrMissingSession)
-	}
-	if req.SourcePaneID == "" {
-		return fmt.Errorf("source: %w", ErrMissingPane)
-	}
 	if req.TargetSession == "" {
 		return fmt.Errorf("target: %w", ErrMissingSession)
 	}
 	if req.TargetPaneID == "" {
 		return fmt.Errorf("target: %w", ErrMissingPane)
+	}
+	if req.SourceSession == "" {
+		session, err := b.connectedSession(ctx)
+		if err != nil {
+			return err
+		}
+		req.SourceSession = session
 	}
 	if req.SourceSession == req.TargetSession && req.SourcePaneID == req.TargetPaneID {
 		return nil
@@ -237,4 +238,38 @@ func (ExecRunner) Run(ctx context.Context, spec CommandSpec) (CommandResult, err
 	}
 
 	return result, nil
+}
+
+// connectedSession resolves navigation at the runtime boundary without requiring
+// the caller to inherit a terminal's environment. Never choose between clients.
+func (b *CLIBackend) connectedSession(ctx context.Context) (string, error) {
+	result, err := b.run(ctx, "list sessions", newCommand(b.binary, "", "list-sessions", "--short", "--no-formatting"))
+	if err != nil {
+		return "", err
+	}
+	var connected string
+	for _, session := range strings.Split(strings.TrimSpace(result.Stdout), "\n") {
+		session = strings.TrimSpace(session)
+		if session == "" || strings.Contains(session, "EXITED") {
+			continue
+		}
+		clients, err := b.run(ctx, "list clients", newActionCommand(b.binary, session, "list-clients"))
+		if err != nil {
+			return "", err
+		}
+		rows := strings.Split(strings.TrimSpace(clients.Stdout), "\n")
+		for _, row := range rows[1:] {
+			if strings.TrimSpace(row) == "" {
+				continue
+			}
+			if connected != "" {
+				return "", fmt.Errorf("agent navigation requires exactly one connected Zellij client")
+			}
+			connected = session
+		}
+	}
+	if connected == "" {
+		return "", fmt.Errorf("agent navigation requires a connected Zellij client")
+	}
+	return connected, nil
 }

@@ -123,7 +123,7 @@ func TestRunNextFocusesNextAgentWithZellijContext(t *testing.T) {
 	if client.socket != "/tmp/next.sock" || client.timeout != 3*time.Second {
 		t.Fatalf("client socket=%q timeout=%s", client.socket, client.timeout)
 	}
-	want := transport.FocusNextAgentRequest{SourceSession: "session-b", SourceZellijPaneID: "terminal_8", IdleOnly: true, PinnedOnly: true}
+	want := transport.FocusNextAgentRequest{IdleOnly: true, PinnedOnly: true}
 	if !reflect.DeepEqual(client.nextRequest, want) {
 		t.Fatalf("FocusNextAgent request=%#v, want %#v", client.nextRequest, want)
 	}
@@ -208,9 +208,6 @@ func TestRunNextRejectsInvalidConfigurationAndInput(t *testing.T) {
 	}{
 		{name: "positional argument", args: []string{"next", "extra"}, cfg: validConfig, concreteClient: true, code: 2, want: "agent next does not accept positional arguments"},
 		{name: "non-positive timeout", args: []string{"next", "--timeout", "0s"}, cfg: validConfig, concreteClient: true, code: 2, want: "agent next --timeout must be positive"},
-		{name: "missing getenv", args: []string{"next"}, cfg: Config{}, concreteClient: true, code: 1, want: "agent next configuration error: Getenv is required"},
-		{name: "missing zellij session", args: []string{"next"}, cfg: Config{Getenv: mapGetenv(map[string]string{"ZELLIJ_PANE_ID": "terminal_8"})}, concreteClient: true, code: 2, want: "agent next must run inside a Zellij pane"},
-		{name: "missing zellij pane", args: []string{"next"}, cfg: Config{Getenv: mapGetenv(map[string]string{"ZELLIJ_SESSION_NAME": "session-b"})}, concreteClient: true, code: 2, want: "agent next must run inside a Zellij pane"},
 		{name: "nil factory", args: []string{"next"}, cfg: validConfig, code: 1, want: "agent next client is not configured"},
 		{name: "nil client", args: []string{"next"}, cfg: validConfig, factory: func(string, time.Duration) AgentClient { return nil }, code: 1, want: "agent next client is not configured"},
 		{name: "typed nil client", args: []string{"next"}, cfg: validConfig, factory: func(string, time.Duration) AgentClient { var client *testClient; return client }, code: 1, want: "agent next client is not configured"},
@@ -1009,5 +1006,14 @@ func TestUnpinnedNavigationFlags(t *testing.T) {
 		if code != 2 || !strings.Contains(stderr.String(), "mutually exclusive") {
 			t.Fatalf("conflict code=%d stderr=%s", code, stderr.String())
 		}
+	}
+}
+
+func TestRunNextNeedsNoZellijEnvironment(t *testing.T) {
+	client := &testClient{nextResponse: focusedNext("agent-2", "codex", "pane-2", "pane-2")}
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"next"}, strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{})
+	if code != 0 || client.nextCalls != 1 || client.nextRequest.SourceSession != "" || client.nextRequest.SourceZellijPaneID != "" {
+		t.Fatalf("code=%d request=%#v stderr=%s", code, client.nextRequest, &stderr)
 	}
 }

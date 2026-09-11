@@ -26,14 +26,14 @@ mod tests {
 use std::collections::BTreeMap;
 
 #[cfg(target_family = "wasm")]
-use model::{command_argv, parse_navigation, BridgeModel};
+use model::command_argv;
 #[cfg(target_family = "wasm")]
 use zellij_tile::prelude::*;
 
 #[cfg(target_family = "wasm")]
 #[derive(Default)]
 struct AgentNavigationBridge {
-    model: BridgeModel,
+    executable: Option<String>,
     request_sequence: u64,
 }
 
@@ -50,7 +50,10 @@ impl ZellijPlugin for AgentNavigationBridge {
         {
             eprintln!("agent navigation bridge requires a non-empty executable_path configuration");
         }
-        self.model = BridgeModel::new(configuration.get("executable_path").cloned());
+        self.executable = configuration
+            .get("executable_path")
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
         set_selectable(false);
         hide_self();
         subscribe(&[
@@ -61,16 +64,20 @@ impl ZellijPlugin for AgentNavigationBridge {
     }
 
     fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
-        match parse_navigation(&pipe_message.name, pipe_message.payload.as_deref()) {
-            Ok(navigation) => {
-                if self.model.queue(navigation) {
-                    self.flush_ready();
-                } else {
-                    eprintln!("agent navigation bridge queue is full or disabled; request ignored");
-                }
-            }
-            Err(error) => eprintln!("agent navigation bridge: {error}"),
+        if pipe_message.name != "agent-next" {
+            return false;
         }
+        let Some(executable) = self.executable.as_deref() else {
+            eprintln!("agent navigation bridge executable is missing; request ignored");
+            return false;
+        };
+        self.request_sequence += 1;
+        let argv = command_argv(executable);
+        // Zellij enforces RunCommands permission at the host boundary.
+        run_command(
+            &argv.iter().map(String::as_str).collect::<Vec<_>>(),
+            BTreeMap::from([("request_id".into(), self.request_sequence.to_string())]),
+        );
         false
     }
 
@@ -78,13 +85,9 @@ impl ZellijPlugin for AgentNavigationBridge {
         match event {
             Event::PermissionRequestResult(status) => {
                 let granted = status == PermissionStatus::Granted;
-                self.model.set_permission(granted);
                 if !granted {
-                    eprintln!(
-                        "agent navigation bridge permissions were denied; queued work discarded"
-                    );
+                    eprintln!("agent navigation bridge permissions were denied");
                 }
-                self.flush_ready();
             }
             Event::RunCommandResult(exit_code, _, stderr, context) => {
                 if exit_code != Some(0) {
@@ -97,27 +100,9 @@ impl ZellijPlugin for AgentNavigationBridge {
                         String::from_utf8_lossy(&stderr)
                     );
                 }
-                self.flush_ready();
             }
             _ => {}
         }
         false
-    }
-}
-
-#[cfg(target_family = "wasm")]
-impl AgentNavigationBridge {
-    fn flush_ready(&mut self) {
-        // Each key launches its CLI immediately once permission is granted.
-        // Source context and navigation belong to the CLI/runtime, not this bridge.
-        while let Some(job) = self.model.next_ready() {
-            self.request_sequence += 1;
-            let argv = command_argv(&job.executable, job.navigation);
-            run_command(
-                &argv.iter().map(String::as_str).collect::<Vec<_>>(),
-                BTreeMap::from([("request_id".into(), self.request_sequence.to_string())]),
-            );
-            self.model.complete_ready();
-        }
     }
 }

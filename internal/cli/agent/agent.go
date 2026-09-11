@@ -102,16 +102,6 @@ func runNext(args []string, stdout, stderr io.Writer, newClient ClientFactory, c
 		fmt.Fprintln(stderr, "agent next --timeout must be positive")
 		return 2
 	}
-	if cfg.Getenv == nil {
-		fmt.Fprintln(stderr, "agent next configuration error: Getenv is required")
-		return 1
-	}
-	session := strings.TrimSpace(cfg.Getenv("ZELLIJ_SESSION_NAME"))
-	paneID := normalizeZellijPaneID(cfg.Getenv("ZELLIJ_PANE_ID"))
-	if session == "" || paneID == "" {
-		fmt.Fprintln(stderr, "agent next must run inside a Zellij pane (ZELLIJ_SESSION_NAME and ZELLIJ_PANE_ID are required)")
-		return 2
-	}
 	if newClient == nil {
 		fmt.Fprintln(stderr, "agent next client is not configured")
 		return 1
@@ -125,11 +115,9 @@ func runNext(args []string, stdout, stderr io.Writer, newClient ClientFactory, c
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 	response, err := client.FocusNextAgent(ctx, transport.FocusNextAgentRequest{
-		SourceSession:      session,
-		SourceZellijPaneID: paneID,
-		IdleOnly:           *idleOnly,
-		PinnedOnly:         *pinnedOnly,
-		UnpinnedOnly:       *unpinnedOnly,
+		IdleOnly:     *idleOnly,
+		PinnedOnly:   *pinnedOnly,
+		UnpinnedOnly: *unpinnedOnly,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "agent next failed via socket %s: %v\n", *socket, err)
