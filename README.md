@@ -177,7 +177,7 @@ both `load_plugins` and each `MessagePlugin` binding, with the same
 navigation. Both names accept payloads `"all"`, `"idle-only"`, `"pinned-only"`,
 `"idle-and-pinned"`, `"unpinned-only"`, and `"idle-and-unpinned"`.
 The local `Alt+u/i/o/p` bindings use the last four payloads respectively. The first load requests only
-`ReadApplicationState` and `RunCommands`; approve those permissions once for
+`RunCommands`; approve that permission once for
 this plugin identity.
 
 All four shortcuts use this hidden background bridge, create no terminal panes,
@@ -186,6 +186,11 @@ with the corresponding pin and idle filters. Messages named `agent-prev` delegat
 `zellij-agent agent prev` with the payload's matching filter. Verify this by
 comparing `zellij action list-panes --all` inventories before and after each
 shortcut.
+
+The bridge launches each CLI command without querying clients or focused panes,
+retrying, waiting for previous commands, or overriding Zellij environment variables.
+The CLI still requires valid `ZELLIJ_SESSION_NAME` and `ZELLIJ_PANE_ID` in its
+host execution environment; missing values are reported as CLI errors.
 
 Coding-agent records are in-memory. A pane close notification removes its
 record immediately. In addition, the daemon reconciles Zellij every two

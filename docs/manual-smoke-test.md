@@ -190,8 +190,11 @@ Use the printed absolute path as one identical `file:` plugin URL in
 The same plugin also accepts `agent-prev` with `all`, `idle-only`,
 `pinned-only`, or `idle-and-pinned`, delegating to the corresponding
 `zellij-agent agent prev` command. `agent-next` accepts the same four payloads.
-On first load, approve only the one-time `ReadApplicationState` and
-`RunCommands` permission request.
+On first load, approve only the one-time `RunCommands` permission request.
+The bridge executes the CLI directly using the host environment. Verify that
+`ZELLIJ_SESSION_NAME` and `ZELLIJ_PANE_ID` are available there; the bridge no
+longer discovers or overrides them. Missing context produces a CLI error in
+the plugin log instead of a focus-query retry loop.
 
 With the daemon still serving, start managed agents from panes attached to
 both `physical-a` and `physical-b`. Create at least four agents in creation

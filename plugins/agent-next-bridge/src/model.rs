@@ -1,7 +1,4 @@
 use std::collections::VecDeque;
-use zellij_tile::prelude::{
-    get_focused_pane, ClientInfo, PaneId, PaneManifest, SessionInfo, TabInfo,
-};
 
 const MAX_QUEUED_REQUESTS: usize = 32;
 
@@ -24,7 +21,6 @@ pub enum NavigationFilter {
 #[derive(Debug, Eq, PartialEq)]
 pub struct ReadyJob {
     pub executable: String,
-    pub session_name: String,
     pub navigation: Navigation,
 }
 
@@ -42,10 +38,6 @@ struct QueuedRequest {
 pub struct BridgeModel {
     executable: Option<String>,
     permission: Permission,
-    session_name: String,
-    last_terminal: Option<u32>,
-    active_tab: Option<usize>,
-    panes: PaneManifest,
     queue: VecDeque<QueuedRequest>,
 }
 
@@ -63,10 +55,6 @@ impl BridgeModel {
         Self {
             executable,
             permission: Permission::Pending,
-            session_name: String::new(),
-            last_terminal: None,
-            active_tab: None,
-            panes: PaneManifest::default(),
             queue: VecDeque::new(),
         }
     }
@@ -88,66 +76,18 @@ impl BridgeModel {
         };
     }
 
-    pub fn set_session_name(&mut self, session_name: impl AsRef<str>) {
-        self.session_name = session_name.as_ref().trim().into();
-    }
-
-    pub fn set_last_terminal(&mut self, last_terminal: Option<u32>) {
-        self.last_terminal = last_terminal;
-    }
-
-    pub fn update_tabs(&mut self, tabs: &[TabInfo]) {
-        self.active_tab = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
-        self.remember_active_terminal();
-    }
-
-    pub fn update_panes(&mut self, panes: PaneManifest) {
-        self.panes = panes;
-        self.remember_active_terminal();
-    }
-
-    fn remember_active_terminal(&mut self) {
-        if let Some(pane_id) = self
-            .active_tab
-            .and_then(|tab| focused_terminal_in_tab(tab, &self.panes))
-        {
-            self.last_terminal = Some(pane_id);
-        }
-    }
-
-    pub fn initialize_focused_pane(&mut self, focused: Option<PaneId>) {
-        if let Some(PaneId::Terminal(pane_id)) = focused {
-            self.set_last_terminal(Some(pane_id));
-        }
-    }
-
-    pub fn set_current_session(&mut self, sessions: &[SessionInfo]) {
-        if let Some(session) = sessions.iter().find(|session| session.is_current_session) {
-            self.set_session_name(&session.name);
-        }
-    }
-
-    pub fn resolve_source_pane(&self, focused: PaneId) -> Result<String, String> {
-        source_pane_id(focused, self.last_terminal)
-    }
-
     pub fn next_ready(&self) -> Option<ReadyJob> {
         let Some(executable) = self.executable.as_ref() else {
             return None;
         };
-        if self.permission != Permission::Granted || self.session_name.is_empty() {
+        if self.permission != Permission::Granted {
             return None;
         }
 
         self.queue.front().map(|request| ReadyJob {
             executable: executable.clone(),
-            session_name: self.session_name.clone(),
             navigation: request.navigation,
         })
-    }
-
-    pub fn discard_pending(&mut self) {
-        self.queue.clear();
     }
 
     pub fn complete_ready(&mut self) {
@@ -222,139 +162,9 @@ pub fn command_argv(executable: &str, navigation: Navigation) -> Vec<String> {
     argv
 }
 
-pub fn source_pane_id(focused: PaneId, last_terminal: Option<u32>) -> Result<String, String> {
-    match focused {
-        PaneId::Terminal(id) => Ok(format!("terminal_{id}")),
-        PaneId::Plugin(_) => last_terminal
-            .map(|id| format!("terminal_{id}"))
-            .ok_or_else(|| "a terminal pane must be focused first".into()),
-    }
-}
-
-// Only infer a replacement client when there is a single unambiguous source.
-pub fn focused_client_pane(clients: &[ClientInfo]) -> Option<PaneId> {
-    clients
-        .iter()
-        .find(|client| client.is_current_client)
-        .or_else(|| {
-            if clients.len() == 1 {
-                clients.first()
-            } else {
-                None
-            }
-        })
-        .map(|client| client.pane_id)
-}
-
-pub fn focused_terminal_in_tab(tab_index: usize, pane_manifest: &PaneManifest) -> Option<u32> {
-    get_focused_pane(tab_index, pane_manifest).map(|pane| pane.id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use zellij_tile::prelude::{PaneId, PaneInfo, PaneManifest, SessionInfo};
-
-    #[test]
-    fn tracks_terminal_from_events_in_either_order_without_host_queries() {
-        for panes_first in [false, true] {
-            let mut model = BridgeModel::default();
-            let panes = PaneManifest {
-                panes: HashMap::from([
-                    (
-                        2,
-                        vec![PaneInfo {
-                            id: 42,
-                            is_focused: true,
-                            ..Default::default()
-                        }],
-                    ),
-                    (
-                        5,
-                        vec![PaneInfo {
-                            id: 99,
-                            is_focused: true,
-                            ..Default::default()
-                        }],
-                    ),
-                ]),
-            };
-            let tabs = vec![TabInfo {
-                position: 2,
-                tab_id: 17,
-                active: true,
-                ..Default::default()
-            }];
-            if panes_first {
-                model.update_panes(panes);
-                model.update_tabs(&tabs);
-            } else {
-                model.update_tabs(&tabs);
-                model.update_panes(panes);
-            }
-            assert_eq!(
-                model.resolve_source_pane(PaneId::Plugin(1)),
-                Ok("terminal_42".into())
-            );
-            model.update_tabs(&[TabInfo {
-                position: 5,
-                active: true,
-                ..Default::default()
-            }]);
-            assert_eq!(
-                model.resolve_source_pane(PaneId::Plugin(1)),
-                Ok("terminal_99".into())
-            );
-            model.update_panes(PaneManifest {
-                panes: HashMap::from([(
-                    5,
-                    vec![PaneInfo {
-                        id: 1,
-                        is_plugin: true,
-                        is_focused: true,
-                        ..Default::default()
-                    }],
-                )]),
-            });
-            assert_eq!(
-                model.resolve_source_pane(PaneId::Plugin(1)),
-                Ok("terminal_99".into())
-            );
-        }
-    }
-
-    #[test]
-    fn recovers_focus_after_original_client_leaves() {
-        let replacement = ClientInfo::new(7, PaneId::Terminal(42), String::new(), false);
-        assert_eq!(
-            focused_client_pane(&[replacement.clone()]),
-            Some(PaneId::Terminal(42))
-        );
-        assert_eq!(focused_client_pane(&[]), None);
-        let other = ClientInfo::new(8, PaneId::Terminal(43), String::new(), false);
-        assert_eq!(focused_client_pane(&[replacement.clone(), other]), None);
-        let current = ClientInfo::new(9, PaneId::Terminal(44), String::new(), true);
-        assert_eq!(
-            focused_client_pane(&[replacement, current]),
-            Some(PaneId::Terminal(44))
-        );
-    }
-
-    #[test]
-    fn leaving_session_discards_old_keys_but_accepts_new_keys() {
-        let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
-        model.set_permission(true);
-        model.set_session_name("work");
-        model.queue(Navigation::Next(NavigationFilter::UnpinnedOnly));
-        model.discard_pending();
-        assert!(model.next_ready().is_none());
-        model.queue(Navigation::Next(NavigationFilter::PinnedOnly));
-        assert_eq!(
-            model.take_ready()[0].navigation,
-            Navigation::Next(NavigationFilter::PinnedOnly)
-        );
-    }
 
     #[test]
     fn parses_supported_navigation_messages() {
@@ -482,138 +292,28 @@ mod tests {
     }
 
     #[test]
-    fn resolves_terminal_source_panes() {
-        assert_eq!(
-            source_pane_id(PaneId::Terminal(7), None),
-            Ok("terminal_7".into())
-        );
-        assert_eq!(
-            source_pane_id(PaneId::Plugin(2), Some(7)),
-            Ok("terminal_7".into())
-        );
-        assert!(source_pane_id(PaneId::Plugin(2), None).is_err());
-    }
-
-    #[test]
-    fn resolves_plugin_focus_from_remembered_terminal() {
-        let mut model = BridgeModel::default();
-        model.set_last_terminal(Some(7));
-
-        assert_eq!(
-            model.resolve_source_pane(PaneId::Plugin(2)),
-            Ok("terminal_7".into())
-        );
-    }
-
-    #[test]
-    fn startup_context_remembers_the_initial_terminal_pane() {
-        let mut model = BridgeModel::default();
-        model.initialize_focused_pane(Some(PaneId::Terminal(7)));
-
-        assert_eq!(
-            model.resolve_source_pane(PaneId::Plugin(2)),
-            Ok("terminal_7".into())
-        );
-    }
-
-    #[test]
-    fn first_session_update_releases_navigation_without_inherited_zellij_environment() {
+    fn permission_releases_six_keys_without_focus_or_completion_events() {
         let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
-        model.queue(Navigation::Next(NavigationFilter::All));
+        for _ in 0..6 {
+            assert!(model.queue(Navigation::Next(NavigationFilter::PinnedOnly)));
+        }
+        assert!(model.next_ready().is_none());
         model.set_permission(true);
-
-        model.set_current_session(&[
-            SessionInfo {
-                name: "other".into(),
-                is_current_session: false,
-                ..Default::default()
-            },
-            SessionInfo {
-                name: "fresh".into(),
-                is_current_session: true,
-                ..Default::default()
-            },
-        ]);
-
-        assert_eq!(
-            model.take_ready(),
-            vec![ReadyJob {
-                executable: "/opt/zellij-agent".into(),
-                session_name: "fresh".into(),
-                navigation: Navigation::Next(NavigationFilter::All),
-            }]
-        );
-    }
-
-    #[test]
-    fn focused_terminal_is_scoped_to_current_tab() {
-        let pane_manifest = PaneManifest {
-            panes: HashMap::from([
-                (
-                    0,
-                    vec![PaneInfo {
-                        id: 7,
-                        is_focused: true,
-                        ..Default::default()
-                    }],
-                ),
-                (
-                    1,
-                    vec![PaneInfo {
-                        id: 9,
-                        is_plugin: true,
-                        is_focused: true,
-                        ..Default::default()
-                    }],
-                ),
-            ]),
-        };
-
-        assert_eq!(focused_terminal_in_tab(1, &pane_manifest), None);
-        assert_eq!(focused_terminal_in_tab(0, &pane_manifest), Some(7));
-    }
-
-    #[test]
-    fn permission_before_session_releases_queued_work() {
-        let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
-        model.queue(Navigation::Next(NavigationFilter::All));
-        model.set_permission(true);
-        assert!(model.take_ready().is_empty());
-        model.set_session_name("work");
-
-        assert_eq!(
-            model.take_ready(),
-            vec![ReadyJob {
-                executable: "/opt/zellij-agent".into(),
-                session_name: "work".into(),
-                navigation: Navigation::Next(NavigationFilter::All),
-            }]
-        );
-    }
-
-    #[test]
-    fn session_before_permission_releases_queued_work() {
-        let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
-        model.queue(Navigation::Previous(NavigationFilter::IdleOnly));
-        model.set_session_name("work");
-        assert!(model.take_ready().is_empty());
-        model.set_permission(true);
-
-        assert_eq!(
-            model.take_ready(),
-            vec![ReadyJob {
-                executable: "/opt/zellij-agent".into(),
-                session_name: "work".into(),
-                navigation: Navigation::Previous(NavigationFilter::IdleOnly),
-            }]
-        );
+        let jobs = model.take_ready();
+        assert_eq!(jobs.len(), 6);
+        for job in jobs {
+            assert_eq!(
+                command_argv(&job.executable, job.navigation),
+                ["/opt/zellij-agent", "agent", "next", "--pinned-only"]
+            );
+        }
+        assert!(model.next_ready().is_none());
     }
 
     #[test]
     fn drains_ready_work_only_once() {
         let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
         model.set_permission(true);
-        model.set_session_name("work");
         model.queue(Navigation::Next(NavigationFilter::All));
 
         assert_eq!(model.take_ready().len(), 1);
@@ -621,10 +321,9 @@ mod tests {
     }
 
     #[test]
-    fn keeps_ready_work_until_completion_is_acknowledged() {
+    fn keeps_ready_work_until_dispatched() {
         let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
         model.set_permission(true);
-        model.set_session_name("work");
         model.queue(Navigation::Next(NavigationFilter::All));
 
         let first = model.next_ready();
@@ -640,7 +339,6 @@ mod tests {
         model.queue(Navigation::Next(NavigationFilter::All));
         model.set_permission(false);
         model.set_permission(true);
-        model.set_session_name("work");
 
         assert!(model.take_ready().is_empty());
     }
@@ -649,7 +347,6 @@ mod tests {
     fn ignores_whitespace_only_executable_configuration() {
         let mut model = BridgeModel::new(Some(" \t\n ".into()));
         model.set_permission(true);
-        model.set_session_name("work");
         model.queue(Navigation::Next(NavigationFilter::All));
 
         assert!(model.take_ready().is_empty());
@@ -659,7 +356,6 @@ mod tests {
     fn preserves_two_consecutive_keypresses_as_two_jobs() {
         let mut model = BridgeModel::new(Some("  /opt/zellij-agent  ".into()));
         model.set_permission(true);
-        model.set_session_name("  work  ");
         model.queue(Navigation::Next(NavigationFilter::All));
         model.queue(Navigation::Previous(NavigationFilter::PinnedOnly));
 
@@ -668,12 +364,10 @@ mod tests {
             vec![
                 ReadyJob {
                     executable: "/opt/zellij-agent".into(),
-                    session_name: "work".into(),
                     navigation: Navigation::Next(NavigationFilter::All),
                 },
                 ReadyJob {
                     executable: "/opt/zellij-agent".into(),
-                    session_name: "work".into(),
                     navigation: Navigation::Previous(NavigationFilter::PinnedOnly),
                 },
             ]
@@ -684,7 +378,6 @@ mod tests {
     fn bounds_queued_navigation_requests() {
         let mut model = BridgeModel::new(Some("/opt/zellij-agent".into()));
         model.set_permission(true);
-        model.set_session_name("work");
 
         for _ in 0..MAX_QUEUED_REQUESTS {
             assert!(model.queue(Navigation::Next(NavigationFilter::All)));
