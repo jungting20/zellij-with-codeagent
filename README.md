@@ -175,10 +175,31 @@ installation command to run.
 
 Configure one background plugin identity using that absolute `file:` URL in
 both `load_plugins` and each `MessagePlugin` binding, with the same
-`executable_path`. Use `name "agent-next"`; no payload is needed.
-The local `Alt+u/i/o/p` bindings all execute exactly `zellij-agent agent next`,
-without pin or idle filters. Legacy payloads are ignored; other message names
-are ignored. The first load requests only `RunCommands`, enforced by Zellij.
+`executable_path`. Use `name "agent-next"` and set `payload` per binding:
+
+| Shortcut | Payload | CLI flags for `zellij-agent agent next` |
+| --- | --- | --- |
+| `Alt+u` | `pinned-only` | `--pinned-only` |
+| `Alt+i` | `idle-and-pinned` | `--pinned-only --idle-only` |
+| `Alt+o` | `unpinned-only` | `--unpinned-only` |
+| `Alt+p` | `idle-and-unpinned` | `--unpinned-only --idle-only` |
+
+An absent payload or `all` visits all agents; `idle-only` filters by idle state.
+Unknown payloads and other message names are ignored. The first load requests
+only `RunCommands`, enforced by Zellij.
+
+When reloading, pass the same configuration as the keybindings, including any
+`bridge_revision`. For example, with the local configuration:
+
+```bash
+zellij --session "$session" action start-or-reload-plugin \
+  "file:$HOME/.config/zellij/plugins/agent-next-bridge.wasm" \
+  --configuration "executable_path=$HOME/.config/custom-cli/zellij-agent,bridge_revision=navigation-filters-v2"
+```
+
+Attach a client to a detached session before reloading it. Zellij can return
+exit status zero while logging `No connected clients, cannot reload plugin`;
+check the plugin log rather than treating the CLI exit status as confirmation.
 
 The hidden bridge creates no terminal panes and does not query focus, queue
 requests, wait for command completion, or override environment variables.

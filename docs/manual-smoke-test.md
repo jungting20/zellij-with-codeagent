@@ -183,18 +183,15 @@ the `wasm32-wasip1` target:
 ```
 
 Use the printed absolute path as one identical `file:` plugin URL in
-`load_plugins` and both `MessagePlugin` bindings. Configure the existing
+`load_plugins` and all four `MessagePlugin` bindings. Configure the existing
 `zellij-agent` path as
 `executable_path "/Users/in05908_mac/.config/custom-cli/zellij-agent"`; send
-`agent-next` / `all` for `Alt+o` and `agent-next` / `pinned-only` for `Alt+p`.
-The same plugin also accepts `agent-prev` with `all`, `idle-only`,
-`pinned-only`, or `idle-and-pinned`, delegating to the corresponding
-`zellij-agent agent prev` command. `agent-next` accepts the same four payloads.
+`name "agent-next"` with `payload "pinned-only"` for `Alt+u`,
+`payload "idle-and-pinned"` for `Alt+i`, `payload "unpinned-only"` for
+`Alt+o`, and `payload "idle-and-unpinned"` for `Alt+p`.
 On first load, approve only the one-time `RunCommands` permission request.
-The bridge executes the CLI directly using the host environment. Verify that
-`ZELLIJ_SESSION_NAME` and `ZELLIJ_PANE_ID` are available there; the bridge no
-longer discovers or overrides them. Missing context produces a CLI error in
-the plugin log instead of a focus-query retry loop.
+The bridge executes the public CLI directly using the host environment.
+The runtime requires a single connected Zellij client for navigation.
 
 With the daemon still serving, start managed agents from panes attached to
 both `physical-a` and `physical-b`. Create at least four agents in creation
@@ -222,21 +219,17 @@ visits all four agents in creation order and wraps from the fourth agent back
 to the first. The cursor is daemon-wide and in-memory, so repeat the check from
 the other session and confirm it advances the same sequence.
 
-Pin at least two agents in the dashboard, then press `Alt+p` repeatedly and
-confirm it behaves like `zellij-agent agent next --pinned-only`: it visits
-only pinned agents and wraps. Then invoke
-`zellij-agent agent next --pinned-only` and
-`zellij-agent agent prev --pinned-only` repeatedly. Confirm
-that only pinned agents are visited in forward and reverse order. Add
-`--idle-only` and confirm the result is restricted to agents that are both
-pinned and idle. Unpin every agent and confirm both commands leave focus
-unchanged without visible output.
+Pin at least two agents in the dashboard, leaving at least two unpinned.
+Compare each shortcut with its CLI equivalent:
 
-Configure or send each `agent-prev` payload through the bridge and compare it
-with its CLI equivalent: `agent prev`, `agent prev --idle-only`,
-`agent prev --pinned-only`, and `agent prev --idle-only --pinned-only`.
-Confirm reverse creation-order traversal, wrapping, filtering, and the no-match
-no-op behavior.
+- `Alt+u`: `zellij-agent agent next --pinned-only`
+- `Alt+i`: `zellij-agent agent next --pinned-only --idle-only`
+- `Alt+o`: `zellij-agent agent next --unpinned-only`
+- `Alt+p`: `zellij-agent agent next --unpinned-only --idle-only`
+
+Confirm each shortcut visits only matching agents and wraps. Idle navigation
+prioritizes newly idle agents. When no matching agents exist, the shortcut
+must leave focus unchanged. An unknown payload must also leave focus unchanged.
 
 Invoke `zellij-agent agent next` and confirm it still advances through all
 managed agents. Finally, press `Tab` in a normal application pane; it must

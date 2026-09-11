@@ -71,8 +71,11 @@ impl ZellijPlugin for AgentNavigationBridge {
             eprintln!("agent navigation bridge executable is missing; request ignored");
             return false;
         };
+        let Some(argv) = command_argv(executable, pipe_message.payload.as_deref()) else {
+            eprintln!("agent navigation bridge received an unknown filter; request ignored");
+            return false;
+        };
         self.request_sequence += 1;
-        let argv = command_argv(executable);
         // Zellij enforces RunCommands permission at the host boundary.
         run_command(
             &argv.iter().map(String::as_str).collect::<Vec<_>>(),
