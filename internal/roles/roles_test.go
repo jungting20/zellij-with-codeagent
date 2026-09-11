@@ -8,6 +8,7 @@ import (
 func TestAllIncludesRoleDescriptions(t *testing.T) {
 	for _, name := range []string{
 		RoleCoder,
+		RoleAgentWorktree,
 		RoleEditor,
 		RoleLazygit,
 		RoleLSP,

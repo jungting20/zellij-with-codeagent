@@ -64,7 +64,11 @@ func (m Model) View() string {
 		}
 		lines = append(lines, style.Render(m.statusText))
 	}
-	lines = append(lines, "i input I nvim g lazygit a alias Space pin d close Enter focus R refresh q quit")
+	help := "i input g lazygit w worktree Space pin d close Enter focus R refresh q quit"
+	if width >= 100 {
+		help = "i input I nvim g lazygit w worktree a alias Space pin d close Enter focus R refresh q quit"
+	}
+	lines = append(lines, help)
 	for index := range lines {
 		lines[index] = ansi.Truncate(lines[index], width, "…")
 	}
@@ -72,6 +76,9 @@ func (m Model) View() string {
 		lines = append(lines[:m.height-1], lines[len(lines)-1])
 	}
 	base := strings.Join(lines, "\n")
+	if m.worktreePicker != nil {
+		return m.popupOverlay(base, m.worktreeView(), (width-60)/2, 0)
+	}
 	if m.aliasTarget != "" {
 		return m.popupOverlay(base, m.aliasView(), m.aliasX, m.aliasY)
 	}
@@ -331,6 +338,7 @@ func (m Model) rowView(record transport.AgentWithPane, selected bool, width, num
 		project = badge + " " + project
 		projectWidth = maxInt(projectWidth, ansi.StringWidth(badge)+9)
 	}
+	project = m.childLabel(record) + project
 	line := prefix + pin + " " + padCell(project, projectWidth) +
 		"  " + padCell(stateView(record.Agent.State), 10) +
 		"  " + padCell(agentName(record.Agent.Kind), 12) +

@@ -133,6 +133,7 @@ type ClaimPaneResponse struct {
 }
 
 type CreatePaneRequest struct {
+	ParentPaneID  PaneID
 	ID            PaneID
 	TaskID        TaskID
 	AgentID       AgentID
@@ -343,6 +344,7 @@ type CleanupResponse struct {
 }
 
 type Pane struct {
+	ParentPaneID   PaneID
 	ID             PaneID
 	OwnershipToken OwnershipToken
 	SessionID      SessionID

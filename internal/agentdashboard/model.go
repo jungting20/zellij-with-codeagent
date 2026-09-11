@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"zellij-with-codeagent/internal/listselector"
 	"zellij-with-codeagent/internal/transport"
 )
 
@@ -76,11 +77,15 @@ type panelSelection struct {
 }
 
 type Model struct {
-	gitRunning    bool
-	editorRunning bool
-	ctx           context.Context
-	client        Client
-	opts          Options
+	worktreeBusy   bool
+	worktreePath   string
+	worktreeParent transport.AgentWithPane
+	worktreePicker *listselector.Model
+	gitRunning     bool
+	editorRunning  bool
+	ctx            context.Context
+	client         Client
+	opts           Options
 
 	width, height int
 	rows          []transport.AgentWithPane
@@ -157,6 +162,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.tickCmd(), m.requestRefresh())
 	case refreshResultMsg:
 		return m.handleRefresh(msg)
+	case worktreeCreatedMsg:
+		return m.handleWorktreeCreated(msg)
+	case worktreeSelectionMsg:
+		return m.startWorktree(msg)
+	case worktreeStartedMsg:
+		m.worktreeBusy = false
+		if msg.err != nil {
+			m.statusText = "worktree launch failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.worktreePicker = nil
+		m.statusText = "started child agent: " + m.worktreePath
+		return m, m.requestRefresh()
 	case lazygitResultMsg:
 		m.gitRunning = false
 		if msg.err != nil {
@@ -289,6 +307,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.worktreePicker != nil {
+		return m.updateWorktreeKey(msg)
+	}
+	if m.worktreeBusy {
+		return m, nil
+	}
 	if m.editorRunning {
 		return m, nil
 	}
@@ -307,6 +331,8 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectedID = m.rows[m.selected].Agent.ID
 			m.focusPinned = m.rows[m.selected].Agent.Pinned
 		}
+	case "w":
+		return m.openWorktree()
 	case "g":
 		return m.openLazygit()
 	case "i":
@@ -410,6 +436,7 @@ func (m Model) handleRefresh(msg refreshResultMsg) (tea.Model, tea.Cmd) {
 }
 
 func sortAgentRows(rows []transport.AgentWithPane, sourceSession string) {
+	defer orderChildren(rows)
 	sourceSession = strings.TrimSpace(sourceSession)
 	sort.SliceStable(rows, func(i, j int) bool {
 		if rows[i].Agent.Pinned != rows[j].Agent.Pinned {

@@ -14,6 +14,7 @@ type RoleSpec struct {
 }
 
 const (
+	RoleAgentWorktree       = "agent-worktree"
 	RoleCoder               = "coder"
 	RoleEditor              = "editor"
 	RoleLazygit             = "lazygit"
@@ -245,6 +246,7 @@ var specs = []RoleSpec{
 			{Name: "--output-format", Required: false, Description: "Output format: text or json. Defaults to text."},
 		},
 	},
+	{Name: RoleAgentWorktree, Usage: "agent-worktree <path>", Description: "Creates a temporary Git worktree and selects a coding agent.", Arguments: []ArgumentSpec{{Name: "path", Required: true, Description: "Working directory of the source Git repository."}}},
 }
 
 func All() []RoleSpec {

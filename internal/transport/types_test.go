@@ -360,3 +360,14 @@ func TestSessionFromRuntimeSortsTabsAndPanes(t *testing.T) {
 		t.Fatalf("SessionFromRuntime() panes in tab-a = %#v, want sorted by id", got)
 	}
 }
+
+func TestParentPaneRoundTrip(t *testing.T) {
+	req := StartAgentRequest{ParentPaneID: "parent"}
+	if got := StartAgentRequestFromCodingAgent(req.ToCodingAgent()); got.ParentPaneID != "parent" {
+		t.Fatal(got)
+	}
+	pane := CreatePaneRequest{ParentPaneID: "parent"}.ToRuntime()
+	if pane.ParentPaneID != "parent" {
+		t.Fatal(pane)
+	}
+}

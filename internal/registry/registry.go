@@ -75,6 +75,7 @@ func (r *Registry) RegisterPane(req RegisterPaneRequest) (PaneRecord, error) {
 		TabID:          req.TabID,
 		TaskID:         req.TaskID,
 		AgentID:        req.AgentID,
+		ParentPaneID:   req.ParentPaneID,
 		ZellijPaneID:   req.ZellijPaneID,
 		ZellijTabID:    cloneZellijTabID(req.ZellijTabID),
 		TabName:        req.TabName,

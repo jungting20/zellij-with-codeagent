@@ -43,6 +43,7 @@ type commandDoneMsg struct {
 
 // Model is the Bubble Tea model for selecting and starting a coding agent.
 type Model struct {
+	onSelect   func(string, []string) tea.Cmd
 	agents     []agent
 	cursor     int
 	focus      focusArea
@@ -76,6 +77,14 @@ func NewModel() Model {
 		yolo:   true,
 		status: "Use Tab to move focus. Enter runs from any option.",
 	}
+}
+
+// NewPicker reuses the selector UI while delegating launch to its host.
+func NewPicker(onSelect func(string, []string) tea.Cmd) Model {
+	m := NewModel()
+	m.onSelect = onSelect
+	m.prompt.Width = 48
+	return m
 }
 
 // ResultError returns the child command error recorded by a completed selector.
@@ -232,6 +241,9 @@ func insertBeforePassthrough(args []string, option string) []string {
 
 func (m Model) runSelectedAgent() (tea.Model, tea.Cmd) {
 	command, args := m.selectedCommand()
+	if m.onSelect != nil {
+		return m, m.onSelect(command, args)
+	}
 	cmd := exec.Command(command, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout

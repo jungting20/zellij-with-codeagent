@@ -91,3 +91,20 @@ shutdown deadlines, missing/reused panes and inspection failures. Race checks:
 ```sh
 go test -race ./internal/persistence ./internal/registry ./internal/codingagent ./internal/runtime ./internal/cli/daemon ./internal/transport ./internal/zellij
 ```
+
+## Worktree child panes
+
+The pane JSON payload persists optional `ParentPaneID`, exposed by transport as
+`parent_pane_id`. It identifies the managed pane from which the worktree agent
+was launched. This relationship is separate from the SQL `parent_id` column,
+which continues to identify the containing session/tab. The existing immutable
+pane change queue saves it, and startup restores it with the rest of the pane.
+Agent records reference their pane through `PaneID`; no duplicate parent field
+or parent index is maintained in the agent store. Recovery retains this metadata
+when rebinding surviving agents and panes.
+
+This additive optional payload field needs no schema migration: older JSON
+records decode with an empty parent (a root agent), so schema version 1 and all
+existing data remain valid. Closing a parent does not close its children or
+delete their worktrees; the parent ID remains as provenance. Dashboard selection,
+popup state and worktree creation progress remain transient.

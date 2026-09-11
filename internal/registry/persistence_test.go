@@ -18,7 +18,7 @@ func TestPersistentHierarchyRestoresIndexesAndGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, session := range []SessionID{"a", "b"} {
-		_, err = reg.RegisterPane(RegisterPaneRequest{ID: PaneID(session), SessionID: session, TabID: "0", ZellijPaneID: "1", OwnershipToken: "owned", Command: []string{"codex"}, Status: PaneStatusRunning})
+		_, err = reg.RegisterPane(RegisterPaneRequest{ID: PaneID(session), ParentPaneID: "source-parent", SessionID: session, TabID: "0", ZellijPaneID: "1", OwnershipToken: "owned", Command: []string{"codex"}, Status: PaneStatusRunning})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -45,7 +45,7 @@ func TestPersistentHierarchyRestoresIndexesAndGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pane.ID != "a" || pane.Status != PaneStatusError || pane.LastOutput != "" || pane.OwnershipToken != "owned" || pane.Command[0] != "codex" {
+	if pane.ParentPaneID != "source-parent" || pane.ID != "a" || pane.Status != PaneStatusError || pane.LastOutput != "" || pane.OwnershipToken != "owned" || pane.Command[0] != "codex" {
 		t.Fatalf("restored pane=%+v", pane)
 	}
 	tab, err := restored.GetTab("b", "0")

@@ -31,6 +31,13 @@ func TestDaemonBundleRestartsWithAgentSettingsAndFreshMonitoring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	child, err := first.service.StartAgent(context.Background(), codingagent.StartAgentRequest{
+		Kind: codingagent.KindClaude, CWD: t.TempDir(), SourceZellijSession: "s",
+		SourceZellijPaneID: "source-pane", ParentPaneID: created.Agent.Pane.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	id := created.Agent.Agent.ID
 	if _, err = first.store.SetPinned(id, true); err != nil {
 		t.Fatal(err)
@@ -83,6 +90,13 @@ func TestDaemonBundleRestartsWithAgentSettingsAndFreshMonitoring(t *testing.T) {
 	}
 	if pane.Pane.OwnershipToken != created.Agent.Pane.OwnershipToken {
 		t.Fatal("ownership token changed on restart")
+	}
+	restoredChild, err := second.service.InspectPane(context.Background(), agentruntime.InspectPaneRequest{PaneID: child.Agent.Pane.ID})
+	if err != nil || restoredChild.Pane.ParentPaneID != created.Agent.Pane.ID {
+		t.Fatalf("restored child=%+v error=%v", restoredChild, err)
+	}
+	if _, err := second.store.Get(child.Agent.Agent.ID); err != nil {
+		t.Fatal(err)
 	}
 	backend.addPane(zellij.Pane{ID: "second-pane", TabID: 7})
 	next, err := second.service.StartAgent(context.Background(), codingagent.StartAgentRequest{Kind: codingagent.KindClaude, CWD: t.TempDir(), SourceZellijSession: "s", SourceZellijPaneID: "second-pane"})

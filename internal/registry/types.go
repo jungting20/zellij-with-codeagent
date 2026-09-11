@@ -31,6 +31,7 @@ const (
 )
 
 type PaneRecord struct {
+	ParentPaneID   PaneID
 	ID             PaneID
 	OwnershipToken OwnershipToken
 	Generation     uint64
@@ -69,6 +70,7 @@ type SessionRecord struct {
 }
 
 type RegisterPaneRequest struct {
+	ParentPaneID   PaneID
 	ID             PaneID
 	OwnershipToken OwnershipToken
 	SessionID      SessionID

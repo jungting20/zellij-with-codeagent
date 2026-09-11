@@ -233,6 +233,15 @@ func samePaneGeneration(want, got registry.PaneRecord) bool {
 }
 
 func (s *Service) createPaneOnce(ctx context.Context, req CreatePaneRequest, id PaneID) (CreatePaneResponse, error) {
+	if req.ParentPaneID != "" {
+		if req.ParentPaneID == id {
+			return CreatePaneResponse{}, fmt.Errorf("%w: pane cannot parent itself", ErrInvalidPaneTarget)
+		}
+		if _, err := s.lookupPane(req.ParentPaneID); err != nil {
+			return CreatePaneResponse{}, fmt.Errorf("parent pane: %w", err)
+		}
+	}
+
 	ownershipToken, err := s.newOwnershipToken()
 	if err != nil {
 		return CreatePaneResponse{}, fmt.Errorf("generate pane ownership token: %w", err)
@@ -256,6 +265,7 @@ func (s *Service) createPaneOnce(ctx context.Context, req CreatePaneRequest, id 
 		TabID:          regTabID,
 		TaskID:         registry.TaskID(req.TaskID),
 		AgentID:        registry.AgentID(req.AgentID),
+		ParentPaneID:   registry.PaneID(req.ParentPaneID),
 		ZellijPaneID:   registry.ZellijPaneID(zellijID),
 		ZellijTabID:    registryTabID(tabID),
 		TabName:        tabName,
@@ -743,6 +753,7 @@ func paneFromRecord(record registry.PaneRecord) Pane {
 		TabID:          TabID(record.TabID),
 		TaskID:         TaskID(record.TaskID),
 		AgentID:        AgentID(record.AgentID),
+		ParentPaneID:   record.ParentPaneID,
 		ZellijPaneID:   ZellijPaneID(record.ZellijPaneID),
 		ZellijTabID:    runtimeTabID(record.ZellijTabID),
 		TabName:        record.TabName,

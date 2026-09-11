@@ -1669,3 +1669,27 @@ func TestFocusPaneWithoutSourceDelegatesToSwitcher(t *testing.T) {
 		t.Fatalf("unexpected source: %#v", switcher.requests[0])
 	}
 }
+
+func TestCreateChildPaneKeepsParentAndRejectsMissingParent(t *testing.T) {
+	backend := &fakeBackend{createIDs: []zellij.PaneID{"terminal_a", "terminal_b"}}
+	service := newTestService(backend)
+	mustCreatePane(t, service, CreatePaneRequest{ID: "parent", ZellijSession: "session"})
+	child := mustCreatePane(t, service, CreatePaneRequest{ID: "child", ZellijSession: "session", ParentPaneID: "parent"})
+	if child.ParentPaneID != "parent" {
+		t.Fatalf("%+v", child)
+	}
+	record, err := service.registry.GetPane("child")
+	if err != nil || record.ParentPaneID != "parent" {
+		t.Fatalf("%+v %v", record, err)
+	}
+	calls := len(backend.createRequests)
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "missing-child", ZellijSession: "session", ParentPaneID: "absent"}); err == nil {
+		t.Fatal("accepted missing parent")
+	}
+	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "self", ZellijSession: "session", ParentPaneID: "self"}); err == nil {
+		t.Fatal("accepted self parent")
+	}
+	if len(backend.createRequests) != calls {
+		t.Fatal("invalid parent created a pane")
+	}
+}

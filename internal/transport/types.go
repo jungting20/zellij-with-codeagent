@@ -27,6 +27,7 @@ type VoiceNotificationService interface {
 }
 
 type CreatePaneRequest struct {
+	ParentPaneID          string   `json:"parent_pane_id,omitempty"`
 	ID                    string   `json:"id,omitempty"`
 	TaskID                string   `json:"task_id,omitempty"`
 	ZellijSession         string   `json:"zellij_session"`
@@ -97,6 +98,7 @@ type ListPanesResponse struct {
 }
 
 type StartAgentRequest struct {
+	ParentPaneID       string   `json:"parent_pane_id,omitempty"`
 	Kind               string   `json:"kind"`
 	CWD                string   `json:"cwd"`
 	Access             string   `json:"access,omitempty"`
@@ -316,6 +318,7 @@ type ExecutionPlanTabResponse struct {
 }
 
 type Pane struct {
+	ParentPaneID   string    `json:"parent_pane_id,omitempty"`
 	ID             string    `json:"id"`
 	OwnershipToken string    `json:"ownership_token,omitempty"`
 	SessionID      string    `json:"session_id,omitempty"`
@@ -352,6 +355,7 @@ type Event struct {
 
 func (req StartAgentRequest) ToCodingAgent() codingagent.StartAgentRequest {
 	return codingagent.StartAgentRequest{
+		ParentPaneID:        rt.PaneID(req.ParentPaneID),
 		Kind:                codingagent.Kind(req.Kind),
 		CWD:                 req.CWD,
 		AccessMode:          codingagent.AccessMode(req.Access),
@@ -365,6 +369,7 @@ func (req StartAgentRequest) ToCodingAgent() codingagent.StartAgentRequest {
 
 func StartAgentRequestFromCodingAgent(req codingagent.StartAgentRequest) StartAgentRequest {
 	converted := StartAgentRequest{
+		ParentPaneID:       string(req.ParentPaneID),
 		Kind:               string(req.Kind),
 		CWD:                req.CWD,
 		Prompt:             req.Prompt,
@@ -465,6 +470,7 @@ func (req CreatePaneRequest) ToRuntime() rt.CreatePaneRequest {
 		TabName:               req.TabName,
 		ZellijTabID:           tabID,
 		SameTabAsPaneID:       rt.PaneID(req.SameTabAsPaneID),
+		ParentPaneID:          rt.PaneID(req.ParentPaneID),
 		Command:               cloneStrings(req.Command),
 		CWD:                   req.CWD,
 		InitialInput:          req.InitialInput,
@@ -522,6 +528,7 @@ func PaneFromRuntime(pane rt.Pane) Pane {
 	}
 	return Pane{
 		ID:             string(pane.ID),
+		ParentPaneID:   string(pane.ParentPaneID),
 		OwnershipToken: string(pane.OwnershipToken),
 		SessionID:      string(pane.SessionID),
 		TabID:          string(pane.TabID),
@@ -815,6 +822,7 @@ func PaneFromRuntimeRecord(pane rt.PaneRecord) Pane {
 	}
 	return Pane{
 		ID:             string(pane.ID),
+		ParentPaneID:   string(pane.ParentPaneID),
 		OwnershipToken: string(pane.OwnershipToken),
 		SessionID:      string(pane.SessionID),
 		TabID:          string(pane.TabID),

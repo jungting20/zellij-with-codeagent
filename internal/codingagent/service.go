@@ -32,6 +32,7 @@ type AgentWithPane struct {
 }
 
 type StartAgentRequest struct {
+	ParentPaneID        runtime.PaneID
 	Kind                Kind
 	AccessMode          AccessMode
 	CWD                 string
@@ -232,15 +233,27 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 		}
 	}
 
-	paneResponse, err := s.RuntimeService.ClaimPane(ctx, runtime.ClaimPaneRequest{
-		ID:            created.PaneID,
-		AgentID:       runtime.AgentID(created.ID),
-		Role:          "coding-agent",
-		ZellijSession: sourceSession,
-		ZellijPaneID:  sourcePaneID,
-		Command:       command,
-		CWD:           cwd,
-	})
+	var pane runtime.Pane
+	if request.ParentPaneID != "" {
+		response, createErr := s.RuntimeService.CreatePane(ctx, runtime.CreatePaneRequest{
+			ID: created.PaneID, AgentID: runtime.AgentID(created.ID), Role: "coding-agent",
+			ZellijSession: sourceSession, SameTabAsPaneID: request.ParentPaneID,
+			ParentPaneID: request.ParentPaneID, Name: filepath.Base(cwd), Command: command, CWD: cwd,
+		})
+		pane, err = response.Pane, createErr
+	} else {
+		paneResponse, claimErr := s.RuntimeService.ClaimPane(ctx, runtime.ClaimPaneRequest{
+			ID:            created.PaneID,
+			AgentID:       runtime.AgentID(created.ID),
+			Role:          "coding-agent",
+			ZellijSession: sourceSession,
+			ZellijPaneID:  sourcePaneID,
+			Command:       command,
+			CWD:           cwd,
+		})
+		pane, err = paneResponse.Pane, claimErr
+	}
+
 	if err != nil {
 		_, rollbackErr := s.cleanupOwnedRecord(owner, true)
 		return StartAgentResponse{}, errors.Join(
@@ -250,7 +263,7 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 	}
 
 	s.markOwnerState(owner, agentActive)
-	return StartAgentResponse{Agent: AgentWithPane{Agent: created, Pane: paneResponse.Pane}}, nil
+	return StartAgentResponse{Agent: AgentWithPane{Agent: created, Pane: pane}}, nil
 }
 
 func (s *Service) ListAgents(ctx context.Context) (ListAgentsResponse, error) {
