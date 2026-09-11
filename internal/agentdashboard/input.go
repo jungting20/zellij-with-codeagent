@@ -3,7 +3,7 @@ package agentdashboard
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -34,13 +34,17 @@ func (m Model) openInput() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.inputPane, m.inputAgent, m.inputError = paneID, row.Agent.ID, ""
-	m.prompt = textinput.New()
+	m.prompt = textarea.New()
+	m.prompt.ShowLineNumbers = false
+	m.prompt.Prompt = "> "
+	m.prompt.MaxHeight = 0
+	m.prompt.SetHeight(1)
 	m.prompt.Placeholder = "프롬프트 입력"
 	width := m.width
 	if width <= 0 {
 		width = 80
 	}
-	m.prompt.Width = maxInt(1, m.inputPopupWidth()-6)
+	m.prompt.SetWidth(maxInt(1, m.inputPopupWidth()-4))
 	m.inputX, m.inputY = m.inputAnchor(width)
 	return m, m.prompt.Focus()
 }
@@ -109,12 +113,15 @@ func (m Model) inputPopupWidth() int {
 func (m Model) inputView() string {
 	width := m.inputPopupWidth()
 	contentWidth := maxInt(1, width-4)
-	m.prompt.Width = maxInt(1, width-6)
+	m.prompt.SetWidth(maxInt(1, width-4))
+	m.prompt.SetHeight(minInt(3, maxInt(1, m.prompt.LineCount())))
 	status := m.inputError
 	if m.inputSending {
 		status = "전송 중…"
 	}
-	lines := []string{titleStyle.Render("프롬프트 · " + m.inputAgent), m.prompt.View(), status, "Enter 전송 · Esc 취소"}
+	lines := []string{titleStyle.Render("프롬프트 · " + m.inputAgent)}
+	lines = append(lines, strings.Split(m.prompt.View(), "\n")...)
+	lines = append(lines, status, "Enter 전송 · Esc 취소")
 	for index := range lines {
 		lines[index] = ansi.Truncate(lines[index], contentWidth, "…")
 	}

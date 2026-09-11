@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -75,10 +76,11 @@ type panelSelection struct {
 }
 
 type Model struct {
-	gitRunning bool
-	ctx        context.Context
-	client     Client
-	opts       Options
+	gitRunning    bool
+	editorRunning bool
+	ctx           context.Context
+	client        Client
+	opts          Options
 
 	width, height int
 	rows          []transport.AgentWithPane
@@ -103,7 +105,7 @@ type Model struct {
 	inputX, inputY int
 	inputPane      string
 	inputAgent     string
-	prompt         textinput.Model
+	prompt         textarea.Model
 	inputSending   bool
 	inputError     string
 	aliasTarget    string
@@ -148,7 +150,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		if m.inputPane != "" {
-			m.prompt.Width = maxInt(1, m.inputPopupWidth()-6)
+			m.prompt.SetWidth(maxInt(1, m.inputPopupWidth()-4))
 		}
 		return m, nil
 	case refreshTickMsg:
@@ -163,6 +165,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusText = "returned from lazygit"
 		}
 		return m, m.requestRefresh()
+	case editorResultMsg:
+		m.editorRunning = false
+		if msg.err != nil {
+			m.inputError = "Neovim 편집 실패: " + msg.err.Error()
+		} else {
+			m.prompt.SetValue(msg.text)
+			m.prompt.SetHeight(minInt(3, maxInt(1, m.prompt.LineCount())))
+		}
+		return m, m.prompt.Focus()
 	case inputResultMsg:
 		m.inputSending = false
 		if msg.err != nil {
@@ -278,6 +289,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.editorRunning {
+		return m, nil
+	}
 	if m.inputPane != "" {
 		return m.updateInputKey(msg)
 	}
@@ -297,6 +311,8 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openLazygit()
 	case "i":
 		return m.openInput()
+	case "I":
+		return m.openInputEditor()
 	case "a":
 		return m.openAliasPicker()
 	case "q", "ctrl+c":

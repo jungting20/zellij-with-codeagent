@@ -243,3 +243,10 @@ func TestLookupLoopProjectRoles(t *testing.T) {
 		}
 	}
 }
+
+func TestLookupPromptEditor(t *testing.T) {
+	spec, ok := Lookup("prompt-editor")
+	if !ok || spec.Usage != "prompt-editor <file>" {
+		t.Fatalf("spec=%+v, found=%t", spec, ok)
+	}
+}

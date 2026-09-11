@@ -64,7 +64,7 @@ func (m Model) View() string {
 		}
 		lines = append(lines, style.Render(m.statusText))
 	}
-	lines = append(lines, "Tab j/k i input g lazygit a alias Space pin d close Enter focus R refresh q quit")
+	lines = append(lines, "i input I nvim g lazygit a alias Space pin d close Enter focus R refresh q quit")
 	for index := range lines {
 		lines[index] = ansi.Truncate(lines[index], width, "…")
 	}

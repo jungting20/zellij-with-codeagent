@@ -17,6 +17,7 @@ const (
 	RoleCoder               = "coder"
 	RoleEditor              = "editor"
 	RoleLazygit             = "lazygit"
+	RolePromptEditor        = "prompt-editor"
 	RoleLSP                 = "lsp"
 	RoleNetworkTracker      = "network-tracker"
 	RoleConsoleTracker      = "console-tracker"
@@ -49,6 +50,12 @@ var specs = []RoleSpec{
 		Arguments: []ArgumentSpec{
 			{Name: "file", Required: true, Description: "Source file path to open."},
 		},
+	},
+	{
+		Name:        RolePromptEditor,
+		Usage:       "prompt-editor <file>",
+		Description: "Edits a prompt file in Neovim.",
+		Arguments:   []ArgumentSpec{{Name: "file", Required: true, Description: "Prompt file to edit."}},
 	},
 	{
 		Name:        RoleLazygit,

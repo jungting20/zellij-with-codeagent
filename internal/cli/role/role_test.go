@@ -279,3 +279,12 @@ func TestRunDispatchesLazygit(t *testing.T) {
 		t.Fatalf("exit=%d", code)
 	}
 }
+
+func TestRunDispatchesPromptEditor(t *testing.T) {
+	bin := t.TempDir()
+	writeFakeProvider(t, filepath.Join(bin, "nvim"), "#!/bin/sh\nexit 7\n")
+	t.Setenv("PATH", bin)
+	if code := Run([]string{"prompt-editor", filepath.Join(t.TempDir(), "prompt.md")}); code != 7 {
+		t.Fatalf("exit=%d", code)
+	}
+}

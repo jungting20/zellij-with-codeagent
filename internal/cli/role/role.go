@@ -22,6 +22,7 @@ import (
 	"zellij-with-codeagent/cmd/agent-role/loopprojectagent"
 	"zellij-with-codeagent/cmd/agent-role/lsp"
 	"zellij-with-codeagent/cmd/agent-role/network"
+	"zellij-with-codeagent/cmd/agent-role/prompteditor"
 	"zellij-with-codeagent/cmd/agent-role/tabnetwork"
 	"zellij-with-codeagent/cmd/agent-role/tabwatcher"
 	"zellij-with-codeagent/cmd/agent-role/ticketmanager"
@@ -50,6 +51,8 @@ func Run(args []string) int {
 
 	role := args[0]
 	switch role {
+	case roles.RolePromptEditor:
+		return prompteditor.Run(args[1:])
 	case roles.RoleLazygit:
 		return lazygit.Run(args[1:])
 	case roles.RoleCoder:

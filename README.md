@@ -108,7 +108,10 @@ list on the right (65%), with independent selection and scrolling. Use
 `Tab` or `Shift+Tab` to switch areas and `Space` to pin or unpin an agent;
 the cursor stays in the current area. Press `i` on a selected active agent to
 open a prompt popup near that row, `Enter` to send it, or `Esc` to cancel. The dashboard stays open
-after sending; failed sends keep the prompt for retry. Press `g` to open lazygit
+after sending; failed sends keep the prompt for retry. Press `Shift+I` (`I`) on a
+selected agent to compose in Neovim (`nvim` on PATH). Save and quit with `:wq`
+to load the saved multiline text into the input popup, then press `Enter` to send
+or `Esc` to cancel. `:q!` discards unsaved edits; `:cq` returns an editor error. Press `g` to open lazygit
 in the selected pane’s working directory; exit lazygit to return to the dashboard.
 The `lazygit` executable must be available on PATH. In the regular list, press `d` to close
 the selected agent's pane and terminate its process. This key is inactive
