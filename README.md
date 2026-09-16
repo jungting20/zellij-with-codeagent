@@ -103,6 +103,20 @@ dedicated dashboard:
 `ticket-worker start` is unchanged: it still creates ticket-manager and worker
 panes through execution plans and `CreatePane` requests.
 
+Select a parent agent and press `m` to request a child worktree merge.
+If there are multiple child agents, choose one with ↑/↓ and press Enter;
+Esc cancels. A single child is selected automatically. Both agents must be
+running and idle. The dashboard rechecks the relationship and Git branches,
+then sends a merge prompt to the parent through the daemon. “merge 요청 전송됨”
+means the request was delivered, not that Git integration has completed.
+The prompt asks the parent to report uncommitted changes, resolve conflicts
+according to intent, run relevant tests, and retain the worktree and branch.
+Only children still registered as agents are selectable. Repeated input is
+blocked while sending and for two seconds afterward.
+
+To preview the same prompt without sending it:
+`zellij-agent role agent-worktree-merge <parent-path> <child-path>` (requires Git).
+
 The dashboard separates pinned agents on the left (35%) from the regular
 list on the right (65%), with independent selection and scrolling. Use
 `Tab` or `Shift+Tab` to switch areas and `Space` to pin or unpin an agent;

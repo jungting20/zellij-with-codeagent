@@ -288,3 +288,9 @@ func TestRunDispatchesPromptEditor(t *testing.T) {
 		t.Fatalf("exit=%d", code)
 	}
 }
+
+func TestWorktreeMergeDispatch(t *testing.T) {
+	if code := Run([]string{"agent-worktree-merge"}); code != 2 {
+		t.Fatalf("exit = %d", code)
+	}
+}

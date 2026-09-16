@@ -251,3 +251,10 @@ func TestLookupPromptEditor(t *testing.T) {
 		t.Fatalf("spec=%+v, found=%t", spec, ok)
 	}
 }
+
+func TestWorktreeMergeRole(t *testing.T) {
+	spec, ok := Lookup("agent-worktree-merge")
+	if !ok || spec.Usage != "agent-worktree-merge <parent-path> <child-path>" {
+		t.Fatalf("missing merge role: %+v", spec)
+	}
+}

@@ -14,6 +14,7 @@ type RoleSpec struct {
 }
 
 const (
+	RoleAgentWorktreeMerge  = "agent-worktree-merge"
 	RoleAgentWorktree       = "agent-worktree"
 	RoleCoder               = "coder"
 	RoleEditor              = "editor"
@@ -64,6 +65,10 @@ var specs = []RoleSpec{
 		Description: "Opens lazygit in the specified working directory.",
 		Arguments:   []ArgumentSpec{{Name: "path", Required: true, Description: "Working directory for lazygit."}},
 	},
+	{Name: RoleAgentWorktreeMerge, Usage: "agent-worktree-merge <parent-path> <child-path>", Description: "Prints a merge request prompt for two Git worktrees.", Arguments: []ArgumentSpec{
+		{Name: "parent-path", Required: true, Description: "Destination worktree."},
+		{Name: "child-path", Required: true, Description: "Source worktree."},
+	}},
 	{
 		Name:        RoleLSP,
 		Usage:       "lsp [options] <file>",

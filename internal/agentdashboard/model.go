@@ -77,6 +77,12 @@ type panelSelection struct {
 }
 
 type Model struct {
+	// Merge selection and debounce are transient dashboard state.
+	mergeParent    string
+	mergeChildren  []transport.AgentWithPane
+	mergeSelected  int
+	mergeBusy      bool
+	mergeCooldown  time.Time
 	worktreeBusy   bool
 	worktreePath   string
 	worktreeParent transport.AgentWithPane
@@ -165,6 +171,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.tickCmd(), m.requestRefresh())
 	case refreshResultMsg:
 		return m.handleRefresh(msg)
+	case mergeResultMsg:
+		m.mergeBusy = false
+		m.mergeParent = ""
+		m.mergeChildren = nil
+		m.mergeCooldown = time.Now().Add(2 * time.Second)
+		if msg.err != nil {
+			m.statusText = "merge 요청 실패: " + msg.err.Error()
+		} else {
+			m.statusText = "merge 요청 전송됨"
+		}
+		return m, nil
 	case worktreeCreatedMsg:
 		return m.handleWorktreeCreated(msg)
 	case worktreeSelectionMsg:
@@ -315,6 +332,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.mergeParent != "" {
+		return m.updateMergeKey(msg)
+	}
 	if m.worktreeNaming {
 		return m.updateWorktreeNameKey(msg)
 	}
@@ -342,6 +362,8 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectedID = m.rows[m.selected].Agent.ID
 			m.focusPinned = m.rows[m.selected].Agent.Pinned
 		}
+	case "m":
+		return m.openMerge()
 	case "w":
 		return m.openWorktree()
 	case "g":

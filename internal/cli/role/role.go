@@ -11,6 +11,7 @@ import (
 	"zellij-with-codeagent/cmd/agent-role/agentnext"
 	"zellij-with-codeagent/cmd/agent-role/agentprev"
 	"zellij-with-codeagent/cmd/agent-role/agentworktree"
+	"zellij-with-codeagent/cmd/agent-role/agentworktreemerge"
 	"zellij-with-codeagent/cmd/agent-role/coder"
 	"zellij-with-codeagent/cmd/agent-role/codingagent"
 	"zellij-with-codeagent/cmd/agent-role/console"
@@ -52,6 +53,8 @@ func Run(args []string) int {
 
 	role := args[0]
 	switch role {
+	case roles.RoleAgentWorktreeMerge:
+		return agentworktreemerge.Run(args[1:])
 	case roles.RoleAgentWorktree:
 		return agentworktree.Run(args[1:])
 	case roles.RolePromptEditor:

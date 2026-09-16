@@ -57,25 +57,34 @@ func (m Model) View() string {
 	}
 	lines = append(lines, outputLines...)
 	lines = append(lines, activityLines...)
-	if m.statusText != "" {
-		style := mutedStyle
-		if m.connection == "degraded" || strings.Contains(m.statusText, "failed") {
-			style = errorStyle
-		}
-		lines = append(lines, style.Render(m.statusText))
+
+	footerStyle := mutedStyle
+	separator := strings.Repeat("─", width)
+	if m.statusText != "" && width >= 8 {
+		status := ansi.Truncate(m.statusText, width-6, "…")
+		separator = "── " + status + " " + strings.Repeat("─", maxInt(0, width-4-ansi.StringWidth(status)))
 	}
-	help := "i input g lazygit w worktree Space pin d close Enter focus R refresh q quit"
+	if m.connection == "degraded" || strings.Contains(m.statusText, "failed") {
+		footerStyle = errorStyle
+	}
+	lines = append(lines, footerStyle.Render(separator))
+
+	help := "i input g lazygit w tree m merge Space pin d close Enter focus R refresh q quit"
 	if width >= 100 {
-		help = "i input I nvim g lazygit w worktree a alias Space pin d close Enter focus R refresh q quit"
+		help = "i input I nvim g lazygit w worktree m merge a alias Space pin d close Enter focus R refresh q quit"
 	}
 	lines = append(lines, help)
 	for index := range lines {
 		lines[index] = ansi.Truncate(lines[index], width, "…")
 	}
 	if m.height > 0 && len(lines) > m.height {
-		lines = append(lines[:m.height-1], lines[len(lines)-1])
+		footerHeight := minInt(2, m.height)
+		lines = append(lines[:m.height-footerHeight], lines[len(lines)-footerHeight:]...)
 	}
 	base := strings.Join(lines, "\n")
+	if m.mergeParent != "" {
+		return m.popupOverlay(base, m.mergeView(), (width-70)/2, 0)
+	}
 	if m.worktreeNaming || m.worktreePicker != nil {
 		return m.popupOverlay(base, m.worktreeView(), (width-60)/2, 0)
 	}
