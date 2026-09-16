@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"zellij-with-codeagent/internal/cli"
+	"zellij-with-codeagent/internal/codingagent"
 	"zellij-with-codeagent/internal/ticketworker"
 	"zellij-with-codeagent/internal/transport"
 )
 
 type options struct {
+	DefaultAgent   string
 	SocketPath     string
 	TaskID         string
 	AnchorPaneID   string
@@ -72,6 +74,9 @@ func runWithDependencies(ctx context.Context, args []string, stdout, stderr io.W
 		fmt.Fprintf(stderr, "Error: load ticket-worker config: %v\n", err)
 		return 1
 	}
+	if opts.DefaultAgent != "" {
+		cfg.DefaultAgent = opts.DefaultAgent
+	}
 	store, err := ticketworker.OpenExisting(ctx, root, nil)
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: open ticket-worker store: %v\n", err)
@@ -105,6 +110,7 @@ func parseOptions(args []string, output io.Writer) (options, error) {
 	}
 	fs := flag.NewFlagSet("ticket-manager", flag.ContinueOnError)
 	fs.SetOutput(output)
+	fs.StringVar(&opts.DefaultAgent, "default-agent", "", "worker agent override (default from project config)")
 	fs.StringVar(&opts.SocketPath, "socket", opts.SocketPath, "agentd Unix socket path")
 	fs.StringVar(&opts.TaskID, "task", "", "logical runtime task ID")
 	fs.StringVar(&opts.AnchorPaneID, "anchor-pane", "", "logical ticket-manager pane ID")
@@ -120,6 +126,13 @@ func parseOptions(args []string, output io.Writer) (options, error) {
 	}
 	if fs.NArg() != 1 {
 		return options{}, fmt.Errorf("usage: agent-role ticket-manager [options] <path>")
+	}
+	if opts.DefaultAgent != "" {
+		kind, err := codingagent.ParseKind(opts.DefaultAgent)
+		if err != nil {
+			return options{}, fmt.Errorf("--default-agent: %w", err)
+		}
+		opts.DefaultAgent = string(kind)
 	}
 	opts.Path = fs.Arg(0)
 	opts.TaskID = strings.TrimSpace(opts.TaskID)

@@ -303,6 +303,8 @@ func runDashboard(args []string, stdin io.Reader, stdout, stderr io.Writer, newC
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	model := newModel(ctx, client, agentdashboard.Options{
+		SocketPath:         *socket,
+		RequestTimeout:     *timeout,
 		RefreshInterval:    *refresh,
 		SourceSession:      session,
 		SourceZellijPaneID: paneID,

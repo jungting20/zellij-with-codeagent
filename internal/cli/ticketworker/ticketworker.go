@@ -123,6 +123,7 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer, depe
 	flags := newFlagSet("start")
 	socketPath := flags.String("socket", cli.DefaultSocketPath, "agentd Unix socket path")
 	timeout := flags.Duration("timeout", 15*time.Second, "request timeout")
+	defaultAgent := flags.String("default-agent", "", "worker agent (default from project config)")
 	zellijSessionFlag := flags.String("zellij-session", "", "physical Zellij session")
 	if err := flags.Parse(args); err != nil {
 		return reportUsage(stderr, false, err.Error())
@@ -148,10 +149,18 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer, depe
 	if err := store.Close(); err != nil {
 		return reportError(stderr, false, fmt.Errorf("close ticket database: %w", err))
 	}
-	if _, err := ticketworker.LoadConfig(root); err != nil {
+	cfg, err := ticketworker.LoadConfig(root)
+	if err != nil {
 		return reportError(stderr, false, fmt.Errorf("load ticket-worker config: %w", err))
 	}
+	if !visited(flags, "default-agent") {
+		*defaultAgent = cfg.DefaultAgent
+	}
+	if strings.TrimSpace(*defaultAgent) == "" {
+		return reportUsage(stderr, false, "--default-agent must not be empty")
+	}
 	payload, err := ticketworker.BuildStartPlan(ticketworker.StartPlanRequest{
+		DefaultAgent:  *defaultAgent,
 		Root:          root,
 		ZellijSession: zellijSession,
 		SocketPath:    *socketPath,

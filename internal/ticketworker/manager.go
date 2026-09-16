@@ -111,6 +111,9 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	if opts.Client == nil {
 		return nil, fmt.Errorf("ticket manager client is required")
 	}
+	if opts.Config.DefaultAgent == "" {
+		opts.Config.DefaultAgent = "codex"
+	}
 	opts.Config.VoiceNotificationPrefix = strings.TrimSpace(opts.Config.VoiceNotificationPrefix)
 	if err := validateConfig(opts.Config); err != nil {
 		return nil, fmt.Errorf("ticket manager config: %w", err)
@@ -394,7 +397,7 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 	req := transport.CreatePaneRequest{
 		ID: slot.paneID, TaskID: m.taskID, ZellijSession: m.zellijSession,
 		Role: "coding-agent", Name: workerPaneName(ticket), SameTabAsPaneID: m.anchorPaneID,
-		Command: []string{m.roleBin, "role", "coding-agent", "--agent", ticket.Agent, "--yolo", workingDirectory, "--", slot.prompt}, CWD: workingDirectory,
+		Command: []string{m.roleBin, "role", "coding-agent", "--agent", m.config.DefaultAgent, "--yolo", workingDirectory, "--", slot.prompt}, CWD: workingDirectory,
 	}
 	slot.createRequest = req
 	createCtx, cancel := context.WithTimeout(ctx, m.startupTimeout)
@@ -413,7 +416,7 @@ func (m *Manager) startSlot(ctx context.Context, slot *managerSlot) bool {
 	}
 	slot.paneCreated = true
 	slot.state = managerSlotWorking
-	m.logTicketf("started", ticket, "pane=%s", slot.paneID)
+	m.logTicketf("started", ticket, "pane=%s agent=%s", slot.paneID, m.config.DefaultAgent)
 	return false
 }
 

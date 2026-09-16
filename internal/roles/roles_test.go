@@ -8,6 +8,7 @@ import (
 func TestAllIncludesRoleDescriptions(t *testing.T) {
 	for _, name := range []string{
 		RoleCoder,
+		RoleAgentTicket,
 		RoleAgentWorktree,
 		RoleEditor,
 		RoleLazygit,
@@ -162,7 +163,7 @@ func TestLookupTicketManager(t *testing.T) {
 	}
 	want := map[string]bool{
 		"path": true, "--task": true, "--anchor-pane": true,
-		"--socket": false, "--zellij-session": false, "--role-bin": false, "--startup-timeout": false,
+		"--socket": false, "--zellij-session": false, "--role-bin": false, "--startup-timeout": false, "--default-agent": false,
 	}
 	if len(spec.Arguments) != len(want) {
 		t.Fatalf("arguments = %#v", spec.Arguments)

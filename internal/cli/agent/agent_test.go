@@ -48,7 +48,7 @@ func TestRunDashboardPassesZellijContextAndOptions(t *testing.T) {
 	if client.socket != "/tmp/dashboard.sock" || client.timeout != 3*time.Second {
 		t.Fatalf("client socket=%q timeout=%s", client.socket, client.timeout)
 	}
-	want := agentdashboard.Options{RefreshInterval: 4 * time.Second, SourceSession: "session-a", SourceZellijPaneID: "terminal_7"}
+	want := agentdashboard.Options{SocketPath: "/tmp/dashboard.sock", RequestTimeout: 3 * time.Second, RefreshInterval: 4 * time.Second, SourceSession: "session-a", SourceZellijPaneID: "terminal_7"}
 	if gotOptions != want {
 		t.Fatalf("options=%#v, want %#v", gotOptions, want)
 	}

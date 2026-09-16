@@ -108,3 +108,14 @@ records decode with an empty parent (a root agent), so schema version 1 and all
 existing data remain valid. Closing a parent does not close its children or
 delete their worktrees; the parent ID remains as provenance. Dashboard selection,
 popup state and worktree creation progress remain transient.
+
+## Ticket worker agent selection
+
+`ticket-worker start` resolves `--default-agent` over the project's
+`default_agent` config (legacy configs default to `codex`) and includes the
+resolved value in the ticket-manager pane command. Existing execution-plan and
+pane-command persistence retain this argument; no new registry field or database
+schema is introduced. The manager uses this agent for all newly claimed tickets.
+Ticket `agent` values remain unchanged as registration metadata. Existing worker
+panes retain their original commands. Dashboard picker state is transient, and
+choosing an agent does not rewrite the project config or ticket records.

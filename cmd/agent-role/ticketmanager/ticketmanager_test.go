@@ -87,7 +87,7 @@ func TestRunWithDependenciesWiresProjectConfigStoreClientAndManager(t *testing.T
 	var stdout, stderr bytes.Buffer
 	code := runWithDependencies(context.Background(), []string{
 		"--socket", "/tmp/tickets.sock", "--task", "tickets", "--anchor-pane", "ticket-manager",
-		"--zellij-session", "physical-a", "--role-bin", "custom-agent", "--startup-timeout", "2s", nested,
+		"--zellij-session", "physical-a", "--role-bin", "custom-agent", "--startup-timeout", "2s", "--default-agent", "claude", nested,
 	}, &stdout, &stderr, deps)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -98,7 +98,7 @@ func TestRunWithDependenciesWiresProjectConfigStoreClientAndManager(t *testing.T
 	if managerOptions.Root != root || managerOptions.TaskID != "tickets" || managerOptions.AnchorPaneID != "ticket-manager" || managerOptions.ZellijSession != "physical-a" || managerOptions.RoleBin != "custom-agent" || managerOptions.StartupTimeout != 2*time.Second {
 		t.Fatalf("manager options = %+v", managerOptions)
 	}
-	if managerOptions.Store == nil || managerOptions.Client != client || managerOptions.Config.MaxWorkers != 3 {
+	if managerOptions.Store == nil || managerOptions.Client != client || managerOptions.Config.MaxWorkers != 3 || managerOptions.Config.DefaultAgent != "claude" {
 		t.Fatalf("manager dependencies = %+v", managerOptions)
 	}
 	if !managerOptions.Config.VoiceNotifications || managerOptions.Config.VoiceNotificationPrefix != "ticket-manager" {

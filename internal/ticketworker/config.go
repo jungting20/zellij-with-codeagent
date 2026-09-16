@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+	"zellij-with-codeagent/internal/codingagent"
 )
 
 const (
@@ -17,10 +18,11 @@ const (
 	defaultMaxWorkers              = 3
 	defaultPollInterval            = 30 * time.Second
 	defaultVoiceNotificationPrefix = "ticket-manager"
-	configTemplate                 = "version: 1\nmax_workers: 3\npoll_interval: 30s\nvoice_notifications: true\nvoice_notification_prefix: ticket-manager\n"
+	configTemplate                 = "version: 1\ndefault_agent: codex\nmax_workers: 3\npoll_interval: 30s\nvoice_notifications: true\nvoice_notification_prefix: ticket-manager\n"
 )
 
 type Config struct {
+	DefaultAgent            string
 	Version                 int
 	MaxWorkers              int
 	PollInterval            time.Duration
@@ -29,6 +31,7 @@ type Config struct {
 }
 
 type diskConfig struct {
+	DefaultAgent            *string `yaml:"default_agent"`
 	Version                 int     `yaml:"version"`
 	MaxWorkers              *int    `yaml:"max_workers"`
 	PollInterval            string  `yaml:"poll_interval"`
@@ -54,11 +57,19 @@ func LoadConfig(root string) (Config, error) {
 	}
 
 	cfg := Config{
+		DefaultAgent:            "codex",
 		Version:                 disk.Version,
 		MaxWorkers:              defaultMaxWorkers,
 		PollInterval:            defaultPollInterval,
 		VoiceNotifications:      true,
 		VoiceNotificationPrefix: defaultVoiceNotificationPrefix,
+	}
+	if disk.DefaultAgent != nil {
+		kind, err := codingagent.ParseKind(*disk.DefaultAgent)
+		if err != nil {
+			return Config{}, fmt.Errorf("default_agent: %w", err)
+		}
+		cfg.DefaultAgent = string(kind)
 	}
 	if disk.MaxWorkers != nil {
 		cfg.MaxWorkers = *disk.MaxWorkers
@@ -82,6 +93,11 @@ func LoadConfig(root string) (Config, error) {
 }
 
 func validateConfig(cfg Config) error {
+	if cfg.DefaultAgent != "" {
+		if _, err := codingagent.ParseKind(cfg.DefaultAgent); err != nil {
+			return fmt.Errorf("default_agent: %w", err)
+		}
+	}
 	if cfg.Version != configVersion {
 		return fmt.Errorf("version must be %d", configVersion)
 	}

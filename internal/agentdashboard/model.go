@@ -34,6 +34,8 @@ type eventTypeStreamClient interface {
 }
 
 type Options struct {
+	SocketPath         string
+	RequestTimeout     time.Duration
 	RefreshInterval    time.Duration
 	SourceSession      string
 	SourceZellijPaneID string
@@ -77,6 +79,7 @@ type panelSelection struct {
 }
 
 type Model struct {
+	ticket *ticketPopup
 	// Merge selection and debounce are transient dashboard state.
 	mergeParent    string
 	mergeChildren  []transport.AgentWithPane
@@ -163,10 +166,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.resizeTickets()
 		if m.inputPane != "" {
 			m.prompt.SetWidth(maxInt(1, m.inputPopupWidth()-4))
 		}
 		return m, nil
+	case ticketAgentConfigMsg:
+		return m.handleTicketAgentConfig(msg)
+	case ticketResultMsg:
+		return m.handleTicketResult(msg)
 	case refreshTickMsg:
 		return m, tea.Batch(m.tickCmd(), m.requestRefresh())
 	case refreshResultMsg:
@@ -313,6 +321,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	}
+	if m.ticket != nil && m.ticket.mode == "add" {
+		var cmd tea.Cmd
+		m.ticket.prompt, cmd = m.ticket.prompt.Update(msg)
+		return m, cmd
+	}
 	if m.worktreeNaming {
 		var cmd tea.Cmd
 		m.worktreePrompt, cmd = m.worktreePrompt.Update(msg)
@@ -332,6 +345,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.ticket != nil {
+		return m.updateTicketKey(msg)
+	}
 	if m.mergeParent != "" {
 		return m.updateMergeKey(msg)
 	}
@@ -362,6 +378,8 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectedID = m.rows[m.selected].Agent.ID
 			m.focusPinned = m.rows[m.selected].Agent.Pinned
 		}
+	case "t":
+		return m.openTickets()
 	case "m":
 		return m.openMerge()
 	case "w":

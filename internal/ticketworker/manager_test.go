@@ -26,6 +26,7 @@ func TestManagerWaitsForAnchorThenFillsConfiguredCapacity(t *testing.T) {
 	stream := newFakeEventStream()
 	client.streams = []*fakeEventStream{stream}
 	manager := newTestManager(t, store, client, 2)
+	manager.config.DefaultAgent = "gemini"
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runManager(ctx, manager)
@@ -56,7 +57,7 @@ func TestManagerWaitsForAnchorThenFillsConfiguredCapacity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		wantAgent := []string{"codex", "claude"}[i]
+		wantAgent := "gemini"
 		wantCommand := []string{"zellij-agent", "role", "coding-agent", "--agent", wantAgent, "--yolo", wantRoot, "--", wantPrompt}
 		if len(req.Command) != len(wantCommand) {
 			t.Fatalf("command = %#v", req.Command)

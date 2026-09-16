@@ -14,6 +14,7 @@ type RoleSpec struct {
 }
 
 const (
+	RoleAgentTicket         = "agent-ticket"
 	RoleAgentWorktreeMerge  = "agent-worktree-merge"
 	RoleAgentWorktree       = "agent-worktree"
 	RoleCoder               = "coder"
@@ -53,6 +54,16 @@ var specs = []RoleSpec{
 			{Name: "file", Required: true, Description: "Source file path to open."},
 		},
 	},
+	{Name: RoleAgentTicket, Usage: "agent-ticket <start|add|list> [options] <path>", Description: "Starts, adds, or lists project tickets from an agent working directory.", Arguments: []ArgumentSpec{
+		{Name: "action", Required: true, Description: "start, add, or list."},
+		{Name: "path", Required: true, Description: "Agent project directory."},
+		{Name: "--default-agent", Description: "Worker agent override for start; defaults to project configuration."},
+		{Name: "--prompt", Description: "Required for add; title and summary derive from its first line."},
+		{Name: "--agent", Description: "Agent kind for add (default codex)."},
+		{Name: "--zellij-session", Description: "Session for start (defaults to ZELLIJ_SESSION_NAME)."},
+		{Name: "--socket", Description: "Daemon socket for start."},
+		{Name: "--timeout", Description: "Request timeout for start."},
+	}},
 	{
 		Name:        RolePromptEditor,
 		Usage:       "prompt-editor <file>",
@@ -211,6 +222,7 @@ var specs = []RoleSpec{
 			{Name: "--zellij-session", Required: false, Description: "Target physical Zellij session name."},
 			{Name: "--role-bin", Required: false, Description: "Executable used to launch coding-agent roles."},
 			{Name: "--startup-timeout", Required: false, Description: "Anchor and coding-agent readiness timeout."},
+			{Name: "--default-agent", Description: "Worker agent override; defaults to project configuration."},
 		},
 	},
 	{

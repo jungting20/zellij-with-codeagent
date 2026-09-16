@@ -69,9 +69,9 @@ func (m Model) View() string {
 	}
 	lines = append(lines, footerStyle.Render(separator))
 
-	help := "i input g lazygit w tree m merge Space pin d close Enter focus R refresh q quit"
+	help := "t ticket i input g lazygit Space pin d close Enter focus R refresh q quit"
 	if width >= 100 {
-		help = "i input I nvim g lazygit w worktree m merge a alias Space pin d close Enter focus R refresh q quit"
+		help = "t ticket i input I nvim g lazygit w worktree m merge a alias Space pin d close Enter focus R refresh q quit"
 	}
 	lines = append(lines, help)
 	for index := range lines {
@@ -82,6 +82,9 @@ func (m Model) View() string {
 		lines = append(lines[:m.height-footerHeight], lines[len(lines)-footerHeight:]...)
 	}
 	base := strings.Join(lines, "\n")
+	if m.ticket != nil {
+		return m.popupOverlay(base, m.ticketView(), (width-m.ticketPopupWidth())/2, 0)
+	}
 	if m.mergeParent != "" {
 		return m.popupOverlay(base, m.mergeView(), (width-70)/2, 0)
 	}

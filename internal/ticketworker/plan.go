@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"zellij-with-codeagent/internal/codingagent"
 	"zellij-with-codeagent/internal/transport"
 )
 
 type StartPlanRequest struct {
+	DefaultAgent  string
 	Root          string
 	ZellijSession string
 	SocketPath    string
@@ -64,8 +66,15 @@ func BuildStartPlan(req StartPlanRequest) (transport.ExecutionPlanPayload, error
 		"--task", session,
 		"--anchor-pane", anchor,
 		"--zellij-session", zellijSession,
-		root,
 	)
+	if req.DefaultAgent != "" {
+		kind, err := codingagent.ParseKind(req.DefaultAgent)
+		if err != nil {
+			return transport.ExecutionPlanPayload{}, fmt.Errorf("default_agent: %w", err)
+		}
+		command = append(command, "--default-agent", string(kind))
+	}
+	command = append(command, root)
 
 	return transport.ExecutionPlanPayload{
 		Session:       session,

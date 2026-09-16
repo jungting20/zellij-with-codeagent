@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const expectedConfigTemplate = "version: 1\nmax_workers: 3\npoll_interval: 30s\nvoice_notifications: true\nvoice_notification_prefix: ticket-manager\n"
+const expectedConfigTemplate = "version: 1\ndefault_agent: codex\nmax_workers: 3\npoll_interval: 30s\nvoice_notifications: true\nvoice_notification_prefix: ticket-manager\n"
 
 func TestConfigPathUsesWorkerDirectory(t *testing.T) {
 	root := filepath.Join(string(filepath.Separator), "repo")
@@ -228,5 +228,27 @@ func writeConfigFile(t *testing.T, root, body string) {
 	}
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDefaultAgentConfig(t *testing.T) {
+	for _, tc := range []struct{ yaml, want string }{
+		{"version: 1\n", "codex"},
+		{"version: 1\ndefault_agent: claude\n", "claude"},
+		{"version: 1\ndefault_agent: invalid\n", ""},
+		{"version: 1\ndefault_agent: ' '\n", ""},
+	} {
+		root := t.TempDir()
+		writeConfigFile(t, root, tc.yaml)
+		cfg, err := LoadConfig(root)
+		if tc.want == "" {
+			if err == nil {
+				t.Fatal("accepted invalid agent")
+			}
+			continue
+		}
+		if err != nil || cfg.DefaultAgent != tc.want {
+			t.Fatalf("config=%+v err=%v", cfg, err)
+		}
 	}
 }

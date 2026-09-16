@@ -773,3 +773,37 @@ func TestInitIsIdempotent(t *testing.T) {
 		t.Fatalf("config after second init = %q, want %q", data, custom)
 	}
 }
+
+func TestStartResolvesWorkerAgentIntoManagerCommand(t *testing.T) {
+	for _, override := range []string{"", "gemini", "invalid", " "} {
+		t.Run(override, func(t *testing.T) {
+			h := newHarness(t)
+			t.Setenv("ZELLIJ_SESSION_NAME", "physical-a")
+			if err := os.WriteFile(ticketworker.ConfigPath(h.root), []byte("version: 1\ndefault_agent: claude\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			client := &fakeAgentClient{}
+			configureStartClient(h, client)
+			args := []string{"start"}
+			want := "claude"
+			if override != "" {
+				args = append(args, "--default-agent", override)
+				want = override
+			}
+			code := h.run(t, args...)
+			if override == "invalid" || override == " " {
+				if code == ExitOK || client.requestID != "" {
+					t.Fatal("invalid agent submitted")
+				}
+				return
+			}
+			if code != ExitOK {
+				t.Fatal(h.stderr.String())
+			}
+			command := strings.Join(client.payload.Tabs[0].Panes[0].Command, " ")
+			if !strings.Contains(command, "--default-agent "+want) {
+				t.Fatal(command)
+			}
+		})
+	}
+}

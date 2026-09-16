@@ -117,6 +117,17 @@ blocked while sending and for two seconds afterward.
 To preview the same prompt without sending it:
 `zellij-agent role agent-worktree-merge <parent-path> <child-path>` (requires Git).
 
+Select an agent and press `t` to open its project ticket menu: `ts` starts the
+worker-agent picker before starting the ticket manager in the selected agent's
+session. The picker preselects the project's `default_agent`; use ↑/↓ and Enter
+to start, or Esc to cancel. The choice applies to every worker in that manager
+run without rewriting the project config. `ta` opens a prompt
+popup (Enter adds; Alt+Enter inserts a newline), and `tl` opens a scrollable
+list (arrow keys/PgUp/PgDn; `r` refreshes). Esc closes the popup. Ticket actions
+use the selected working directory and require prior `ticket-worker init`.
+Added tickets record the selected agent kind as registration metadata, derive title/summary from the first
+prompt line, and default to running in the project root without a worktree.
+
 The dashboard separates pinned agents on the left (35%) from the regular
 list on the right (65%), with independent selection and scrolling. Use
 `Tab` or `Shift+Tab` to switch areas and `Space` to pin or unpin an agent;
@@ -325,6 +336,7 @@ cadence:
 
 ```yaml
 version: 1
+default_agent: codex
 max_workers: 3
 poll_interval: 30s
 ```
@@ -351,13 +363,15 @@ otherwise run from the repository root. The required prompt is stored with the
 ticket and used as the coding-agent instruction. The manager appends its
 completion-marker instruction automatically. `--agent` selects `codex`,
 `claude`, `gemini`, `cursor`, or `hermes`; it defaults to `codex` when omitted.
+This field remains registration metadata; worker execution uses the agent
+selected at manager startup.
 Queue and lifecycle commands are:
 
 ```bash
 ./bin/zellij-agent ticket-worker list [--status ready] [--no-prompt]
 ./bin/zellij-agent ticket-worker next
 ./bin/zellij-agent ticket-worker show ID
-./bin/zellij-agent ticket-worker start [--zellij-session NAME]
+./bin/zellij-agent ticket-worker start [--zellij-session NAME] [--default-agent KIND]
 ./bin/zellij-agent ticket-worker done ID
 ./bin/zellij-agent ticket-worker cancel ID
 ./bin/zellij-agent ticket-worker reopen ID
@@ -379,7 +393,11 @@ existing worktree is reused after retries or manager restarts. Worktrees and
 branches are preserved after completion for review and integration.
 Preparation failures requeue the ticket without starting a coding-agent pane.
 Every coding-agent created by the manager runs in YOLO mode using the agent
-stored on that ticket. The complete ticket instruction, including its
+selected at startup: `start --default-agent KIND` overrides `default_agent` in
+the worker config. Configs without that field default to `codex`. This choice
+applies to all tickets claimed by the manager, including existing queued tickets.
+Changing the config affects subsequent starts; it does not change a running
+manager. The CLI snapshots the resolved agent in the manager command. The complete ticket instruction, including its
 completion marker, is passed to the selected coding agent as its initial CLI
 prompt argument; the manager does not paste the prompt or synthesize an Enter
 keypress. The manager uses `--zellij-session` when supplied or

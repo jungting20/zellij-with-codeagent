@@ -294,3 +294,9 @@ func TestWorktreeMergeDispatch(t *testing.T) {
 		t.Fatalf("exit = %d", code)
 	}
 }
+
+func TestRunDispatchesAgentTicketRole(t *testing.T) {
+	if code := Run([]string{"agent-ticket"}); code != 2 {
+		t.Fatalf("code = %d", code)
+	}
+}
