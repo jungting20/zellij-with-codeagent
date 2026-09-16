@@ -49,6 +49,7 @@ func TestActivitiesCombineEventsAndPollingWithoutDuplicates(t *testing.T) {
 func TestActivityViewKeepsHistoryAndSelectionVisible(t *testing.T) {
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	row := viewRecord("a", "codex", "working", "/repo/api-server", now.Add(-3*time.Minute))
 	m = applyRefresh(t, m, []transport.AgentWithPane{row})
 	m = update(t, m, streamEventMsg{event: transport.Event{Type: agentStateChangedEventType, AgentID: "a", PreviousState: "working", AgentState: "idle", Time: now.Add(-2 * time.Minute)}})

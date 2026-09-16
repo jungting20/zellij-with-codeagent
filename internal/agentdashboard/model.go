@@ -147,12 +147,13 @@ func NewModel(ctx context.Context, client Client, opts Options) tea.Model {
 		opts.RefreshInterval = defaultRefreshInterval
 	}
 	return Model{
-		ctx:        ctx,
-		client:     client,
-		opts:       opts,
-		refreshing: true,
-		connection: "connecting",
-		statusText: "loading agents",
+		ctx:         ctx,
+		client:      client,
+		opts:        opts,
+		refreshing:  true,
+		focusPinned: true,
+		connection:  "connecting",
+		statusText:  "loading agents",
 	}
 }
 

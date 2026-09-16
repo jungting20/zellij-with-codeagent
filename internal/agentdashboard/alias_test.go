@@ -20,7 +20,7 @@ func TestAliasPickerAppliesEnumToCapturedAgentInEitherArea(t *testing.T) {
 		row := viewRecord("a", "codex", "working", "/repo/api-server", time.Now())
 		row.Agent.Pinned, row.Agent.TaskAlias = pinned, "test"
 		m = applyRefresh(t, m, []transport.AgentWithPane{row})
-		if pinned {
+		if !pinned {
 			m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 		}
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
@@ -66,6 +66,7 @@ func TestAliasPickerAppliesEnumToCapturedAgentInEitherArea(t *testing.T) {
 func TestAliasPickerCancelFailureAndClear(t *testing.T) {
 	client := &fakeClient{aliasErr: errors.New("unavailable")}
 	m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	row := viewRecord("a", "codex", "working", "/repo/api-server", time.Now())
 	row.Agent.TaskAlias = "review"
 	m = applyRefresh(t, m, []transport.AgentWithPane{row})
@@ -96,6 +97,7 @@ func TestAliasPickerCancelFailureAndClear(t *testing.T) {
 
 func TestAliasPickerAndBadgeFitSmallWindows(t *testing.T) {
 	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	row := viewRecord("a", "codex", "idle", "/repo/api-server", time.Now())
 	row.Agent.TaskAlias = "review"
 	m = applyRefresh(t, m, []transport.AgentWithPane{row})

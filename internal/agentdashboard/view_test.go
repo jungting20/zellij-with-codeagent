@@ -33,6 +33,7 @@ func TestViewRendersDeterministicGroupedDashboardAtSupportedWidths(t *testing.T)
 	for _, width := range []int{80, 120} {
 		t.Run(string(rune(width)), func(t *testing.T) {
 			m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{SourceSession: "project-alpha"}))
+			m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 			m.width, m.height, m.connection, m.loaded, m.lastRefresh = width, 17, "live", true, now
 			m.rows = append([]transport.AgentWithPane(nil), records...)
 			m.selected, m.selectedID = 1, "agent-claude"
@@ -185,6 +186,7 @@ func TestDisplayIndexForAgentSkipsGroupHeaders(t *testing.T) {
 func TestViewShowsProjectBeforeOtherColumnsInNarrowPane(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	m.width, m.height, m.connection, m.loaded, m.lastRefresh = 20, 8, "live", true, now
 	m.rows = []transport.AgentWithPane{
 		viewRecord("agent-one", "codex", "working", "/repo/first-project", now.Add(-time.Minute)),
@@ -216,6 +218,7 @@ func TestViewShowsDegradedConnectionAndLastStatus(t *testing.T) {
 func TestViewHonorsWindowWidthAndHeightWhileKeepingSelectionVisible(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	m.width, m.height, m.connection, m.loaded, m.lastRefresh = 80, 8, "live", true, now
 	for index := 0; index < 10; index++ {
 		project := strings.Repeat("project-", 15)
@@ -259,6 +262,7 @@ func lineContaining(text, needle string) string {
 
 func TestViewOutputUsesSpareSpaceAndFollowsSelectionAndRefresh(t *testing.T) {
 	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	rows := []transport.AgentWithPane{
 		viewRecord("first", "codex", "idle", "/repo/first", time.Now()),
 		viewRecord("second", "codex", "idle", "/repo/second", time.Now()),
@@ -309,6 +313,7 @@ func TestViewOutputUsesSpareSpaceAndFollowsSelectionAndRefresh(t *testing.T) {
 
 func TestViewAreasScrollIndependentlyAndSurviveResize(t *testing.T) {
 	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	var rows []transport.AgentWithPane
 	for index := 0; index < 10; index++ {
 		for _, pinned := range []bool{true, false} {
@@ -389,6 +394,7 @@ func TestViewNumbersMatchAreaSelectionAcrossScrollAndResize(t *testing.T) {
 
 func TestViewSharesNumbersBetweenPinnedAndUnpinned(t *testing.T) {
 	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	var rows []transport.AgentWithPane
 	for i := 0; i < 4; i++ {
 		row := viewRecord(fmt.Sprintf("a%d", i), "codex", "idle", fmt.Sprintf("/repo/project%d", i), time.Unix(int64(i), 0))

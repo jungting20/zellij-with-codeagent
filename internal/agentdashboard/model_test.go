@@ -112,6 +112,7 @@ func TestModelInitLoadsAgentsConnectsStreamAndSchedulesPoll(t *testing.T) {
 
 func TestModelKeepsCreationOrderAndSelectionByAgentID(t *testing.T) {
 	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	m = applyRefresh(t, m, []transport.AgentWithPane{
 		record("agent-late", "claude", "working", time.Unix(30, 0)),
 		record("agent-first", "codex", "idle", time.Unix(10, 0)),
@@ -159,6 +160,7 @@ func TestModelGroupsBySessionAndTabWithCurrentSessionFirst(t *testing.T) {
 
 func TestModelNavigationClampsAtListBounds(t *testing.T) {
 	m := concreteModel(t, NewModel(context.Background(), &fakeClient{}, Options{}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	m = applyRefresh(t, m, []transport.AgentWithPane{
 		record("a", "codex", "idle", time.Unix(1, 0)),
 		record("b", "claude", "idle", time.Unix(2, 0)),
@@ -181,6 +183,7 @@ func TestModelNavigationClampsAtListBounds(t *testing.T) {
 func TestModelFocusUsesSelectedAgentAndSourceContext(t *testing.T) {
 	client := &fakeClient{focusResponse: transport.FocusAgentResponse{Agent: record("agent-2", "claude", "idle", time.Unix(2, 0))}}
 	m := concreteModel(t, NewModel(context.Background(), client, Options{SourceSession: "source-session", SourceZellijPaneID: "terminal_9"}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	m = applyRefresh(t, m, []transport.AgentWithPane{
 		record("agent-1", "codex", "idle", time.Unix(1, 0)),
 		record("agent-2", "claude", "idle", time.Unix(2, 0)),
@@ -224,6 +227,10 @@ func TestModelTabSwitchesIndependentAreas(t *testing.T) {
 		}
 		rows[0].Agent.Pinned, rows[1].Agent.Pinned = true, true
 		m = applyRefresh(t, m, rows)
+		if !m.focusPinned || m.selectedID != "p1" {
+			t.Fatalf("default focus pinned=%t selection=%q", m.focusPinned, m.selectedID)
+		}
+		m = update(t, m, tea.KeyMsg{Type: key})
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyDown})
 		if m.selectedID != "b" {
 			t.Fatalf("normal selection=%q", m.selectedID)
@@ -256,7 +263,6 @@ func TestModelEmptyAreaDoesNotActOnOtherArea(t *testing.T) {
 	client := &fakeClient{}
 	m := concreteModel(t, NewModel(context.Background(), client, Options{}))
 	m = applyRefresh(t, m, []transport.AgentWithPane{record("a", "codex", "idle", time.Now())})
-	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	for _, key := range []tea.KeyType{tea.KeyDown, tea.KeyUp, tea.KeyEnter, tea.KeySpace} {
 		next, cmd := m.Update(tea.KeyMsg{Type: key})
 		m = concreteModel(t, next)
@@ -273,6 +279,7 @@ func TestModelEmptyAreaDoesNotActOnOtherArea(t *testing.T) {
 func TestModelSpacePinsSelectedAgentAndKeepsCursorRow(t *testing.T) {
 	client := &fakeClient{}
 	m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	m = applyRefresh(t, m, []transport.AgentWithPane{
 		record("a", "codex", "idle", time.Unix(1, 0)),
 		record("b", "claude", "idle", time.Unix(2, 0)),
@@ -309,6 +316,7 @@ func TestModelSpacePinsSelectedAgentAndKeepsCursorRow(t *testing.T) {
 func TestModelPinRefreshBeforeResponseKeepsCursorRow(t *testing.T) {
 	client := &fakeClient{}
 	m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	rows := []transport.AgentWithPane{
 		record("a", "codex", "idle", time.Unix(1, 0)),
 		record("b", "claude", "idle", time.Unix(2, 0)),
@@ -339,7 +347,6 @@ func TestModelSpaceUnpinsAndPinFailureKeepsOrder(t *testing.T) {
 	m = applyRefresh(t, m, []transport.AgentWithPane{
 		record("a", "codex", "idle", time.Unix(1, 0)), pinned,
 	})
-	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	client.pinResponse.Agent = pinned.Agent
 	client.pinResponse.Agent.Pinned = false
 
@@ -385,6 +392,7 @@ func TestModelTabKeysWithNoAgentsDoNothing(t *testing.T) {
 func TestModelFocusFailureKeepsDashboardAlive(t *testing.T) {
 	client := &fakeClient{focusErr: errors.New("target pane disappeared")}
 	m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	m = applyRefresh(t, m, []transport.AgentWithPane{record("agent-1", "codex", "idle", time.Unix(1, 0))})
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = concreteModel(t, next)
@@ -519,6 +527,7 @@ func rowIDs(rows []transport.AgentWithPane) []string {
 func TestModelStopsOnlySelectedUnpinnedAgent(t *testing.T) {
 	client := &fakeClient{}
 	m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	pinned := record("p", "codex", "idle", time.Unix(1, 0))
 	pinned.Agent.Pinned = true
 	a := record("a", "codex", "working", time.Unix(2, 0))
@@ -559,6 +568,7 @@ func TestModelStopsOnlySelectedUnpinnedAgent(t *testing.T) {
 func TestModelStopFailureKeepsAgentAndAllowsRetry(t *testing.T) {
 	client := &fakeClient{closeErr: errors.New("daemon unavailable")}
 	m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	row := record("a", "codex", "working", time.Now())
 	row.Agent.PaneID = ""
 	row.Pane.ID = "fallback-pane"
@@ -582,6 +592,7 @@ func TestModelStopIgnoresPinnedEmptyAndBusyAreas(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			client := &fakeClient{}
 			m := concreteModel(t, NewModel(context.Background(), client, Options{}))
+			m = update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 			row := record("a", "codex", "working", time.Now())
 			row.Agent.Pinned = scenario == "pinned"
 			m = applyRefresh(t, m, []transport.AgentWithPane{row})
