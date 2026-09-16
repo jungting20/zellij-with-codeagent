@@ -81,6 +81,9 @@ type Model struct {
 	worktreePath   string
 	worktreeParent transport.AgentWithPane
 	worktreePicker *listselector.Model
+	worktreeNaming bool
+	worktreePrompt textinput.Model
+	worktreeError  string
 	gitRunning     bool
 	editorRunning  bool
 	ctx            context.Context
@@ -293,6 +296,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	}
+	if m.worktreeNaming {
+		var cmd tea.Cmd
+		m.worktreePrompt, cmd = m.worktreePrompt.Update(msg)
+		return m, cmd
+	}
 	if m.aliasTarget != "" && m.aliasCustom {
 		var cmd tea.Cmd
 		m.aliasPrompt, cmd = m.aliasPrompt.Update(msg)
@@ -307,6 +315,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.worktreeNaming {
+		return m.updateWorktreeNameKey(msg)
+	}
 	if m.worktreePicker != nil {
 		return m.updateWorktreeKey(msg)
 	}

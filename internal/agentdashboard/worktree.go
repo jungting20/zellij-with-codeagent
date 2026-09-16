@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -38,13 +39,42 @@ func (m Model) openWorktree() (tea.Model, tea.Cmd) {
 		m.statusText = "worktree failed: agent has no managed working directory"
 		return m, nil
 	}
-	m.worktreeBusy = true
-	m.statusText = "creating worktree…"
-	cwd := m.worktreeParent.Pane.CWD
-	return m, func() tea.Msg {
-		path, err := agentworktree.Create(m.ctx, cwd)
-		return worktreeCreatedMsg{path: path, err: err}
+	m.worktreeNaming = true
+	m.worktreeError = ""
+	m.worktreePath = ""
+	m.worktreePrompt = textinput.New()
+	m.worktreePrompt.Placeholder = "feat/my-task"
+	m.worktreePrompt.Width = 48
+	return m, m.worktreePrompt.Focus()
+}
+
+func (m Model) updateWorktreeNameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.worktreeBusy {
+		return m, nil
 	}
+	switch msg.String() {
+	case "esc", "ctrl+c":
+		m.worktreeNaming = false
+		m.worktreePrompt.Blur()
+		m.statusText = "worktree cancelled"
+		return m, nil
+	case "enter":
+		branch := strings.TrimSpace(m.worktreePrompt.Value())
+		if branch == "" {
+			m.worktreeError = "브랜치명을 입력하세요"
+			return m, nil
+		}
+		m.worktreeBusy = true
+		m.worktreeError = ""
+		m.statusText = "creating worktree…"
+		return m, func() tea.Msg {
+			path, err := agentworktree.CreateNamed(m.ctx, m.worktreeParent.Pane.CWD, branch)
+			return worktreeCreatedMsg{path: path, err: err}
+		}
+	}
+	var cmd tea.Cmd
+	m.worktreePrompt, cmd = m.worktreePrompt.Update(msg)
+	return m, cmd
 }
 
 func (m Model) updateWorktreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -71,8 +101,21 @@ func (m Model) worktreeView() string {
 	if m.width <= 0 {
 		width = 60
 	}
-	content := m.worktreePicker.View() + "\n" + m.worktreePath + "\n" + m.statusText
-	if m.worktreeBusy {
+	var content string
+	if m.worktreeNaming {
+		prompt := m.worktreePrompt
+		prompt.Width = maxInt(1, width-8)
+		content = "Worktree 브랜치명\n" + prompt.View() + "\n브랜치명-HHMMSS로 생성\nEnter 다음 · Esc 취소"
+		if m.worktreeError != "" {
+			content += "\n" + m.worktreeError
+		}
+		if m.worktreeBusy {
+			content += "\nCreating worktree…"
+		}
+	} else {
+		content = m.worktreePicker.View() + "\n" + m.worktreePath + "\n" + m.statusText
+	}
+	if m.worktreeBusy && !m.worktreeNaming {
 		content += "\nStarting agent…"
 	}
 	lines := strings.Split(content, "\n")
@@ -86,9 +129,12 @@ func (m Model) worktreeView() string {
 func (m Model) handleWorktreeCreated(msg worktreeCreatedMsg) (tea.Model, tea.Cmd) {
 	m.worktreeBusy = false
 	if msg.err != nil {
+		m.worktreeError = msg.err.Error()
 		m.statusText = "worktree failed: " + msg.err.Error()
 		return m, nil
 	}
+	m.worktreeNaming = false
+	m.worktreePrompt.Blur()
 	m.worktreePath = msg.path
 	picker := listselector.NewPicker(func(_ string, args []string) tea.Cmd {
 		return func() tea.Msg { return worktreeSelectionMsg{args: args} }

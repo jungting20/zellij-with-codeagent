@@ -35,6 +35,22 @@ func TestCreate(t *testing.T) {
 	if err != nil || string(out) != "project-123456\n" {
 		t.Fatalf("%s %v", out, err)
 	}
+	namedPath, err := createNamed(context.Background(), repo, root, "feat/search", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = exec.Command("git", "-C", namedPath, "branch", "--show-current").Output()
+	if err != nil || string(out) != "feat/search-123456\n" || filepath.Dir(namedPath) != root {
+		t.Fatalf("path=%s branch=%s err=%v", namedPath, out, err)
+	}
+	for _, name := range []string{"../escape", "bad name", "-option", "bad..ref", "@{-1}"} {
+		if _, err := createNamed(context.Background(), repo, root, name, now); err == nil {
+			t.Fatalf("accepted invalid branch %q", name)
+		}
+	}
+	if _, err := CreateNamed(context.Background(), repo, "  "); err == nil {
+		t.Fatal("accepted empty branch")
+	}
 	if _, err := create(context.Background(), repo, root, now); err == nil {
 		t.Fatal("expected collision error")
 	}

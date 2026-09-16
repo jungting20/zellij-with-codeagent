@@ -1,10 +1,12 @@
 # Dashboard worktree agents
 
-Select an agent in `zellij-agent agent dashboard` and press `w`. A new Git
-branch and worktree are created from that agent directory's repository HEAD.
-The name is `<repository-basename>-HHMMSS` in local time, for example
-`project-143052`. The directory is under
+Select an agent in `zellij-agent agent dashboard` and press `w`. Enter a branch name
+and press Enter. Empty or invalid names stay in the input popup for correction;
+Esc cancels before creating anything. A new Git branch and worktree are created from that agent directory's repository HEAD.
+The name is `<entered-branch-name>-HHMMSS` in local time, for example
+`feat/search-143052`. The directory is under
 `os.TempDir()/zellij-agent-worktrees/` (the user temporary directory on macOS).
+Slashes in the branch name become hyphens in the directory name.
 Uncommitted changes are not copied. Name collisions fail without overwriting
 an existing worktree or branch; retry in a later second.
 

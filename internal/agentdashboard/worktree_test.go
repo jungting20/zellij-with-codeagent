@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	tea "github.com/charmbracelet/bubbletea"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"zellij-with-codeagent/internal/transport"
@@ -73,5 +75,67 @@ func TestChildOrderingAndMissingParent(t *testing.T) {
 	m.rows = rows[1:]
 	if !strings.Contains(m.childLabel(rows[1]), "[p]") {
 		t.Fatal("missing parent label")
+	}
+}
+
+func TestWorktreeNameBeforePicker(t *testing.T) {
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v", out, err)
+		}
+	}
+	c := &worktreeFakeClient{fakeClient: &fakeClient{}}
+	m := inputModel(t, c.fakeClient, false)
+	m.client = c
+	m.rows[0].Pane.CWD = repo
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	m = concreteModel(t, next)
+	if !m.worktreeNaming || m.worktreeBusy || m.worktreePicker != nil || !strings.Contains(m.View(), "브랜치명") {
+		t.Fatal("expected branch prompt before creation and selection")
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = concreteModel(t, next)
+	if cmd != nil || m.worktreeError == "" {
+		t.Fatal("empty branch accepted")
+	}
+	m.worktreePrompt.SetValue("bad name")
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = concreteModel(t, next)
+	next, _ = m.Update(cmd())
+	m = concreteModel(t, next)
+	if !m.worktreeNaming || m.worktreeBusy || m.worktreeError == "" {
+		t.Fatal("invalid branch did not return to input")
+	}
+	branch := filepath.Base(repo) + "-task"
+	m.worktreePrompt.SetValue(branch)
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = concreteModel(t, next)
+	if _, repeated := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); repeated != nil {
+		t.Fatal("duplicate creation allowed")
+	}
+	next, _ = m.Update(cmd())
+	m = concreteModel(t, next)
+	if m.worktreeNaming || m.worktreePicker == nil {
+		t.Fatalf("selector missing: %s", m.statusText)
+	}
+	t.Cleanup(func() { exec.Command("git", "-C", repo, "worktree", "remove", "--force", m.worktreePath).Run() })
+	out, err := exec.Command("git", "-C", m.worktreePath, "branch", "--show-current").Output()
+	if err != nil || !strings.HasPrefix(string(out), branch+"-") {
+		t.Fatalf("branch=%s err=%v", out, err)
+	}
+}
+
+func TestWorktreeNameCancel(t *testing.T) {
+	c := &worktreeFakeClient{fakeClient: &fakeClient{}}
+	m := inputModel(t, c.fakeClient, false)
+	m.client = c
+	m.rows[0].Pane.CWD = t.TempDir()
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	m = concreteModel(t, next)
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = concreteModel(t, next)
+	if cmd != nil || m.worktreeNaming || m.worktreeBusy || m.worktreePicker != nil || m.quitting {
+		t.Fatal("branch prompt cancellation failed")
 	}
 }

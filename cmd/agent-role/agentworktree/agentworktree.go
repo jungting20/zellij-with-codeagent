@@ -19,6 +19,18 @@ func Create(ctx context.Context, cwd string) (string, error) {
 }
 
 func create(ctx context.Context, cwd, root string, now time.Time) (string, error) {
+	return createNamed(ctx, cwd, root, "", now)
+}
+
+// CreateNamed creates a branch using the supplied name followed by the current time.
+func CreateNamed(ctx context.Context, cwd, branch string) (string, error) {
+	if strings.TrimSpace(branch) == "" {
+		return "", fmt.Errorf("branch name is required")
+	}
+	return createNamed(ctx, cwd, filepath.Join(os.TempDir(), "zellij-agent-worktrees"), branch, time.Now())
+}
+
+func createNamed(ctx context.Context, cwd, root, branch string, now time.Time) (string, error) {
 	if strings.TrimSpace(cwd) == "" {
 		return "", fmt.Errorf("agent has no working directory")
 	}
@@ -27,11 +39,19 @@ func create(ctx context.Context, cwd, root string, now time.Time) (string, error
 		return "", fmt.Errorf("resolve repository: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	repo := strings.TrimSpace(string(out))
-	name := filepath.Base(repo) + "-" + now.Format("150405")
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		branch = filepath.Base(repo)
+	}
+	name := branch + "-" + now.Format("150405")
+	if out, err := exec.CommandContext(ctx, "git", "check-ref-format", "--branch", name).CombinedOutput(); err != nil || strings.HasPrefix(name, "@{-") {
+		return "", fmt.Errorf("invalid branch name %q: %s", branch, strings.TrimSpace(string(out)))
+	}
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return "", err
 	}
-	path := filepath.Join(root, name)
+	// Keep branch prefixes such as feat/ inside a single directory component.
+	path := filepath.Join(root, strings.ReplaceAll(name, "/", "-"))
 	out, err = exec.CommandContext(ctx, "git", "-C", repo, "worktree", "add", "-b", name, path, "HEAD").CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("create worktree: %w: %s", err, strings.TrimSpace(string(out)))

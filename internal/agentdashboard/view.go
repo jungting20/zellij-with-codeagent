@@ -76,7 +76,7 @@ func (m Model) View() string {
 		lines = append(lines[:m.height-1], lines[len(lines)-1])
 	}
 	base := strings.Join(lines, "\n")
-	if m.worktreePicker != nil {
+	if m.worktreeNaming || m.worktreePicker != nil {
 		return m.popupOverlay(base, m.worktreeView(), (width-60)/2, 0)
 	}
 	if m.aliasTarget != "" {
