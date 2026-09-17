@@ -45,4 +45,4 @@ Recent history mostly uses short `feat:` commits, sometimes with Korean descript
 
 Do not bypass the runtime boundary by calling Zellij directly from planners or clients. Route pane creation, input, snapshots, events, reconciliation, and cleanup through `RuntimeService` or the local transport wrappers.
 
-Except for background logic, every feature addition must begin by creating a default role.
+Add a role only when the feature needs an independently runnable, reusable role command. Reuse existing roles, runtime services, and transport APIs for dashboard actions, shortcuts, and extensions of existing behavior; do not create a new role solely because a feature is being added.

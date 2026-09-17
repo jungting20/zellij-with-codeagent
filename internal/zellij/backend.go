@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 type CLIBackend struct {
@@ -45,10 +46,29 @@ func (b *CLIBackend) Session() string {
 }
 
 func (b *CLIBackend) EnsureSession(ctx context.Context, session string) error {
-	if strings.TrimSpace(session) == "" {
+	session = strings.TrimSpace(session)
+	if session == "" {
 		return errors.New("session name is required")
 	}
+	exists := func() (bool, error) {
+		sessions, err := b.ActiveSessions(ctx)
+		for _, active := range sessions {
+			if active == session {
+				return true, nil
+			}
+		}
+		return false, err
+	}
+	if found, err := exists(); err != nil || found {
+		return err
+	}
 	_, err := b.run(ctx, "ensure session", newCommand(b.binary, "", "attach", "--create-background", session))
+	if err != nil {
+		// Another launch may have created the session after our first check.
+		if found, _ := exists(); found {
+			return nil
+		}
+	}
 	return err
 }
 
@@ -60,6 +80,12 @@ func (b *CLIBackend) requestSession(session string) string {
 }
 
 func (b *CLIBackend) CreateTab(ctx context.Context, req CreateTabRequest) (TabID, error) {
+	session := b.requestSession(req.Session)
+	stop, temporary, err := b.prepareTabClient(ctx, session)
+	if err != nil {
+		return 0, err
+	}
+	defer stop()
 	result, err := b.run(ctx, "create tab", createTabCommand(b.binary, b.requestSession(req.Session), req))
 	if err != nil {
 		return 0, err
@@ -68,6 +94,29 @@ func (b *CLIBackend) CreateTab(ctx context.Context, req CreateTabRequest) (TabID
 	id, err := parseTabID(result.Stdout)
 	if err != nil {
 		return 0, err
+	}
+	if temporary {
+		// The command returns the tab ID before its layout is applied.
+		waitCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			panes, listErr := b.ListPanes(waitCtx, ListPanesRequest{Session: session})
+			if listErr != nil {
+				break
+			}
+			for _, pane := range panes {
+				if TabID(pane.TabID) == id && !pane.IsPlugin {
+					return id, nil
+				}
+			}
+			select {
+			case <-waitCtx.Done():
+				return id, nil
+			case <-ticker.C:
+			}
+		}
 	}
 	return id, nil
 }
@@ -284,7 +333,9 @@ func (b *CLIBackend) connectedSession(ctx context.Context) (string, error) {
 
 // ActiveSessions includes detached sessions and excludes exited sessions.
 func (b *CLIBackend) ActiveSessions(ctx context.Context) ([]string, error) {
-	spec := newCommand(b.binary, "", "list-sessions", "--short", "--no-formatting")
+	// --short removes the EXITED marker as well as the age, so it cannot
+	// distinguish a live session from one that can only be resurrected.
+	spec := newCommand(b.binary, "", "list-sessions", "--no-formatting")
 	result, err := b.runner.Run(ctx, spec)
 	if err != nil {
 		if strings.TrimSpace(result.Stderr) == "No active zellij sessions found." || strings.TrimSpace(result.Stdout) == "No active zellij sessions found." {
@@ -296,7 +347,8 @@ func (b *CLIBackend) ActiveSessions(ctx context.Context) ([]string, error) {
 	for _, line := range strings.Split(result.Stdout, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" && !strings.Contains(line, "EXITED") {
-			sessions = append(sessions, line)
+			name, _, _ := strings.Cut(line, " [Created ")
+			sessions = append(sessions, name)
 		}
 	}
 	return sessions, nil

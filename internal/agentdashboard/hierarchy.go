@@ -5,7 +5,7 @@ import (
 	"zellij-with-codeagent/internal/transport"
 )
 
-// Keep existing panel/session/tab groups, then order each group depth first.
+// Keep root ordering, then place descendants directly after their parent across sessions.
 func orderChildren(rows []transport.AgentWithPane) {
 	original := append([]transport.AgentWithPane(nil), rows...)
 	byPane := make(map[string]int)
@@ -18,7 +18,7 @@ func orderChildren(rows []transport.AgentWithPane) {
 	roots := []int{}
 	for i, row := range original {
 		p, ok := byPane[row.Pane.ParentPaneID]
-		if ok && p != i && sameHierarchyGroup(row, original[p]) {
+		if ok && p != i {
 			children[p] = append(children[p], i)
 		} else {
 			roots = append(roots, i)
@@ -45,8 +45,32 @@ func orderChildren(rows []transport.AgentWithPane) {
 	} // Defensively render malformed cycles once.
 }
 
-func sameHierarchyGroup(a, b transport.AgentWithPane) bool {
-	return a.Agent.Pinned == b.Agent.Pinned && sessionName(a) == sessionName(b) && tabKey(a) == tabKey(b)
+// hierarchyRoot supplies the displayed panel/session/tab without changing runtime data.
+func (m Model) hierarchyRoot(row transport.AgentWithPane) transport.AgentWithPane {
+	byPane := make(map[string]transport.AgentWithPane)
+	for _, item := range m.rows {
+		if item.Pane.ID != "" {
+			byPane[item.Pane.ID] = item
+		}
+	}
+	seen := make(map[string]bool)
+	for row.Pane.ParentPaneID != "" {
+		if seen[row.Pane.ID] {
+			for id := range seen {
+				if id < row.Pane.ID {
+					row = byPane[id]
+				}
+			}
+			return row
+		}
+		seen[row.Pane.ID] = true
+		parent, ok := byPane[row.Pane.ParentPaneID]
+		if !ok {
+			break
+		}
+		row = parent
+	}
+	return row
 }
 
 func (m Model) childLabel(row transport.AgentWithPane) string {
@@ -58,7 +82,7 @@ func (m Model) childLabel(row transport.AgentWithPane) string {
 		byPane[item.Pane.ID] = item
 	}
 	parent, ok := byPane[row.Pane.ParentPaneID]
-	if !ok || !sameHierarchyGroup(row, parent) {
+	if !ok {
 		return "↳ [" + row.Pane.ParentPaneID + "] "
 	}
 	depth := 1
@@ -66,7 +90,7 @@ func (m Model) childLabel(row transport.AgentWithPane) string {
 	for ok && !seen[parent.Pane.ID] {
 		seen[parent.Pane.ID] = true
 		next, found := byPane[parent.Pane.ParentPaneID]
-		if !found || !sameHierarchyGroup(row, next) {
+		if !found {
 			break
 		}
 		depth++

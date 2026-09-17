@@ -10,6 +10,7 @@ func TestAllIncludesRoleDescriptions(t *testing.T) {
 		RoleCoder,
 		RoleAgentTicket,
 		RoleAgentWorktree,
+		RoleAgentWorktreeSend,
 		RoleEditor,
 		RoleLazygit,
 		RoleLSP,

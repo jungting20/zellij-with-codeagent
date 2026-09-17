@@ -103,14 +103,32 @@ dedicated dashboard:
 `ticket-worker start` is unchanged: it still creates ticket-manager and worker
 panes through execution plans and `CreatePane` requests.
 
-Press `w` on a dashboard agent to create a worktree and select its coding agent.
+Press `w` on a dashboard agent to open the worktree menu: `a` creates a
+worktree and selects its coding agent, `s` executes a shell command only in the selected agent's active direct
+child worktree directories (excluding the parent and other agents' worktrees), and
+`m` opens the existing merge flow, and `g` focuses an active direct child in its
+`worktree-agent` tab through the existing agent focus API. If no child is
+available, the menu shows a message. The shell command runs with `$SHELL -c`
+(or `/bin/sh -c`) in each directory, with a five-minute total timeout.
+Results show each directory's output and failure status; ↑/↓ scrolls and Esc closes.
+The separate repository-wide operation, including the main checkout, is available as
+`zellij-agent role agent-worktree-send [--timeout DURATION] <path> <shell-command>`.
 All dashboard worktree agents open in the `worktree-agent` Zellij session, in a
 new tab named after the parent pane's current title (or its project directory
 name if the title is empty). The runtime creates the session in the background
-when needed. Each launch creates a new tab, and the parent/child relationship
+when needed. The first child of each parent creates a tab; later children of that same
+parent open as panes in the existing tab. Different parents get separate tabs,
+even when their titles match. The parent/child relationship
 is retained across sessions and daemon restarts.
+The dashboard shows descendants beneath their parent across session/tab boundaries,
+in the root parent's PINNED/UNPINNED panel. It hides the `worktree-agent` session
+and tab headings; children whose parent is absent remain visible with the parent ID.
+Existing sessions are reused. When the target session has no connected client,
+the runtime temporarily attaches a sized client while creating the tab, waits
+for its terminal pane to appear, and releases that client automatically.
 
-Select a parent agent and press `m` to request a child worktree merge.
+Select a parent agent and press `w`, then `m` to request a child worktree merge
+(the direct `m` shortcut also remains available).
 If there are multiple child agents, choose one with ↑/↓ and press Enter;
 Esc cancels. A single child is selected automatically. Both agents must be
 running and idle. The dashboard rechecks the relationship and Git branches,

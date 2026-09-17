@@ -14,6 +14,7 @@ type RoleSpec struct {
 }
 
 const (
+	RoleAgentWorktreeSend   = "agent-worktree-send"
 	RoleAgentTicket         = "agent-ticket"
 	RoleAgentWorktreeMerge  = "agent-worktree-merge"
 	RoleAgentWorktree       = "agent-worktree"
@@ -40,7 +41,6 @@ const (
 )
 
 var specs = []RoleSpec{
-
 	{
 		Name:        RoleCoder,
 		Usage:       "coder",
@@ -264,6 +264,11 @@ var specs = []RoleSpec{
 		},
 	},
 	{Name: RoleAgentWorktree, Usage: "agent-worktree <path>", Description: "Creates a temporary Git worktree and selects a coding agent.", Arguments: []ArgumentSpec{{Name: "path", Required: true, Description: "Working directory of the source Git repository."}}},
+	{Name: RoleAgentWorktreeSend, Usage: "agent-worktree-send [--timeout DURATION] <path> <shell-command>", Description: "Runs a shell command in every Git worktree, including the main checkout.", Arguments: []ArgumentSpec{
+		{Name: "path", Required: true, Description: "Directory in the Git repository."},
+		{Name: "shell-command", Required: true, Description: "Command executed using $SHELL, or /bin/sh."},
+		{Name: "--timeout", Description: "Total execution timeout; defaults to 5m."},
+	}},
 }
 
 func All() []RoleSpec {

@@ -48,6 +48,22 @@ func TestIntegrationCreateSnapshotAndClosePane(t *testing.T) {
 	waitForSnapshotContains(ctx, t, service, created.Pane.ID, "agentd-runtime-smoke")
 }
 
+func TestIntegrationEnsureSessionAndLaunchInNewTab(t *testing.T) {
+	service, _ := newIntegrationService(t, "integration-worktree-launch")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	created, err := service.CreatePane(ctx, CreatePaneRequest{
+		ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"), EnsureSession: true,
+		NewTab: true, TabName: "worktree-launch-test", CWD: os.TempDir(),
+		Command: []string{"sh", "-c", "printf 'worktree-launch-ready\\n'; sleep 30"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeIntegrationPane(t, service, created.Pane.ID)
+	waitForSnapshotContains(ctx, t, service, created.Pane.ID, "worktree-launch-ready")
+}
+
 func TestIntegrationCreateNewTabSendInputAndClosePane(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -994,4 +1010,31 @@ func TestIntegrationCreatePaneWithAgentRoles(t *testing.T) {
 	waitForSnapshotContains(ctx, t, service, createdCoder.Pane.ID, "[CODER AGENT]")
 	waitForSnapshotContains(ctx, t, service, createdNetwork.Pane.ID, "[NETWORK TRACKER]")
 	waitForSnapshotContains(ctx, t, service, createdConsole.Pane.ID, "[CONSOLE TRACKER]")
+}
+
+func TestIntegrationSiblingWorktreesShareTab(t *testing.T) {
+	service, _ := newIntegrationService(t, "integration-parent-tab")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	parent, err := service.CreatePane(ctx, CreatePaneRequest{ID: "group-parent", ZellijSession: os.Getenv("ZELLIJ_SESSION_NAME"), NewTab: true, TabName: "parent-tab-test", Command: []string{"sh", "-c", "sleep 60"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeIntegrationPane(t, service, parent.Pane.ID)
+	var children []Pane
+	for _, id := range []PaneID{"group-first", "group-second"} {
+		req := groupedChild(id, parent.Pane.ID)
+		req.Command = []string{"sh", "-c", "printf 'sibling-ready\\n'; sleep 60"}
+		result, err := service.CreatePane(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closeIntegrationPane(t, service, result.Pane.ID)
+		waitForSnapshotContains(ctx, t, service, result.Pane.ID, "sibling-ready")
+		children = append(children, result.Pane)
+	}
+	if children[0].ZellijTabID == nil || children[1].ZellijTabID == nil || *children[0].ZellijTabID != *children[1].ZellijTabID {
+		t.Fatalf("children in different tabs: %+v", children)
+	}
+	t.Logf("same parent: %s and %s in session %s tab %d", children[0].ZellijPaneID, children[1].ZellijPaneID, children[0].SessionID, *children[0].ZellijTabID)
 }

@@ -91,6 +91,8 @@ func TestWorktreeNameBeforePicker(t *testing.T) {
 	m.rows[0].Pane.CWD = repo
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
 	m = concreteModel(t, next)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = concreteModel(t, next)
 	if !m.worktreeNaming || m.worktreeBusy || m.worktreePicker != nil || !strings.Contains(m.View(), "브랜치명") {
 		t.Fatal("expected branch prompt before creation and selection")
 	}

@@ -42,6 +42,7 @@ type Service struct {
 	bus               *eventbus.Bus
 	subs              *SubscriptionManager
 	observer          PaneObserver
+	parentTabMu       sync.Mutex // Serializes sibling lookup through pane registration.
 	createMu          sync.Mutex
 	creates           map[PaneID]*createPaneCall
 }
@@ -152,6 +153,15 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 		}
 	}
 
+	if req.ReuseParentTab {
+		s.parentTabMu.Lock()
+		defer s.parentTabMu.Unlock()
+		req, err = s.resolveParentTab(ctx, req)
+		if err != nil {
+			s.finishCreatePane(call, CreatePaneResponse{}, err)
+			return CreatePaneResponse{}, err
+		}
+	}
 	req, err = s.resolveCreatePaneTarget(ctx, req)
 	if err != nil {
 		s.finishCreatePane(call, CreatePaneResponse{}, err)
@@ -725,16 +735,26 @@ func (s *Service) findPaneByID(ctx context.Context, session string, paneID zelli
 }
 
 func (s *Service) findPaneInTab(ctx context.Context, session string, tabID zellij.TabID) (zellij.Pane, error) {
-	panes, err := s.backend.ListPanes(ctx, zellij.ListPanesRequest{Session: session})
-	if err != nil {
-		return zellij.Pane{}, err
-	}
-	for _, pane := range panes {
-		if zellij.TabID(pane.TabID) == tabID && !pane.IsPlugin {
-			return pane, nil
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		panes, err := s.backend.ListPanes(ctx, zellij.ListPanesRequest{Session: session})
+		if err != nil {
+			return zellij.Pane{}, err
+		}
+		for _, pane := range panes {
+			if zellij.TabID(pane.TabID) == tabID && !pane.IsPlugin {
+				return pane, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return zellij.Pane{}, errors.Join(ErrPaneNotFound, ctx.Err())
+		case <-ticker.C:
 		}
 	}
-	return zellij.Pane{}, ErrPaneNotFound
 }
 
 func nilCleanup(context.Context) error {

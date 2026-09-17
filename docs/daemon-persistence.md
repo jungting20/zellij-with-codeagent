@@ -115,6 +115,13 @@ pane payload and session/tab indexes; `ParentPaneID` may refer to a pane in
 another session. No schema migration is needed. The start request's
 `target_session` and runtime `EnsureSession` are transient launch options, not
 additional stored fields. Recovery uses the persisted destination location.
+Subsequent worktree launches reuse a live child's tab for the same parent and
+destination session. This grouping is reconstructed from persisted
+`ParentPaneID` and pane location records, then checked against live Zellij panes;
+there is no extra stored mapping or migration. `ReuseParentTab` and the runtime
+creation lock are transient. Concurrent launches serialize sibling lookup and
+registration so the first children do not create duplicate tabs. If no live
+child remains, the next launch creates a new tab.
 
 ## Ticket worker agent selection
 

@@ -443,14 +443,34 @@ func TestCreateTabParsesReturnedTabID(t *testing.T) {
 
 func TestEnsureSessionCreatesInBackground(t *testing.T) {
 	for _, failure := range []error{nil, errors.New("cannot create session")} {
-		runner := &fakeRunner{results: []fakeResult{{err: failure}}}
+		runner := &fakeRunner{results: []fakeResult{{}, {err: failure}, {}}}
 		backend := NewBackend(Options{Session: "source", Runner: runner})
 		err := backend.EnsureSession(context.Background(), "worktree-agent")
 		if (err != nil) != (failure != nil) {
 			t.Fatalf("error = %v", err)
 		}
 		want := []string{"attach", "--create-background", "worktree-agent"}
-		if len(runner.commands) != 1 || !reflect.DeepEqual(runner.commands[0].Args, want) {
+		if len(runner.commands) < 2 || !reflect.DeepEqual(runner.commands[1].Args, want) {
+			t.Fatalf("commands = %+v", runner.commands)
+		}
+	}
+}
+
+func TestEnsureSessionReusesExistingAndConcurrentSession(t *testing.T) {
+	for _, concurrent := range []bool{false, true} {
+		results := []fakeResult{{result: CommandResult{Stdout: "worktree-agent\n"}}}
+		if concurrent {
+			results = append([]fakeResult{{}, {err: errors.New("already exists")}}, results...)
+		}
+		runner := &fakeRunner{results: results}
+		if err := NewBackend(Options{Runner: runner}).EnsureSession(context.Background(), "worktree-agent"); err != nil {
+			t.Fatal(err)
+		}
+		want := 1
+		if concurrent {
+			want = 3
+		}
+		if len(runner.commands) != want {
 			t.Fatalf("commands = %+v", runner.commands)
 		}
 	}
@@ -796,6 +816,7 @@ func TestActiveSessionsIncludesDetachedAndPropagatesInspectionFailures(t *testin
 		wantErr bool
 	}{
 		{name: "live and exited", result: CommandResult{Stdout: "attached\ndetached\nold [EXITED]\n"}, want: []string{"attached", "detached"}},
+		{name: "actual session listing", result: CommandResult{Stdout: "attached [Created 1day ago] (current)\nworktree agent [Created 1m ago]\n운영 [Created 2days ago] (EXITED - attach to resurrect)\n"}, want: []string{"attached", "worktree agent"}},
 		{name: "empty", result: CommandResult{Stderr: "No active zellij sessions found."}, err: errors.New("exit 1")},
 		{name: "failure", result: CommandResult{Stderr: "permission denied"}, err: errors.New("exit 1"), wantErr: true},
 	} {

@@ -79,7 +79,8 @@ type panelSelection struct {
 }
 
 type Model struct {
-	ticket *ticketPopup
+	worktrees *worktreeMenu // Transient menu and shell execution results.
+	ticket    *ticketPopup
 	// Merge selection and debounce are transient dashboard state.
 	mergeParent    string
 	mergeChildren  []transport.AgentWithPane
@@ -172,6 +173,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.prompt.SetWidth(maxInt(1, m.inputPopupWidth()-4))
 		}
 		return m, nil
+	case worktreeShellResultMsg:
+		return m.handleWorktreeShellResult(msg)
 	case ticketAgentConfigMsg:
 		return m.handleTicketAgentConfig(msg)
 	case ticketResultMsg:
@@ -263,6 +266,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusText = "stopped " + msg.agentID
 		return m, m.requestRefresh()
 	case focusResultMsg:
+		if m.worktrees != nil {
+			m.worktrees.busy = false
+			if msg.err != nil {
+				m.worktrees.summary = "탭 이동 실패: " + msg.err.Error()
+			}
+		}
 		m.focusing = false
 		if msg.err != nil {
 			m.statusText = "focus failed: " + msg.err.Error()
@@ -322,6 +331,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	}
+	if m.worktrees != nil && m.worktrees.mode == "send" {
+		var cmd tea.Cmd
+		m.worktrees.prompt, cmd = m.worktrees.prompt.Update(msg)
+		return m, cmd
+	}
 	if m.ticket != nil && m.ticket.mode == "add" {
 		var cmd tea.Cmd
 		m.ticket.prompt, cmd = m.ticket.prompt.Update(msg)
@@ -346,6 +360,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.worktrees != nil {
+		return m.updateWorktreeMenuKey(msg)
+	}
 	if m.ticket != nil {
 		return m.updateTicketKey(msg)
 	}
@@ -377,14 +394,14 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if position < len(m.rows) {
 			m.selected = position
 			m.selectedID = m.rows[m.selected].Agent.ID
-			m.focusPinned = m.rows[m.selected].Agent.Pinned
+			m.focusPinned = m.hierarchyRoot(m.rows[m.selected]).Agent.Pinned
 		}
 	case "t":
 		return m.openTickets()
 	case "m":
 		return m.openMerge()
 	case "w":
-		return m.openWorktree()
+		return m.openWorktreeMenu()
 	case "g":
 		return m.openLazygit()
 	case "i":
@@ -420,10 +437,13 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "R":
 		return m, m.requestRefresh()
 	case "d":
-		if m.focusPinned || len(m.panelIndices(false)) == 0 || m.stopping || m.pinning || m.focusing {
+		if len(m.panelIndices(m.focusPinned)) == 0 || m.stopping || m.pinning || m.focusing {
 			return m, nil
 		}
 		row := m.rows[m.selected]
+		if row.Agent.Pinned {
+			return m, nil
+		}
 		paneID := row.Agent.PaneID
 		if paneID == "" {
 			paneID = row.Pane.ID
@@ -565,7 +585,7 @@ func panelIndex(pinned bool) int {
 func (m Model) panelIndices(pinned bool) []int {
 	var indices []int
 	for index, row := range m.rows {
-		if row.Agent.Pinned == pinned {
+		if m.hierarchyRoot(row).Agent.Pinned == pinned {
 			indices = append(indices, index)
 		}
 	}

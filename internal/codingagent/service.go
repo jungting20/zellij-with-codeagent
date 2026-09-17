@@ -251,6 +251,7 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 			createRequest.ZellijSession = targetSession
 			createRequest.SameTabAsPaneID = ""
 			createRequest.NewTab = true
+			createRequest.ReuseParentTab = true
 			createRequest.EnsureSession = true
 		}
 		response, createErr := s.RuntimeService.CreatePane(ctx, createRequest)

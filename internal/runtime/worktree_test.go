@@ -15,6 +15,28 @@ type worktreeBackend struct {
 	ensureErr error
 }
 
+type delayedTabBackend struct {
+	*fakeBackend
+	polls int
+}
+
+func (b *delayedTabBackend) ListPanes(context.Context, zellij.ListPanesRequest) ([]zellij.Pane, error) {
+	b.polls++
+	if b.polls < 3 {
+		return nil, nil
+	}
+	return []zellij.Pane{{ID: "terminal_2", TabID: 7}}, nil
+}
+
+func TestNewTabWaitsForTerminalPane(t *testing.T) {
+	backend := &delayedTabBackend{fakeBackend: &fakeBackend{createTabID: 7}}
+	service := NewService(Options{Backend: backend})
+	response, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "delayed-child", ZellijSession: "worktree-agent", NewTab: true})
+	if err != nil || response.Pane.ZellijPaneID != "terminal_2" || backend.polls != 3 || len(backend.closeTabRequests) != 0 {
+		t.Fatalf("response = %+v, error = %v, polls = %d", response, err, backend.polls)
+	}
+}
+
 func (b *worktreeBackend) EnsureSession(_ context.Context, session string) error {
 	b.ensured = append(b.ensured, session)
 	return b.ensureErr

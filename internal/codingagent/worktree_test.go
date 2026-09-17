@@ -58,7 +58,7 @@ func TestStartChildInTargetSession(t *testing.T) {
 		if (err != nil) != fail {
 			t.Fatalf("error = %v", err)
 		}
-		if len(rt.claimed) != 0 || rt.request.ZellijSession != "worktree-agent" || !rt.request.NewTab || !rt.request.EnsureSession || rt.request.SameTabAsPaneID != "" || rt.request.ParentPaneID != "parent" {
+		if len(rt.claimed) != 0 || rt.request.ZellijSession != "worktree-agent" || !rt.request.NewTab || !rt.request.ReuseParentTab || !rt.request.EnsureSession || rt.request.SameTabAsPaneID != "" || rt.request.ParentPaneID != "parent" {
 			t.Fatalf("request = %+v", rt.request)
 		}
 		if fail {

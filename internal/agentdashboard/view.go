@@ -69,7 +69,7 @@ func (m Model) View() string {
 	}
 	lines = append(lines, footerStyle.Render(separator))
 
-	help := "t ticket i input g lazygit Space pin d close Enter focus R refresh q quit"
+	help := "w worktree i input g lazygit Space pin d close Enter focus R refresh q quit"
 	if width >= 100 {
 		help = "t ticket i input I nvim g lazygit w worktree m merge a alias Space pin d close Enter focus R refresh q quit"
 	}
@@ -82,6 +82,9 @@ func (m Model) View() string {
 		lines = append(lines[:m.height-footerHeight], lines[len(lines)-footerHeight:]...)
 	}
 	base := strings.Join(lines, "\n")
+	if m.worktrees != nil {
+		return m.popupOverlay(base, m.worktreeMenuView(), (width-76)/2, 0)
+	}
 	if m.ticket != nil {
 		return m.popupOverlay(base, m.ticketView(), (width-m.ticketPopupWidth())/2, 0)
 	}
@@ -248,41 +251,51 @@ func sectionView(row displayRow, width int) string {
 
 func (m Model) displayRows() []displayRow {
 	rows := make([]displayRow, 0, len(m.rows)*3)
-	start := 0
-	for start < len(m.rows) && m.rows[start].Agent.Pinned {
-		start++
-	}
-	rows = append(rows, displayRow{kind: displayPinned, count: start})
-	if start == 0 {
-		rows = append(rows, displayRow{kind: displayEmpty})
-	}
-	for index := 0; index < start; index++ {
-		rows = append(rows, displayRow{kind: displayAgent, agentIndex: index})
-	}
-	rows = append(rows, displayRow{kind: displayUnpinned, count: len(m.rows) - start})
-	if start == len(m.rows) {
-		rows = append(rows, displayRow{kind: displayEmpty})
-	}
-	for start < len(m.rows) {
-		session := sessionName(m.rows[start])
-		sessionEnd := start + 1
-		for sessionEnd < len(m.rows) && sessionName(m.rows[sessionEnd]) == session {
-			sessionEnd++
+	for _, pinned := range []bool{true, false} {
+		indices := m.panelIndices(pinned)
+		kind := displayUnpinned
+		if pinned {
+			kind = displayPinned
 		}
-		rows = append(rows, displayRow{kind: displaySession, session: session, count: sessionEnd - start})
-		for tabStart := start; tabStart < sessionEnd; {
-			tab := tabKey(m.rows[tabStart])
-			tabEnd := tabStart + 1
-			for tabEnd < sessionEnd && tabKey(m.rows[tabEnd]) == tab {
-				tabEnd++
-			}
-			rows = append(rows, displayRow{kind: displayTab, tab: tabName(m.rows[tabStart]), count: tabEnd - tabStart})
-			for index := tabStart; index < tabEnd; index++ {
+		rows = append(rows, displayRow{kind: kind, count: len(indices)})
+		if len(indices) == 0 {
+			rows = append(rows, displayRow{kind: displayEmpty})
+			continue
+		}
+		if pinned {
+			for _, index := range indices {
 				rows = append(rows, displayRow{kind: displayAgent, agentIndex: index})
 			}
-			tabStart = tabEnd
+			continue
 		}
-		start = sessionEnd
+		for start := 0; start < len(indices); {
+			root := m.hierarchyRoot(m.rows[indices[start]])
+			session := sessionName(root)
+			sessionEnd := start + 1
+			for sessionEnd < len(indices) && sessionName(m.hierarchyRoot(m.rows[indices[sessionEnd]])) == session {
+				sessionEnd++
+			}
+			// Worktree execution sessions are an implementation detail, including for orphans.
+			if session != "worktree-agent" {
+				rows = append(rows, displayRow{kind: displaySession, session: session, count: sessionEnd - start})
+			}
+			for tabStart := start; tabStart < sessionEnd; {
+				root = m.hierarchyRoot(m.rows[indices[tabStart]])
+				tab := tabKey(root)
+				tabEnd := tabStart + 1
+				for tabEnd < sessionEnd && tabKey(m.hierarchyRoot(m.rows[indices[tabEnd]])) == tab {
+					tabEnd++
+				}
+				if session != "worktree-agent" {
+					rows = append(rows, displayRow{kind: displayTab, tab: tabName(root), count: tabEnd - tabStart})
+				}
+				for _, index := range indices[tabStart:tabEnd] {
+					rows = append(rows, displayRow{kind: displayAgent, agentIndex: index})
+				}
+				tabStart = tabEnd
+			}
+			start = sessionEnd
+		}
 	}
 	return rows
 }
