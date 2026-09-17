@@ -42,7 +42,7 @@ func TestWorktreePickerLaunchAndCancel(t *testing.T) {
 	m = concreteModel(t, next)
 	next, _ = m.Update(cmd())
 	m = concreteModel(t, next)
-	if c.request.ParentPaneID != "parent" || c.request.CWD != "/tmp/project-123456" || c.request.Kind != "codex" || m.worktreePicker != nil {
+	if c.request.TargetSession != "worktree-agent" || c.request.SourceSession != "source" || c.request.ParentPaneID != "parent" || c.request.CWD != "/tmp/project-123456" || c.request.Kind != "codex" || m.worktreePicker != nil {
 		t.Fatalf("request=%+v", c.request)
 	}
 	next, _ = m.Update(worktreeCreatedMsg{path: "/tmp/retained"})

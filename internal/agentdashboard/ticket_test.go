@@ -223,6 +223,16 @@ func TestTicketStartAlwaysSelectsAgentBeforeExecution(t *testing.T) {
 
 func TestTicketStartConfigFailureDoesNotLaunch(t *testing.T) {
 	m := ticketModel(t, false)
+	cwd := m.ticket.target.Pane.CWD
+	if err := os.Mkdir(filepath.Join(cwd, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ticketworker.EnsureConfig(cwd); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ticketworker.ConfigPath(cwd), []byte("version: 1\nmax_workers: 0\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	m, load := ticketKey(t, m, "s")
 	next, _ := m.Update(load())
 	m = concreteModel(t, next)
@@ -236,5 +246,27 @@ func TestTicketStartConfigFailureDoesNotLaunch(t *testing.T) {
 	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyEsc})
 	if m.ticket != nil {
 		t.Fatal("cannot cancel")
+	}
+}
+
+func TestTicketStartMissingConfigAllowsAgentSelection(t *testing.T) {
+	m := ticketModel(t, false)
+	cwd := m.ticket.target.Pane.CWD
+	// Git worktrees use a .git file instead of a directory.
+	if err := os.WriteFile(filepath.Join(cwd, ".git"), []byte("gitdir: /unused/worktrees/test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m, load := ticketKey(t, m, "s")
+	next, _ := m.Update(load())
+	m = concreteModel(t, next)
+	if m.ticket.err != "" || !m.ticket.agentReady || m.ticket.defaultAgent != "codex" {
+		t.Fatalf("picker = %+v", m.ticket)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, ".zellij-agent")); !os.IsNotExist(err) {
+		t.Fatalf("picker initialized project before start: %v", err)
+	}
+	_, cmd := inputKey(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("missing start command for uninitialized project")
 	}
 }

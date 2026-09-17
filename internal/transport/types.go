@@ -98,6 +98,7 @@ type ListPanesResponse struct {
 }
 
 type StartAgentRequest struct {
+	TargetSession      string   `json:"target_session,omitempty"`
 	ParentPaneID       string   `json:"parent_pane_id,omitempty"`
 	Kind               string   `json:"kind"`
 	CWD                string   `json:"cwd"`
@@ -355,6 +356,7 @@ type Event struct {
 
 func (req StartAgentRequest) ToCodingAgent() codingagent.StartAgentRequest {
 	return codingagent.StartAgentRequest{
+		TargetSession:       req.TargetSession,
 		ParentPaneID:        rt.PaneID(req.ParentPaneID),
 		Kind:                codingagent.Kind(req.Kind),
 		CWD:                 req.CWD,
@@ -369,6 +371,7 @@ func (req StartAgentRequest) ToCodingAgent() codingagent.StartAgentRequest {
 
 func StartAgentRequestFromCodingAgent(req codingagent.StartAgentRequest) StartAgentRequest {
 	converted := StartAgentRequest{
+		TargetSession:      req.TargetSession,
 		ParentPaneID:       string(req.ParentPaneID),
 		Kind:               string(req.Kind),
 		CWD:                req.CWD,

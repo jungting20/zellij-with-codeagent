@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -237,8 +238,19 @@ func (s *Service) createPaneOnce(ctx context.Context, req CreatePaneRequest, id 
 		if req.ParentPaneID == id {
 			return CreatePaneResponse{}, fmt.Errorf("%w: pane cannot parent itself", ErrInvalidPaneTarget)
 		}
-		if _, err := s.lookupPane(req.ParentPaneID); err != nil {
+		parent, err := s.lookupPane(req.ParentPaneID)
+		if err != nil {
 			return CreatePaneResponse{}, fmt.Errorf("parent pane: %w", err)
+		}
+		if req.NewTab && req.TabName == "" {
+			liveParent, err := s.findPaneByID(ctx, string(parent.SessionID), zellij.PaneID(parent.ZellijPaneID))
+			if err != nil {
+				return CreatePaneResponse{}, fmt.Errorf("parent pane title: %w", err)
+			}
+			req.TabName = strings.TrimSpace(liveParent.Title)
+			if req.TabName == "" {
+				req.TabName = filepath.Base(parent.CWD)
+			}
 		}
 	}
 
@@ -441,6 +453,15 @@ func (s *Service) SubscribeEvents(ctx context.Context) (<-chan eventbus.Event, f
 }
 
 func (s *Service) createBackendPane(ctx context.Context, req CreatePaneRequest) (zellij.PaneID, *zellij.TabID, string, func(context.Context) error, error) {
+	if req.EnsureSession {
+		ensurer, ok := s.backend.(zellij.SessionEnsurer)
+		if !ok {
+			return "", nil, "", nilCleanup, errors.New("session creation is unavailable")
+		}
+		if err := ensurer.EnsureSession(ctx, req.ZellijSession); err != nil {
+			return "", nil, "", nilCleanup, err
+		}
+	}
 	if req.NewTab {
 		tabID, err := s.backend.CreateTab(ctx, zellij.CreateTabRequest{
 			Session:      req.ZellijSession,

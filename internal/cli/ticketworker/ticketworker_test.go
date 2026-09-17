@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -161,6 +162,81 @@ func TestStartExplicitZellijSessionOverridesEnvironment(t *testing.T) {
 	}
 	if client.payload.ZellijSession != "explicit-session" {
 		t.Fatalf("ZellijSession = %q", client.payload.ZellijSession)
+	}
+}
+
+func TestStartInitializesWhenConfigMissing(t *testing.T) {
+	for _, existingQueue := range []bool{false, true} {
+		t.Run(fmt.Sprintf("existing_queue=%t", existingQueue), func(t *testing.T) {
+			h := newHarness(t)
+			var ticket ticketworker.Ticket
+			if existingQueue {
+				ticket = h.addJSON(t, "Preserve ticket", "Existing queue", "", "")
+				if err := os.Remove(ticketworker.ConfigPath(h.root)); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.RemoveAll(filepath.Join(h.root, ".zellij-agent")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(h.root, ".gitignore"), []byte("custom/\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			nested := filepath.Join(h.root, "nested")
+			if err := os.Mkdir(nested, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			h.deps.StartDirectory = nested
+			client := &fakeAgentClient{}
+			configureStartClient(h, client)
+			if got := h.run(t, "start", "--zellij-session", "physical-a"); got != ExitOK {
+				t.Fatalf("start exit = %d, stderr = %s", got, h.stderr.String())
+			}
+			if client.requestID == "" || client.payload.Tabs[0].Panes[0].CWD != h.root {
+				t.Fatalf("submission = %#v", client.payload)
+			}
+			if cfg, err := ticketworker.LoadConfig(h.root); err != nil || cfg.DefaultAgent != "codex" {
+				t.Fatalf("config = %#v, err = %v", cfg, err)
+			}
+			ignore, err := os.ReadFile(filepath.Join(h.root, ".gitignore"))
+			if err != nil || string(ignore) != "custom/\n.zellij-agent/ticket-worker/\n.worktrees/\n" {
+				t.Fatalf("gitignore = %q, err = %v", ignore, err)
+			}
+			if got := h.run(t, "list", "--json"); got != ExitOK {
+				t.Fatalf("list exit = %d, stderr = %s", got, h.stderr.String())
+			}
+			var tickets []ticketworker.Ticket
+			if err := json.Unmarshal(h.stdout.Bytes(), &tickets); err != nil {
+				t.Fatal(err)
+			}
+			if existingQueue {
+				if len(tickets) != 1 || tickets[0].ID != ticket.ID || tickets[0].Prompt != ticket.Prompt || tickets[0].Status != ticket.Status {
+					t.Fatalf("existing ticket changed: %#v", tickets)
+				}
+			} else if len(tickets) != 0 {
+				t.Fatalf("new queue = %#v", tickets)
+			}
+		})
+	}
+}
+
+func TestStartReportsInitializationFailureWithoutSubmission(t *testing.T) {
+	h := newHarness(t)
+	if err := os.Remove(ticketworker.ConfigPath(h.root)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(h.root, ".gitignore")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(h.root, ".gitignore"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeAgentClient{}
+	configureStartClient(h, client)
+	if got := h.run(t, "start", "--zellij-session", "physical-a"); got == ExitOK {
+		t.Fatal("start succeeded after initialization failure")
+	}
+	if client.requestID != "" || !strings.Contains(h.stderr.String(), "initialize ticket-worker") {
+		t.Fatalf("request=%q stderr=%q", client.requestID, h.stderr.String())
 	}
 }
 

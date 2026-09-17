@@ -103,6 +103,13 @@ dedicated dashboard:
 `ticket-worker start` is unchanged: it still creates ticket-manager and worker
 panes through execution plans and `CreatePane` requests.
 
+Press `w` on a dashboard agent to create a worktree and select its coding agent.
+All dashboard worktree agents open in the `worktree-agent` Zellij session, in a
+new tab named after the parent pane's current title (or its project directory
+name if the title is empty). The runtime creates the session in the background
+when needed. Each launch creates a new tab, and the parent/child relationship
+is retained across sessions and daemon restarts.
+
 Select a parent agent and press `m` to request a child worktree merge.
 If there are multiple child agents, choose one with ↑/↓ and press Enter;
 Esc cancels. A single child is selected automatically. Both agents must be
@@ -376,6 +383,10 @@ Queue and lifecycle commands are:
 ./bin/zellij-agent ticket-worker cancel ID
 ./bin/zellij-agent ticket-worker reopen ID
 ```
+
+If `.zellij-agent/worker/config.yaml` is missing, `start` first runs the same
+initialization as `init`, creating the database, default config, and `.gitignore`
+entries while preserving existing tickets. Invalid existing configs report an error.
 
 `start` creates one runtime-managed `ticket-manager` pane in a new
 `ticket-worker` tab. With no active workers, the manager fills the tab. While

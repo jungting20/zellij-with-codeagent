@@ -92,6 +92,7 @@ func Start(ctx context.Context, client interface {
 	}
 	req := transport.StartAgentRequest{
 		Kind: args[2], CWD: path, ParentPaneID: parent.Pane.ID,
+		TargetSession: "worktree-agent",
 		SourceSession: parent.Pane.SessionID, SourceZellijPaneID: parent.Pane.ZellijPaneID,
 	}
 	for i := 3; i < len(args); i++ {

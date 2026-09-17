@@ -4,6 +4,7 @@ package agentticket
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -109,12 +110,16 @@ func Run(args []string) int {
 }
 
 // DefaultAgent reads the selected project's configured worker agent without changing it.
+// Uninitialized projects use codex until the start command initializes them.
 func DefaultAgent(directory string) (string, error) {
 	root, err := ticketworker.FindRoot(directory)
 	if err != nil {
 		return "", err
 	}
 	cfg, err := ticketworker.LoadConfig(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return "codex", nil
+	}
 	if err != nil {
 		return "", err
 	}

@@ -441,6 +441,21 @@ func TestCreateTabParsesReturnedTabID(t *testing.T) {
 	}
 }
 
+func TestEnsureSessionCreatesInBackground(t *testing.T) {
+	for _, failure := range []error{nil, errors.New("cannot create session")} {
+		runner := &fakeRunner{results: []fakeResult{{err: failure}}}
+		backend := NewBackend(Options{Session: "source", Runner: runner})
+		err := backend.EnsureSession(context.Background(), "worktree-agent")
+		if (err != nil) != (failure != nil) {
+			t.Fatalf("error = %v", err)
+		}
+		want := []string{"attach", "--create-background", "worktree-agent"}
+		if len(runner.commands) != 1 || !reflect.DeepEqual(runner.commands[0].Args, want) {
+			t.Fatalf("commands = %+v", runner.commands)
+		}
+	}
+}
+
 func TestCreateTabOmitsEmptyLayoutString(t *testing.T) {
 	runner := &fakeRunner{results: []fakeResult{{result: CommandResult{Stdout: "4\n"}}}}
 	backend := NewBackend(Options{Runner: runner})

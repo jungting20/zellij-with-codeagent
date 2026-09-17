@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -142,16 +143,22 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer, depe
 	if err != nil {
 		return reportError(stderr, false, err)
 	}
+	cfg, err := ticketworker.LoadConfig(root)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := ticketworker.InitializeProject(ctx, root, dependencies.Now); err != nil {
+			return reportError(stderr, false, fmt.Errorf("initialize ticket-worker: %w", err))
+		}
+		cfg, err = ticketworker.LoadConfig(root)
+	}
+	if err != nil {
+		return reportError(stderr, false, fmt.Errorf("load ticket-worker config: %w", err))
+	}
 	store, err := ticketworker.OpenExisting(ctx, root, dependencies.Now)
 	if err != nil {
 		return reportError(stderr, false, err)
 	}
 	if err := store.Close(); err != nil {
 		return reportError(stderr, false, fmt.Errorf("close ticket database: %w", err))
-	}
-	cfg, err := ticketworker.LoadConfig(root)
-	if err != nil {
-		return reportError(stderr, false, fmt.Errorf("load ticket-worker config: %w", err))
 	}
 	if !visited(flags, "default-agent") {
 		*defaultAgent = cfg.DefaultAgent

@@ -38,6 +38,10 @@ type SessionSwitcher interface {
 	SwitchSession(ctx context.Context, req SwitchSessionRequest) error
 }
 
+type SessionEnsurer interface {
+	EnsureSession(context.Context, string) error
+}
+
 type Options struct {
 	Binary  string
 	Session string

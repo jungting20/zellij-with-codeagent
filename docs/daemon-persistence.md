@@ -109,6 +109,13 @@ existing data remain valid. Closing a parent does not close its children or
 delete their worktrees; the parent ID remains as provenance. Dashboard selection,
 popup state and worktree creation progress remain transient.
 
+Dashboard worktree children live in the `worktree-agent` session. Their
+`SessionID`, `TabID`, `ZellijTabID`, and parent-derived `TabName` use the existing
+pane payload and session/tab indexes; `ParentPaneID` may refer to a pane in
+another session. No schema migration is needed. The start request's
+`target_session` and runtime `EnsureSession` are transient launch options, not
+additional stored fields. Recovery uses the persisted destination location.
+
 ## Ticket worker agent selection
 
 `ticket-worker start` resolves `--default-agent` over the project's

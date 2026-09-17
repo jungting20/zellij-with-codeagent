@@ -60,3 +60,47 @@ func TestPersistentHierarchyRestoresIndexesAndGeneration(t *testing.T) {
 		t.Fatalf("generation=%d after deleted %d", next.Generation, removed.Generation)
 	}
 }
+
+func TestWorktreeChildLocationSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	w, err := persistence.Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewPersistent(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, req := range []RegisterPaneRequest{
+		{ID: "parent", SessionID: "source", TabID: "1", ZellijPaneID: "terminal_1", Status: PaneStatusRunning},
+		{ID: "child", ParentPaneID: "parent", SessionID: "worktree-agent", TabID: "7", TabName: "부모 작업 pane", ZellijPaneID: "terminal_1", Status: PaneStatusRunning},
+	} {
+		if _, err := reg.RegisterPane(req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w, err = persistence.Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close(context.Background())
+	reg, err = NewPersistent(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := reg.GetPane("child")
+	if err != nil || child.ParentPaneID != "parent" || child.SessionID != "worktree-agent" || child.TabID != "7" || child.TabName != "부모 작업 pane" {
+		t.Fatalf("child = %+v, error = %v", child, err)
+	}
+	tab, err := reg.GetTab("worktree-agent", "7")
+	if err != nil || tab.Name != "부모 작업 pane" || len(tab.Panes) != 1 {
+		t.Fatalf("tab = %+v, error = %v", tab, err)
+	}
+	parent, err := reg.GetPane("parent")
+	if err != nil || parent.SessionID != "source" {
+		t.Fatalf("parent = %+v, error = %v", parent, err)
+	}
+}

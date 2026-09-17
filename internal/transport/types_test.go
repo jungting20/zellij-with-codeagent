@@ -362,8 +362,8 @@ func TestSessionFromRuntimeSortsTabsAndPanes(t *testing.T) {
 }
 
 func TestParentPaneRoundTrip(t *testing.T) {
-	req := StartAgentRequest{ParentPaneID: "parent"}
-	if got := StartAgentRequestFromCodingAgent(req.ToCodingAgent()); got.ParentPaneID != "parent" {
+	req := StartAgentRequest{ParentPaneID: "parent", TargetSession: "worktree-agent"}
+	if got := StartAgentRequestFromCodingAgent(req.ToCodingAgent()); got.ParentPaneID != "parent" || got.TargetSession != "worktree-agent" {
 		t.Fatal(got)
 	}
 	pane := CreatePaneRequest{ParentPaneID: "parent"}.ToRuntime()

@@ -44,6 +44,14 @@ func (b *CLIBackend) Session() string {
 	return b.session
 }
 
+func (b *CLIBackend) EnsureSession(ctx context.Context, session string) error {
+	if strings.TrimSpace(session) == "" {
+		return errors.New("session name is required")
+	}
+	_, err := b.run(ctx, "ensure session", newCommand(b.binary, "", "attach", "--create-background", session))
+	return err
+}
+
 func (b *CLIBackend) requestSession(session string) string {
 	if session = strings.TrimSpace(session); session != "" {
 		return session

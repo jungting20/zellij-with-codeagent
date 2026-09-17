@@ -133,6 +133,8 @@ type ClaimPaneResponse struct {
 }
 
 type CreatePaneRequest struct {
+	// EnsureSession creates the destination in the background before pane creation.
+	EnsureSession bool
 	ParentPaneID  PaneID
 	ID            PaneID
 	TaskID        TaskID

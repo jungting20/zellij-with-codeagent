@@ -32,6 +32,9 @@ type AgentWithPane struct {
 }
 
 type StartAgentRequest struct {
+	// TargetSession places a child in a new tab named after its parent pane.
+	// It is a launch option; the resulting location is persisted on the pane.
+	TargetSession       string
 	ParentPaneID        runtime.PaneID
 	Kind                Kind
 	AccessMode          AccessMode
@@ -200,6 +203,10 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 	if sourceSession == "" || sourcePaneID == "" {
 		return StartAgentResponse{}, ErrAgentSourceRequired
 	}
+	targetSession := strings.TrimSpace(request.TargetSession)
+	if targetSession != "" && request.ParentPaneID == "" {
+		return StartAgentResponse{}, fmt.Errorf("%w: target session requires a parent pane", runtime.ErrInvalidPaneTarget)
+	}
 	id := s.newAgentID()
 	if id == "" {
 		return StartAgentResponse{}, ErrAgentIDRequired
@@ -235,11 +242,18 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 
 	var pane runtime.Pane
 	if request.ParentPaneID != "" {
-		response, createErr := s.RuntimeService.CreatePane(ctx, runtime.CreatePaneRequest{
+		createRequest := runtime.CreatePaneRequest{
 			ID: created.PaneID, AgentID: runtime.AgentID(created.ID), Role: "coding-agent",
 			ZellijSession: sourceSession, SameTabAsPaneID: request.ParentPaneID,
 			ParentPaneID: request.ParentPaneID, Name: filepath.Base(cwd), Command: command, CWD: cwd,
-		})
+		}
+		if targetSession != "" {
+			createRequest.ZellijSession = targetSession
+			createRequest.SameTabAsPaneID = ""
+			createRequest.NewTab = true
+			createRequest.EnsureSession = true
+		}
+		response, createErr := s.RuntimeService.CreatePane(ctx, createRequest)
 		pane, err = response.Pane, createErr
 	} else {
 		paneResponse, claimErr := s.RuntimeService.ClaimPane(ctx, runtime.ClaimPaneRequest{
