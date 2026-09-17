@@ -154,6 +154,12 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer, depe
 		return reportError(stderr, false, fmt.Errorf("load ticket-worker config: %w", err))
 	}
 	store, err := ticketworker.OpenExisting(ctx, root, dependencies.Now)
+	if errors.Is(err, ticketworker.ErrNotInitialized) {
+		if err := ticketworker.InitializeProject(ctx, root, dependencies.Now); err != nil {
+			return reportError(stderr, false, fmt.Errorf("initialize ticket-worker: %w", err))
+		}
+		store, err = ticketworker.OpenExisting(ctx, root, dependencies.Now)
+	}
 	if err != nil {
 		return reportError(stderr, false, err)
 	}

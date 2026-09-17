@@ -292,20 +292,25 @@ func TestStartRejectsInvalidConfigWithoutSubmission(t *testing.T) {
 	}
 }
 
-func TestStartRejectsMissingDatabaseWithoutSubmission(t *testing.T) {
+func TestStartRejectsCorruptDatabaseWithoutSubmission(t *testing.T) {
 	h := newHarness(t)
 	t.Setenv("ZELLIJ_SESSION_NAME", "physical-a")
-	if err := os.Remove(ticketworker.DatabasePath(h.root)); err != nil {
+	corrupt := []byte("not a sqlite database")
+	if err := os.WriteFile(ticketworker.DatabasePath(h.root), corrupt, 0644); err != nil {
 		t.Fatal(err)
 	}
 	client := &fakeAgentClient{}
 	configureStartClient(h, client)
 
-	if got := h.run(t, "start"); got != ExitValidation {
-		t.Fatalf("start exit = %d, stderr = %s", got, h.stderr.String())
+	if got := h.run(t, "start"); got == ExitOK {
+		t.Fatal("start succeeded with a corrupt database")
 	}
 	if client.requestID != "" {
 		t.Fatalf("unexpected request = %q", client.requestID)
+	}
+	data, err := os.ReadFile(ticketworker.DatabasePath(h.root))
+	if err != nil || !bytes.Equal(data, corrupt) {
+		t.Fatalf("corrupt database was replaced: %q, %v", data, err)
 	}
 }
 
@@ -883,5 +888,72 @@ func TestStartResolvesWorkerAgentIntoManagerCommand(t *testing.T) {
 				t.Fatal(command)
 			}
 		})
+	}
+}
+
+func TestStartInitializesMissingDatabaseWithExistingConfig(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
+			h := newHarness(t)
+			configPath := ticketworker.ConfigPath(h.root)
+			custom := []byte("# preserve settings\nversion: 1\ndefault_agent: claude\nmax_workers: 2\n")
+			if err := os.WriteFile(configPath, custom, 0644); err != nil {
+				t.Fatal(err)
+			}
+			if legacy {
+				legacyPath := filepath.Join(h.root, ".zellij-agent", "worker", "config.yaml")
+				if err := os.MkdirAll(filepath.Dir(legacyPath), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(configPath, legacyPath); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.RemoveAll(filepath.Dir(ticketworker.DatabasePath(h.root))); err != nil {
+				t.Fatal(err)
+			}
+			client := &fakeAgentClient{}
+			configureStartClient(h, client)
+			if got := h.run(t, "start", "--zellij-session", "physical-a"); got != ExitOK {
+				t.Fatalf("start exit = %d, stderr = %s", got, h.stderr.String())
+			}
+			if client.requestID == "" {
+				t.Fatal("manager was not submitted")
+			}
+			data, err := os.ReadFile(configPath)
+			if err != nil || !bytes.Equal(data, custom) {
+				t.Fatalf("config changed: %q, %v", data, err)
+			}
+			store, err := ticketworker.OpenExisting(context.Background(), h.root, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			tickets, err := store.List(context.Background(), nil)
+			if err != nil || len(tickets) != 0 {
+				t.Fatalf("new queue: %v, %v", tickets, err)
+			}
+		})
+	}
+}
+
+func TestStartInvalidConfigDoesNotInitializeMissingDatabase(t *testing.T) {
+	h := newHarness(t)
+	if err := os.RemoveAll(filepath.Dir(ticketworker.DatabasePath(h.root))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ticketworker.ConfigPath(h.root), []byte("version: 1\nmax_workers: 0\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeAgentClient{}
+	configureStartClient(h, client)
+	if got := h.run(t, "start", "--zellij-session", "physical-a"); got == ExitOK {
+		t.Fatal("invalid config accepted")
+	}
+	if client.requestID != "" {
+		t.Fatal("manager submitted with invalid config")
+	}
+	if _, err := os.Stat(ticketworker.DatabasePath(h.root)); !os.IsNotExist(err) {
+		t.Fatalf("database created: %v", err)
 	}
 }

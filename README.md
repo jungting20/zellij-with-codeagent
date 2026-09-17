@@ -417,9 +417,11 @@ Queue and lifecycle commands are:
 ./bin/zellij-agent ticket-worker reopen ID
 ```
 
-If both global and legacy configs are missing, `start` first runs the same
-initialization as `init`, creating the database, default config, and `.gitignore`
-entries while preserving existing tickets. Invalid existing configs report an error.
+If the project database is missing or both global and legacy configs are missing,
+`start` runs the same initialization as `init`, creating missing files and
+`.gitignore` entries while preserving existing tickets and settings. Existing
+configs are validated before a missing database is created; invalid settings
+report an error.
 
 `start` creates one runtime-managed `ticket-manager` pane in a new
 `ticket-worker` tab. With no active workers, the manager fills the tab. While
