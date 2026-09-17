@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"zellij-with-codeagent/internal/codingagent"
@@ -190,11 +191,17 @@ func (s *Server) requestContext(r *http.Request) (context.Context, context.Cance
 }
 
 func prepareSocket(path string) error {
-	if _, err := os.Stat(path); err == nil {
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSocket == 0 {
+			return fmt.Errorf("transport: refusing to replace non-socket %s", path)
+		}
 		conn, dialErr := net.DialTimeout("unix", path, 200*time.Millisecond)
 		if dialErr == nil {
 			_ = conn.Close()
 			return fmt.Errorf("transport: socket %s is already in use", path)
+		}
+		if !errors.Is(dialErr, syscall.ECONNREFUSED) {
+			return fmt.Errorf("transport: cannot establish that socket %s is stale: %w", path, dialErr)
 		}
 		if err := os.Remove(path); err != nil {
 			return fmt.Errorf("transport: remove stale socket %s: %w", path, err)

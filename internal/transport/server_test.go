@@ -768,6 +768,37 @@ func TestServerCleanupPartialReturnsDetails(t *testing.T) {
 	}
 }
 
+func TestPrepareSocketPreservesRegularFile(t *testing.T) {
+	path := shortSocketPath(t)
+	if err := os.WriteFile(path, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareSocket(path); err == nil {
+		t.Fatal("expected non-socket error")
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "keep" {
+		t.Fatalf("existing file changed: %q, %v", data, err)
+	}
+}
+
+func TestPrepareSocketRemovesRefusedSocket(t *testing.T) {
+	path := shortSocketPath(t)
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener.SetUnlinkOnClose(false)
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareSocket(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("stale socket remains: %v", err)
+	}
+}
+
 func TestPrepareSocketRefusesActiveSocket(t *testing.T) {
 	path := shortSocketPath(t)
 	listener, err := netListenUnix(path)

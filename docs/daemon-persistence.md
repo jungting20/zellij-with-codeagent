@@ -21,6 +21,15 @@ are created with mode 0600; new parent directories use 0700. An exclusive lock
 prevents two daemons from loading independent memory copies of the same database.
 Use separate `--db` and `--socket` paths for isolated daemon instances.
 
+Before opening SQLite or recovering panes, the daemon also takes an exclusive
+`<socket>.daemon.lock` for its entire lifetime, including shutdown. Manual and
+automatic starts using the same socket fail immediately while that lock is held,
+even with different databases or a missing socket. The OS releases the lock on
+process exit, including a crash; the lock file remains and must not be deleted.
+This is separate from the client's temporary `<socket>.start.lock`. Existing
+socket paths are removed only when they are sockets and connecting returns
+connection refused; timeouts and other errors do not justify replacing them.
+
 ## Stored data
 
 Schema version 1 uses four data tables and one internal metadata table:

@@ -8,7 +8,10 @@ fn main() {}
 fn required_permissions() -> &'static [zellij_tile::prelude::PermissionType] {
     use zellij_tile::prelude::PermissionType;
 
-    &[PermissionType::RunCommands]
+    &[
+        PermissionType::RunCommands,
+        PermissionType::ReadApplicationState,
+    ]
 }
 
 #[cfg(test)]
@@ -18,7 +21,13 @@ mod tests {
 
     #[test]
     fn bridge_requests_only_the_permissions_it_uses() {
-        assert_eq!(required_permissions(), &[PermissionType::RunCommands]);
+        assert_eq!(
+            required_permissions(),
+            &[
+                PermissionType::RunCommands,
+                PermissionType::ReadApplicationState
+            ]
+        );
     }
 }
 
@@ -26,7 +35,7 @@ mod tests {
 use std::collections::BTreeMap;
 
 #[cfg(target_family = "wasm")]
-use model::command_argv;
+use model::{command_argv, NavigationQueue};
 #[cfg(target_family = "wasm")]
 use zellij_tile::prelude::*;
 
@@ -35,6 +44,9 @@ use zellij_tile::prelude::*;
 struct AgentNavigationBridge {
     executable: Option<String>,
     request_sequence: u64,
+    client_id: u16,
+    permissions_granted: bool,
+    navigation: NavigationQueue,
 }
 
 #[cfg(target_family = "wasm")]
@@ -43,6 +55,7 @@ register_plugin!(AgentNavigationBridge);
 #[cfg(target_family = "wasm")]
 impl ZellijPlugin for AgentNavigationBridge {
     fn load(&mut self, configuration: BTreeMap<String, String>) {
+        self.client_id = get_plugin_ids().client_id;
         if configuration
             .get("executable_path")
             .map(|value| value.trim().is_empty())
@@ -59,6 +72,7 @@ impl ZellijPlugin for AgentNavigationBridge {
         subscribe(&[
             EventType::PermissionRequestResult,
             EventType::RunCommandResult,
+            EventType::ListClients,
         ]);
         request_permission(required_permissions());
     }
@@ -75,12 +89,8 @@ impl ZellijPlugin for AgentNavigationBridge {
             eprintln!("agent navigation bridge received an unknown filter; request ignored");
             return false;
         };
-        self.request_sequence += 1;
-        // Zellij enforces RunCommands permission at the host boundary.
-        run_command(
-            &argv.iter().map(String::as_str).collect::<Vec<_>>(),
-            BTreeMap::from([("request_id".into(), self.request_sequence.to_string())]),
-        );
+        self.navigation.push(argv);
+        self.check_clients();
         false
     }
 
@@ -88,8 +98,23 @@ impl ZellijPlugin for AgentNavigationBridge {
         match event {
             Event::PermissionRequestResult(status) => {
                 let granted = status == PermissionStatus::Granted;
+                self.permissions_granted = granted;
                 if !granted {
                     eprintln!("agent navigation bridge permissions were denied");
+                }
+                self.check_clients();
+            }
+            Event::ListClients(clients) => {
+                let connected = clients
+                    .iter()
+                    .map(|client| client.client_id)
+                    .collect::<Vec<_>>();
+                for argv in self.navigation.resolve(self.client_id, &connected) {
+                    self.request_sequence += 1;
+                    run_command(
+                        &argv.iter().map(String::as_str).collect::<Vec<_>>(),
+                        BTreeMap::from([("request_id".into(), self.request_sequence.to_string())]),
+                    );
                 }
             }
             Event::RunCommandResult(exit_code, _, stderr, context) => {
@@ -107,5 +132,14 @@ impl ZellijPlugin for AgentNavigationBridge {
             _ => {}
         }
         false
+    }
+}
+
+#[cfg(target_family = "wasm")]
+impl AgentNavigationBridge {
+    fn check_clients(&mut self) {
+        if self.permissions_granted && self.navigation.needs_client_check() {
+            list_clients();
+        }
     }
 }

@@ -189,9 +189,14 @@ Use the printed absolute path as one identical `file:` plugin URL in
 `name "agent-next"` with `payload "pinned-only"` for `Alt+u`,
 `payload "idle-and-pinned"` for `Alt+i`, `payload "unpinned-only"` for
 `Alt+o`, and `payload "idle-and-unpinned"` for `Alt+p`.
-On first load, approve only the one-time `RunCommands` permission request.
+On first load, approve the `RunCommands` and `ReadApplicationState` permission request.
 The bridge executes the public CLI directly using the host environment.
 The runtime requires a single connected Zellij client for navigation.
+The bridge checks the current client list for each batch of keypresses so that
+disconnected client instances cannot execute duplicate navigation requests.
+For a reconnect regression check, attach a second client to the same session,
+detach the first, and press `Alt+i` once from the remaining client. Navigation
+must execute once and keep focus on the selected agent. Repeat after reconnecting.
 
 With the daemon still serving, start managed agents from panes attached to
 both `physical-a` and `physical-b`. Create at least four agents in creation

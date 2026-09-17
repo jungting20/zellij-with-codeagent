@@ -106,7 +106,14 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) (e
 			return 2
 		}
 
-		dbPath, err := persistence.ResolvePath(dbPath)
+		lock, err := transport.AcquireDaemonLock(socketPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "start daemon: %v\n", err)
+			return 1
+		}
+		defer lock.Close()
+
+		dbPath, err = persistence.ResolvePath(dbPath)
 		if err != nil {
 			fmt.Fprintf(stderr, "resolve daemon DB: %v\n", err)
 			return 1

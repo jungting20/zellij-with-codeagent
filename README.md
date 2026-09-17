@@ -236,7 +236,10 @@ both `load_plugins` and each `MessagePlugin` binding, with the same
 
 An absent payload or `all` visits all agents; `idle-only` filters by idle state.
 Unknown payloads and other message names are ignored. The first load requests
-only `RunCommands`, enforced by Zellij.
+`RunCommands` and `ReadApplicationState`, enforced by Zellij. Before executing,
+the bridge checks connected clients and lets only the instance for the lowest
+connected client ID run the CLI. This prevents duplicate navigation from plugin
+instances Zellij retains after a client disconnects.
 
 When reloading, pass the same configuration as the keybindings, including any
 `bridge_revision`. For example, with the local configuration:
@@ -251,8 +254,9 @@ Attach a client to a detached session before reloading it. Zellij can return
 exit status zero while logging `No connected clients, cannot reload plugin`;
 check the plugin log rather than treating the CLI exit status as confirmation.
 
-The hidden bridge creates no terminal panes and does not query focus, queue
-requests, wait for command completion, or override environment variables.
+The hidden bridge creates no terminal panes. It briefly queues requests while
+checking connected clients, without waiting for command completion or overriding
+environment variables.
 `agent next` does not read `ZELLIJ_SESSION_NAME` or `ZELLIJ_PANE_ID`.
 The daemon selects the next managed agent and the runtime finds the single
 connected Zellij client to switch to that agent's pane. If no client or multiple

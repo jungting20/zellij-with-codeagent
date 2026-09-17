@@ -21,6 +21,25 @@ import (
 	"zellij-with-codeagent/internal/zellij"
 )
 
+func TestServeRejectsDuplicateBeforeOpeningDatabase(t *testing.T) {
+	dir := t.TempDir()
+	socketPath := filepath.Join(dir, "daemon.sock")
+	lock, err := transport.AcquireDaemonLock(socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	dbPath := filepath.Join(dir, "other.db")
+	var stderr bytes.Buffer
+	code := RunContext(context.Background(), []string{"serve", "--socket", socketPath, "--db", dbPath}, io.Discard, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "daemon already running") {
+		t.Fatalf("duplicate serve = %d, %s", code, stderr.String())
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatalf("duplicate opened database: %v", err)
+	}
+}
+
 func TestVoiceQueueAdapterConvertsNotificationAndStatuses(t *testing.T) {
 	request := transport.VoiceNotificationRequest{
 		RequestID: "request-42",
