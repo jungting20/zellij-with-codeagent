@@ -90,6 +90,12 @@ impl ZellijPlugin for AgentNavigationBridge {
             return false;
         };
         self.navigation.push(argv);
+        // Background startup can lose the initial PermissionRequestResult before
+        // the first client attaches. Retry on input so a cached grant can unblock
+        // this request without requiring another client to connect.
+        if !self.permissions_granted {
+            request_permission(required_permissions());
+        }
         self.check_clients();
         false
     }

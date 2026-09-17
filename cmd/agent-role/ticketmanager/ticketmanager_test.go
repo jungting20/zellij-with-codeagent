@@ -59,6 +59,7 @@ func TestParseOptionsRejectsNonPositiveStartupTimeout(t *testing.T) {
 }
 
 func TestRunWithDependenciesWiresProjectConfigStoreClientAndManager(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
 		t.Fatal(err)
@@ -110,6 +111,7 @@ func TestRunWithDependenciesWiresProjectConfigStoreClientAndManager(t *testing.T
 }
 
 func TestRunWithDependenciesPassesDisabledVoiceConfigWithoutNativeNotifier(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := initializedTicketManagerProject(t)
 	config := "version: 1\nmax_workers: 3\npoll_interval: 30s\nvoice_notifications: false\nvoice_notification_prefix: ticket-manager\n"
 	if err := os.WriteFile(ticketworker.ConfigPath(root), []byte(config), 0o644); err != nil {
@@ -157,6 +159,7 @@ func TestRunWithDependenciesReportsManagerConstructionFailure(t *testing.T) {
 }
 
 func initializedTicketManagerProject(t *testing.T) string {
+	t.Setenv("HOME", t.TempDir())
 	t.Helper()
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {

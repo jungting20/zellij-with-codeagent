@@ -194,6 +194,11 @@ The bridge executes the public CLI directly using the host environment.
 The runtime requires a single connected Zellij client for navigation.
 The bridge checks the current client list for each batch of keypresses so that
 disconnected client instances cannot execute duplicate navigation requests.
+For a startup regression check, create a background session with the bridge in
+`load_plugins` and its permissions already approved. Attach exactly one client,
+then press `Alt+o` once. It must execute once on that first keypress without
+attaching another client or reloading the plugin. Repeat with `Alt+p` and an
+eligible idle agent.
 For a reconnect regression check, attach a second client to the same session,
 detach the first, and press `Alt+i` once from the remaining client. Navigation
 must execute once and keep focus on the selected agent. Repeat after reconnecting.

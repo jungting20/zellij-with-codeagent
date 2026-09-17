@@ -96,6 +96,7 @@ func TestTicketFailurePreservesDraftAndCancel(t *testing.T) {
 }
 
 func TestTicketStartAndList(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	m := ticketModel(t, false)
 	if err := os.Mkdir(filepath.Join(m.ticket.target.Pane.CWD, ".git"), 0755); err != nil {
 		t.Fatal(err)
@@ -167,6 +168,7 @@ func TestTicketsRequireSelectedProject(t *testing.T) {
 }
 
 func TestTicketStartAlwaysSelectsAgentBeforeExecution(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	m := ticketModel(t, false)
 	cwd := m.ticket.target.Pane.CWD
 	if err := os.Mkdir(filepath.Join(cwd, ".git"), 0755); err != nil {
@@ -222,6 +224,7 @@ func TestTicketStartAlwaysSelectsAgentBeforeExecution(t *testing.T) {
 }
 
 func TestTicketStartConfigFailureDoesNotLaunch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	m := ticketModel(t, false)
 	cwd := m.ticket.target.Pane.CWD
 	if err := os.Mkdir(filepath.Join(cwd, ".git"), 0755); err != nil {

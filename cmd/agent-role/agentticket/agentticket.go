@@ -109,7 +109,8 @@ func Run(args []string) int {
 	return 0
 }
 
-// DefaultAgent reads the selected project's configured worker agent without changing it.
+// DefaultAgent reads the selected project's configured worker agent, migrating
+// legacy settings to the user's config directory when needed.
 // Uninitialized projects use codex until the start command initializes them.
 func DefaultAgent(directory string) (string, error) {
 	root, err := ticketworker.FindRoot(directory)

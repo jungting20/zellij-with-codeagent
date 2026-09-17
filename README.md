@@ -240,6 +240,8 @@ Unknown payloads and other message names are ignored. The first load requests
 the bridge checks connected clients and lets only the instance for the lowest
 connected client ID run the CLI. This prevents duplicate navigation from plugin
 instances Zellij retains after a client disconnects.
+If background startup misses the initial permission response, the next shortcut
+requests permission again so an existing grant can unblock that same keypress.
 
 When reloading, pass the same configuration as the keybindings, including any
 `bridge_revision`. For example, with the local configuration:
@@ -354,8 +356,8 @@ project. Initialize it from the project root or any nested directory:
 ./bin/zellij-agent ticket-worker init
 ```
 
-Initialization creates `.zellij-agent/ticket-worker/tickets.db` and
-`.zellij-agent/worker/config.yaml` at the Git root, then adds
+Initialization creates `.zellij-agent/ticket-worker/tickets.db` at the Git root
+and `~/.zellij-ticket/<absolute-project-path>/config.yaml`, then adds
 `.zellij-agent/ticket-worker/` and `.worktrees/` to the root `.gitignore`. It
 is idempotent: running it again preserves existing tickets, does not duplicate
 the ignore entries, and never overwrites an existing worker config.
@@ -370,9 +372,18 @@ max_workers: 3
 poll_interval: 30s
 ```
 
-To regenerate the defaults, delete only `.zellij-agent/worker/config.yaml` and
-run `ticket-worker init` again. Other ticket commands never create a database
-implicitly and report an initialization error until `init` succeeds.
+The config directory mirrors the canonical absolute project path, for example
+`~/.zellij-ticket/Users/alice/src/my-project/config.yaml`. Symlink aliases and
+linked Git worktrees share the main checkout's config. Separate clones have
+separate configs; moving a checkout requires moving its config directory too.
+The ticket database and worktree locations remain project-local.
+
+When the global config is absent, `init`, `start`, and dashboard config reads
+copy the main checkout's legacy `.zellij-agent/worker/config.yaml` unchanged.
+The legacy file is retained, and an existing global config always takes priority.
+To regenerate defaults, remove the global config and move aside any legacy
+config, then run `ticket-worker init` again. Queue commands require an
+initialized database.
 
 Register a ticket directly:
 
@@ -406,7 +417,7 @@ Queue and lifecycle commands are:
 ./bin/zellij-agent ticket-worker reopen ID
 ```
 
-If `.zellij-agent/worker/config.yaml` is missing, `start` first runs the same
+If both global and legacy configs are missing, `start` first runs the same
 initialization as `init`, creating the database, default config, and `.gitignore`
 entries while preserving existing tickets. Invalid existing configs report an error.
 

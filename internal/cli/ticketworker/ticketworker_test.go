@@ -31,6 +31,7 @@ type failingWriter struct{}
 func (failingWriter) Write([]byte) (int, error) { return 0, errForcedWrite }
 
 func newHarness(t *testing.T) *harness {
+	t.Setenv("HOME", t.TempDir())
 	t.Helper()
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
@@ -172,10 +173,10 @@ func TestStartInitializesWhenConfigMissing(t *testing.T) {
 			var ticket ticketworker.Ticket
 			if existingQueue {
 				ticket = h.addJSON(t, "Preserve ticket", "Existing queue", "", "")
-				if err := os.Remove(ticketworker.ConfigPath(h.root)); err != nil {
-					t.Fatal(err)
-				}
 			} else if err := os.RemoveAll(filepath.Join(h.root, ".zellij-agent")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(ticketworker.ConfigPath(h.root)); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(filepath.Join(h.root, ".gitignore"), []byte("custom/\n"), 0o644); err != nil {
@@ -818,6 +819,7 @@ func TestCommandBeforeInitFailsWithoutCreatingDatabase(t *testing.T) {
 }
 
 func TestInitIsIdempotent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
 		t.Fatal(err)

@@ -39,12 +39,85 @@ type diskConfig struct {
 	VoiceNotificationPrefix *string `yaml:"voice_notification_prefix"`
 }
 
+// ConfigPath returns the user config path, or an empty string if it cannot be
+// resolved. LoadConfig and EnsureConfig report the underlying resolution error.
 func ConfigPath(root string) string {
-	return filepath.Join(root, ".zellij-agent", "worker", "config.yaml")
+	path, _, _ := configPaths(root)
+	return path
+}
+
+func configPaths(root string) (string, string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", fmt.Errorf("resolve ticket-worker home: %w", err)
+	}
+	project, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", err
+	}
+	project, err = filepath.EvalSymlinks(project)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve ticket-worker project: %w", err)
+	}
+	// Linked worktrees point at a private Git directory whose commondir points
+	// back to the main checkout's .git directory. Submodules have no commondir.
+	marker := filepath.Join(project, ".git")
+	info, err := os.Stat(marker)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", "", err
+	}
+	if err == nil && !info.IsDir() {
+		data, err := os.ReadFile(marker)
+		if err != nil {
+			return "", "", err
+		}
+		gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir: ")
+		if !ok {
+			return "", "", fmt.Errorf("invalid Git worktree marker: %s", marker)
+		}
+		if !filepath.IsAbs(gitdir) {
+			gitdir = filepath.Join(project, gitdir)
+		}
+		common, err := os.ReadFile(filepath.Join(gitdir, "commondir"))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return "", "", err
+		}
+		if err == nil {
+			commonDir := strings.TrimSpace(string(common))
+			if !filepath.IsAbs(commonDir) {
+				commonDir = filepath.Join(gitdir, commonDir)
+			}
+			commonDir, err = filepath.EvalSymlinks(commonDir)
+			if err != nil {
+				return "", "", err
+			}
+			project = filepath.Dir(commonDir)
+		}
+	}
+	path := filepath.Join(home, ".zellij-ticket", strings.TrimLeft(project, string(filepath.Separator)), "config.yaml")
+	legacy := filepath.Join(project, ".zellij-agent", "worker", "config.yaml")
+	return path, legacy, nil
 }
 
 func LoadConfig(root string) (Config, error) {
-	file, err := os.Open(ConfigPath(root))
+	path, legacy, err := configPaths(root)
+	if err != nil {
+		return Config{}, err
+	}
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		// Only migrate an existing config; reading an uninitialized project
+		// must not create default settings or a ticket database.
+		data, err := os.ReadFile(legacy)
+		if err != nil {
+			return Config{}, err
+		}
+		if _, err := createConfig(path, data); err != nil {
+			return Config{}, err
+		}
+	} else if err != nil {
+		return Config{}, err
+	}
+	file, err := os.Open(path)
 	if err != nil {
 		return Config{}, err
 	}
@@ -114,31 +187,49 @@ func validateConfig(cfg Config) error {
 }
 
 func EnsureConfig(root string) (path string, created bool, err error) {
-	path = ConfigPath(root)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", false, fmt.Errorf("create ticket-worker config directory: %w", err)
-	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if errors.Is(err, fs.ErrExist) {
-		return path, false, nil
-	}
+	path, legacy, err := configPaths(root)
 	if err != nil {
-		return "", false, fmt.Errorf("create ticket-worker config: %w", err)
+		return "", false, err
 	}
+	if _, err := os.Stat(path); err == nil {
+		return path, false, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", false, err
+	}
+	data, err := os.ReadFile(legacy)
+	if errors.Is(err, fs.ErrNotExist) {
+		data = []byte(configTemplate)
+	} else if err != nil {
+		return "", false, fmt.Errorf("read legacy ticket-worker config: %w", err)
+	}
+	created, err = createConfig(path, data)
+	return path, created, err
+}
 
-	complete := false
-	defer func() {
-		if !complete {
-			_ = file.Close()
-			_ = os.Remove(path)
-		}
-	}()
-	if _, err := file.WriteString(configTemplate); err != nil {
-		return "", false, fmt.Errorf("write ticket-worker config: %w", err)
+// Publish the complete file without replacing a config another process created.
+func createConfig(path string, data []byte) (bool, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false, fmt.Errorf("create ticket-worker config directory: %w", err)
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".config-*")
+	if err != nil {
+		return false, err
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+	if _, err := file.Write(data); err != nil {
+		return false, err
+	}
+	if err := file.Chmod(0o644); err != nil {
+		return false, err
 	}
 	if err := file.Close(); err != nil {
-		return "", false, fmt.Errorf("close ticket-worker config: %w", err)
+		return false, err
 	}
-	complete = true
-	return path, true, nil
+	if err := os.Link(file.Name(), path); errors.Is(err, fs.ErrExist) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("publish ticket-worker config: %w", err)
+	}
+	return true, nil
 }

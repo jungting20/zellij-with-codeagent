@@ -210,6 +210,7 @@ func (c *fakeTicketWorkerClient) SubmitExecutionPlan(_ context.Context, requestI
 }
 
 func TestUnifiedTicketWorkerStartDispatchesPlan(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
 		t.Fatal(err)
@@ -249,6 +250,7 @@ func TestUnifiedTicketWorkerStartDispatchesPlan(t *testing.T) {
 }
 
 func TestRunDispatchesTicketWorkerInit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
 		t.Fatal(err)

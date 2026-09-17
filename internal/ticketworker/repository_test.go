@@ -77,6 +77,7 @@ func TestOpenExistingRequiresInitializationWithoutCreatingDatabase(t *testing.T)
 }
 
 func TestInitializeProjectIsIdempotentAndUpdatesGitignoreOnce(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := newRepositoryRoot(t)
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("bin/"), 0o644); err != nil {
 		t.Fatal(err)
@@ -126,6 +127,7 @@ func TestInitializeProjectIsIdempotentAndUpdatesGitignoreOnce(t *testing.T) {
 }
 
 func TestInitializeProjectAddsWorktreesIgnoreToPreviouslyInitializedRepository(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := newRepositoryRoot(t)
 	initial := "bin/\n" + ignoreEntry + "\n"
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(initial), 0o644); err != nil {
@@ -148,8 +150,9 @@ func TestInitializeProjectAddsWorktreesIgnoreToPreviouslyInitializedRepository(t
 }
 
 func TestInitializeProjectConfigFailurePreservesDatabase(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := newRepositoryRoot(t)
-	workerPath := filepath.Join(root, ".zellij-agent", "worker")
+	workerPath := filepath.Dir(ConfigPath(root))
 	if err := os.MkdirAll(filepath.Dir(workerPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -176,6 +179,7 @@ func TestInitializeProjectConfigFailurePreservesDatabase(t *testing.T) {
 }
 
 func TestInitializeProjectPreservesExistingTickets(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := newRepositoryRoot(t)
 	if err := InitializeProject(context.Background(), root, nil); err != nil {
 		t.Fatal(err)

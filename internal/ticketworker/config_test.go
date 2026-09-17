@@ -1,7 +1,9 @@
 package ticketworker
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,15 +12,22 @@ import (
 
 const expectedConfigTemplate = "version: 1\ndefault_agent: codex\nmax_workers: 3\npoll_interval: 30s\nvoice_notifications: true\nvoice_notification_prefix: ticket-manager\n"
 
-func TestConfigPathUsesWorkerDirectory(t *testing.T) {
-	root := filepath.Join(string(filepath.Separator), "repo")
-	want := filepath.Join(root, ".zellij-agent", "worker", "config.yaml")
+func TestConfigPathUsesGlobalProjectDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := t.TempDir()
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ".zellij-ticket", canonical, "config.yaml")
 	if got := ConfigPath(root); got != want {
 		t.Fatalf("ConfigPath() = %q, want %q", got, want)
 	}
 }
 
 func TestEnsureConfigWritesLoadableDefaults(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	path, created, err := EnsureConfig(root)
 	if err != nil {
@@ -55,6 +64,7 @@ func TestEnsureConfigWritesLoadableDefaults(t *testing.T) {
 }
 
 func TestEnsureConfigPreservesExistingAndRecreatesDeletedConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	path, _, err := EnsureConfig(root)
 	if err != nil {
@@ -103,6 +113,7 @@ func TestEnsureConfigPreservesExistingAndRecreatesDeletedConfig(t *testing.T) {
 }
 
 func TestLoadConfigVoiceDefaults(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	writeConfigFile(t, root, "version: 1\n")
 
@@ -119,6 +130,7 @@ func TestLoadConfigVoiceDefaults(t *testing.T) {
 }
 
 func TestLoadConfigVoiceExplicitValues(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	writeConfigFile(t, root, "version: 1\nvoice_notifications: false\nvoice_notification_prefix: \" project-a \"\n")
 
@@ -132,6 +144,7 @@ func TestLoadConfigVoiceExplicitValues(t *testing.T) {
 }
 
 func TestLoadConfigVoiceRejectsWhitespacePrefix(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	writeConfigFile(t, root, "version: 1\nvoice_notifications: true\nvoice_notification_prefix: \"   \"\n")
 
@@ -142,6 +155,7 @@ func TestLoadConfigVoiceRejectsWhitespacePrefix(t *testing.T) {
 }
 
 func TestLoadConfigVoiceAllowsEmptyPrefixWhenDisabled(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	writeConfigFile(t, root, "version: 1\nvoice_notifications: false\nvoice_notification_prefix: \"   \"\n")
 
@@ -155,6 +169,7 @@ func TestLoadConfigVoiceAllowsEmptyPrefixWhenDisabled(t *testing.T) {
 }
 
 func TestLoadConfigIgnoresLegacyPromptTemplate(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	writeConfigFile(t, root, "version: 1\nmax_workers: 2\nprompt_template: legacy template\n")
 
@@ -168,6 +183,7 @@ func TestLoadConfigIgnoresLegacyPromptTemplate(t *testing.T) {
 }
 
 func TestLoadConfigRejectsInvalidValues(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	tests := map[string]string{
 		"missing version":        "max_workers: 3\n",
 		"unsupported version":    "version: 2\n",
@@ -221,6 +237,7 @@ func TestValidateConfigRequiresPrefixOnlyWhenVoiceNotificationsEnabled(t *testin
 }
 
 func writeConfigFile(t *testing.T, root, body string) {
+	t.Setenv("HOME", t.TempDir())
 	t.Helper()
 	path := ConfigPath(root)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -232,6 +249,7 @@ func writeConfigFile(t *testing.T, root, body string) {
 }
 
 func TestDefaultAgentConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	for _, tc := range []struct{ yaml, want string }{
 		{"version: 1\n", "codex"},
 		{"version: 1\ndefault_agent: claude\n", "claude"},
@@ -250,5 +268,115 @@ func TestDefaultAgentConfig(t *testing.T) {
 		if err != nil || cfg.DefaultAgent != tc.want {
 			t.Fatalf("config=%+v err=%v", cfg, err)
 		}
+	}
+}
+
+func TestConfigMigrationPreservesLegacyAndPrefersGlobal(t *testing.T) {
+	for _, load := range []bool{false, true} {
+		t.Run(fmt.Sprint("load=", load), func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			root := t.TempDir()
+			legacy := filepath.Join(root, ".zellij-agent", "worker", "config.yaml")
+			if err := os.MkdirAll(filepath.Dir(legacy), 0755); err != nil {
+				t.Fatal(err)
+			}
+			custom := []byte("# keep comments\nversion: 1\ndefault_agent: claude\nmax_workers: 7\n")
+			if err := os.WriteFile(legacy, custom, 0644); err != nil {
+				t.Fatal(err)
+			}
+			if load {
+				cfg, err := LoadConfig(root)
+				if err != nil || cfg.DefaultAgent != "claude" || cfg.MaxWorkers != 7 {
+					t.Fatalf("migrated config = %+v, %v", cfg, err)
+				}
+			} else if _, created, err := EnsureConfig(root); err != nil || !created {
+				t.Fatalf("EnsureConfig = %v, %v", created, err)
+			}
+			for _, path := range []string{legacy, ConfigPath(root)} {
+				data, err := os.ReadFile(path)
+				if err != nil || string(data) != string(custom) {
+					t.Fatalf("%s = %q, %v", path, data, err)
+				}
+			}
+			if err := os.WriteFile(legacy, []byte("invalid: ["), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if _, created, err := EnsureConfig(root); err != nil || created {
+				t.Fatalf("existing config = %v, %v", created, err)
+			}
+			cfg, err := LoadConfig(root)
+			if err != nil || cfg.DefaultAgent != "claude" {
+				t.Fatalf("global precedence = %+v, %v", cfg, err)
+			}
+		})
+	}
+}
+
+func TestLoadConfigMissingDoesNotInitialize(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	if _, err := LoadConfig(root); !os.IsNotExist(err) {
+		t.Fatalf("missing config: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(ConfigPath(root))); !os.IsNotExist(err) {
+		t.Fatalf("read created directory: %v", err)
+	}
+}
+
+func TestConfigSharesMainCheckoutAcrossWorktreeAndSymlink(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+	}
+	git("init")
+	git("-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "test")
+	worktree := filepath.Join(t.TempDir(), "linked")
+	git("worktree", "add", "-b", "linked", worktree)
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(root, ".zellij-agent", "worker", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("version: 1\ndefault_agent: gemini\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{worktree, alias, root} {
+		if ConfigPath(path) != ConfigPath(root) {
+			t.Fatalf("different config for %s", path)
+		}
+		cfg, err := LoadConfig(path)
+		if err != nil || cfg.DefaultAgent != "gemini" {
+			t.Fatalf("shared migration: %+v, %v", cfg, err)
+		}
+	}
+	other := filepath.Join(t.TempDir(), filepath.Base(root))
+	if err := os.Mkdir(other, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if ConfigPath(other) == ConfigPath(root) {
+		t.Fatal("same-named projects share config")
+	}
+}
+
+func TestLoadConfigKeepsInvalidLegacyConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	legacy := filepath.Join(root, ".zellij-agent", "worker", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("version: 1\nmax_workers: 0\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(root); err == nil || !strings.Contains(err.Error(), "max_workers") {
+		t.Fatalf("invalid legacy config: %v", err)
 	}
 }
