@@ -170,17 +170,20 @@ type FocusSessionResponse struct {
 }
 
 type Agent struct {
-	ID             string    `json:"id"`
-	Kind           string    `json:"kind"`
-	Access         string    `json:"access"`
-	PaneID         string    `json:"pane_id"`
-	State          string    `json:"state"`
-	Pinned         bool      `json:"pinned"`
-	TaskAlias      string    `json:"task_alias,omitempty"`
-	StateReason    string    `json:"state_reason,omitempty"`
-	MatchedRule    string    `json:"matched_rule,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	StateChangedAt time.Time `json:"state_changed_at"`
+	FollowupCount     int       `json:"followup_count,omitempty"`
+	FollowupPaused    bool      `json:"followup_paused,omitempty"`
+	FollowupAttention bool      `json:"followup_attention,omitempty"`
+	ID                string    `json:"id"`
+	Kind              string    `json:"kind"`
+	Access            string    `json:"access"`
+	PaneID            string    `json:"pane_id"`
+	State             string    `json:"state"`
+	Pinned            bool      `json:"pinned"`
+	TaskAlias         string    `json:"task_alias,omitempty"`
+	StateReason       string    `json:"state_reason,omitempty"`
+	MatchedRule       string    `json:"matched_rule,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	StateChangedAt    time.Time `json:"state_changed_at"`
 }
 
 type AgentWithPane struct {

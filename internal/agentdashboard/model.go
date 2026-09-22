@@ -81,6 +81,7 @@ type panelSelection struct {
 type Model struct {
 	worktrees *worktreeMenu // Transient menu and shell execution results.
 	ticket    *ticketPopup
+	followups *followupPopup // Transient editor; the daemon owns the durable queue.
 	// Merge selection and debounce are transient dashboard state.
 	mergeParent    string
 	mergeChildren  []transport.AgentWithPane
@@ -169,6 +170,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.resizeTickets()
+		m.resizeFollowups()
 		if m.inputPane != "" {
 			m.prompt.SetWidth(maxInt(1, m.inputPopupWidth()-4))
 		}
@@ -179,8 +181,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleTicketAgentConfig(msg)
 	case ticketResultMsg:
 		return m.handleTicketResult(msg)
+	case followupResultMsg:
+		return m.handleFollowupResult(msg)
 	case refreshTickMsg:
-		return m, tea.Batch(m.tickCmd(), m.requestRefresh())
+		return m, tea.Batch(m.tickCmd(), m.requestRefresh(), m.requestFollowupRefresh())
 	case refreshResultMsg:
 		return m.handleRefresh(msg)
 	case mergeResultMsg:
@@ -331,6 +335,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	}
+	if m.followups != nil && m.followups.mode != "list" {
+		var cmd tea.Cmd
+		m.followups.prompt, cmd = m.followups.prompt.Update(msg)
+		return m, cmd
+	}
 	if m.worktrees != nil && m.worktrees.mode == "send" {
 		var cmd tea.Cmd
 		m.worktrees.prompt, cmd = m.worktrees.prompt.Update(msg)
@@ -360,6 +369,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.followups != nil {
+		return m.updateFollowupKey(msg)
+	}
 	if m.worktrees != nil {
 		return m.updateWorktreeMenuKey(msg)
 	}
@@ -398,6 +410,8 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "t":
 		return m.openTickets()
+	case "f":
+		return m.openFollowups()
 	case "m":
 		return m.openMerge()
 	case "w":

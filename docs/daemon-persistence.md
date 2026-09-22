@@ -32,7 +32,9 @@ connection refused; timeouts and other errors do not justify replacing them.
 
 ## Stored data
 
-Schema version 1 uses four data tables and one internal metadata table:
+Schema version 2 adds follow-up queues to the existing data and metadata tables.
+Opening a version 1 database creates the new table transactionally and preserves
+all existing records and indexes; no database reset is required.
 
 | Table | Payload |
 | --- | --- |
@@ -41,6 +43,7 @@ Schema version 1 uses four data tables and one internal metadata table:
 | `panes` | Logical and Zellij IDs, tab/session, command, CWD, role, task/agent, status, ownership token, generation, timestamps |
 | `agents` | Kind, access mode, PaneID, CWD, state, pin, alias, idle notification preference, detection reason/rule and timestamps |
 | `metadata` | Generation high-water mark, preserved after pane deletion |
+| `followup_queues` | Agent/pane identity and ownership token, ordered instructions, pause state, delivery phase and last attempt metadata |
 
 Rows have a primary ID, parent ID, pane ID and JSON record payload. Agent PaneIDs
 have a unique index. Tab storage IDs encode both session and logical tab ID.
@@ -57,7 +60,37 @@ write to the database. Zellij's displayed title is not a persistent agent field
 and may be a custom name rather than raw OSC. Recovery clears these observations
 and collects fresh screen/title evidence for the recovered pane generation.
 The existing state/reason/matched-rule fields continue to persist normally;
-there is no stored payload or schema change.
+the detection diagnostics do not alter the agent record payload.
+The monitor's working revision, last working timestamp and observation epoch are
+also transient. Follow-up records save the values associated with a delivery
+attempt for diagnostics, but never reuse them as live evidence after restart.
+
+## Follow-up instruction queues
+
+The daemon owns one queue per stable agent ID in `followup_queues`; reads use
+immutable in-memory snapshots. Queue records include pending, sent, canceled and
+uncertain instructions. They have no cascading relationship to agent records:
+removing an agent preserves its queue, but never transfers it to a replacement
+agent or pane. The existing agent and registry payloads are unchanged.
+
+Queue writes join the same FIFO as registry and agent writes, using
+`EnqueueAndWait` to acknowledge the SQLite transaction commit. Before external
+input, the dispatcher commits a `sending` claim. A failed or canceled commit
+wait never authorizes sending; cancellation may leave that change queued. A
+partial input failure is not retried automatically. Pending queue writes retain
+their in-memory state for ordered persistence retries.
+
+At startup, an outstanding claim or an instruction whose work cycle was still
+being observed becomes `needs_attention`, and its queue is paused. This recovery
+decision is committed before serving requests. Queued instructions and explicit
+pause state survive normally. Fresh pane identity and input readiness are checked
+before any new delivery. Delivery is not an exactly-once transaction with Zellij;
+ambiguous attempts require manual confirmation or exclusion.
+
+The follow-up dispatcher is canceled and joined before runtime observations stop
+and the database writer drains. Per-queue locks, reader snapshots, timers and
+runtime input locks are transient. Sent/canceled history currently remains in the
+queue. See [agent-followups.md](agent-followups.md) for the user-facing contract.
 
 ## Recovery and shutdown
 

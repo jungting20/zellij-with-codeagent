@@ -19,14 +19,20 @@ import (
 type Table string
 
 const (
-	Sessions Table = "sessions"
-	Tabs     Table = "tabs"
-	Panes    Table = "panes"
-	Agents   Table = "agents"
-	Metadata Table = "metadata"
+	Sessions  Table = "sessions"
+	Tabs      Table = "tabs"
+	Panes     Table = "panes"
+	Agents    Table = "agents"
+	Metadata  Table = "metadata"
+	Followups Table = "followup_queues"
 )
 
-var tables = []Table{Sessions, Tabs, Panes, Agents, Metadata}
+const schemaVersion = 2
+
+var tables = []Table{Sessions, Tabs, Panes, Agents, Metadata, Followups}
+
+// ErrClosed means the writer cannot accept or finish an uncommitted change.
+var ErrClosed = errors.New("persistence: writer closed")
 
 // Change owns an immutable copy of Value. A nil Value deletes the row.
 // Parent and PaneID expose relationships without decoding the JSON payload.
@@ -39,11 +45,18 @@ type Row struct {
 	ID, Parent, PaneID string
 	Data               json.RawMessage
 }
+
+// queuedChange keeps commit acknowledgements out of the persisted payload.
+type queuedChange struct {
+	Change
+	committed chan error
+}
+
 type Writer struct {
 	db      *sql.DB
 	lock    *os.File
 	mu      sync.Mutex
-	pending []Change
+	pending []queuedChange
 	closing bool
 	wake    chan struct{}
 	done    chan struct{}
@@ -130,7 +143,7 @@ func initialize(db *sql.DB) error {
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version > 1 {
+	if version > schemaVersion {
 		return fmt.Errorf("unsupported daemon DB schema version %d", version)
 	}
 	tx, err := db.Begin()
@@ -138,6 +151,8 @@ func initialize(db *sql.DB) error {
 		return err
 	}
 	defer tx.Rollback()
+	// Creating missing tables upgrades v1 without rewriting its rows. Followup
+	// queues deliberately have no foreign keys: removed agents retain their queue.
 	for _, table := range tables {
 		if _, err = tx.Exec("CREATE TABLE IF NOT EXISTS " + string(table) + " (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL, pane_id TEXT NOT NULL, data TEXT NOT NULL)"); err != nil {
 			return err
@@ -146,7 +161,7 @@ func initialize(db *sql.DB) error {
 	if _, err = tx.Exec("CREATE UNIQUE INDEX IF NOT EXISTS agents_pane ON agents(pane_id)"); err != nil {
 		return err
 	}
-	if _, err = tx.Exec("PRAGMA user_version=1"); err != nil {
+	if _, err = tx.Exec(fmt.Sprintf("PRAGMA user_version=%d", schemaVersion)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -161,10 +176,40 @@ func (w *Writer) Enqueue(changes ...Change) {
 	if w.closing {
 		panic("persistence: enqueue after producers stopped")
 	}
-	w.pending = append(w.pending, changes...)
+	for _, change := range changes {
+		w.pending = append(w.pending, queuedChange{Change: change})
+	}
 	select {
 	case w.wake <- struct{}{}:
 	default:
+	}
+}
+
+// EnqueueAndWait joins the same FIFO as Enqueue and returns nil only after its
+// transaction commits. The caller must own an immutable copy of change.Value.
+// Cancellation stops waiting but does not retract a queued change; its result
+// may be unknown to the caller. Callers must not retry such a change blindly.
+func (w *Writer) EnqueueAndWait(ctx context.Context, change Change) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	committed := make(chan error, 1)
+	w.mu.Lock()
+	if w.closing || w.ctx.Err() != nil {
+		w.mu.Unlock()
+		return ErrClosed
+	}
+	w.pending = append(w.pending, queuedChange{Change: change, committed: committed})
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+	w.mu.Unlock()
+	select {
+	case err := <-committed:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -200,7 +245,7 @@ func (w *Writer) Load(table Table) ([]Row, error) {
 	return result, rows.Err()
 }
 
-func (w *Writer) commit(batch []Change) error {
+func (w *Writer) commit(batch []queuedChange) error {
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
 		return err
@@ -229,7 +274,17 @@ func (w *Writer) commit(batch []Change) error {
 
 func (w *Writer) run() {
 	defer close(w.done)
-	var batch []Change
+	var batch []queuedChange
+	defer func() {
+		w.mu.Lock()
+		w.closing = true
+		pending := w.pending
+		w.pending = nil
+		w.mu.Unlock()
+		err := errors.Join(ErrClosed, w.err)
+		acknowledge(batch, err)
+		acknowledge(pending, err)
+	}()
 	for {
 		if len(batch) == 0 {
 			w.mu.Lock()
@@ -264,8 +319,17 @@ func (w *Writer) run() {
 				continue
 			}
 		}
+		acknowledge(batch, nil)
 		clear(batch)
 		batch = batch[:0]
+	}
+}
+
+func acknowledge(batch []queuedChange, err error) {
+	for _, change := range batch {
+		if change.committed != nil {
+			change.committed <- err
+		}
 	}
 }
 

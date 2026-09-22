@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"zellij-with-codeagent/internal/codingagent"
+	"zellij-with-codeagent/internal/followup"
 	rt "zellij-with-codeagent/internal/runtime"
 )
 
@@ -62,6 +63,12 @@ func ErrorFor(err error) (APIError, int) {
 		return APIError{}, http.StatusOK
 	}
 	switch {
+	case errors.Is(err, followup.ErrInvalid):
+		return APIError{Code: CodeBadRequest, Message: err.Error()}, http.StatusBadRequest
+	case errors.Is(err, followup.ErrNotFound):
+		return APIError{Code: CodeNotFound, Message: err.Error()}, http.StatusNotFound
+	case errors.Is(err, followup.ErrConflict):
+		return APIError{Code: CodeRuntimeError, Message: err.Error()}, http.StatusConflict
 	case errors.Is(err, ErrVoiceQueueFull):
 		return APIError{Code: CodeQueueFull, Message: err.Error(), Retryable: true}, http.StatusServiceUnavailable
 	case errors.Is(err, codingagent.ErrNotFound), errors.Is(err, rt.ErrPaneNotFound), errors.Is(err, rt.ErrSessionNotFound), errors.Is(err, rt.ErrTabNotFound):

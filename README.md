@@ -100,6 +100,16 @@ dedicated dashboard:
 ./bin/zellij-agent agent dashboard
 ```
 
+Press `f` on a Codex or Claude agent to manage its follow-up instructions.
+Use `a` to add, `e` to edit a queued instruction, `d` to cancel, and `p` to
+pause or resume automatic delivery. Enter saves; Alt+Enter inserts a newline.
+The daemon delivers one instruction at a time when a fresh, empty input prompt
+is positively recognized. It keeps running when the dashboard closes and saves
+the queue across daemon restarts. An uncertain delivery is paused for manual
+inspection: `c` acknowledges it, or `d` excludes it, then `p` resumes the queue.
+See [follow-up instructions](docs/agent-followups.md) for delivery, recovery,
+supported prompts and the local API.
+
 `ticket-worker start` is unchanged: it still creates ticket-manager and worker
 panes through execution plans and `CreatePane` requests.
 

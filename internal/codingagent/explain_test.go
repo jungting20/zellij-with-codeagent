@@ -8,8 +8,91 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"zellij-with-codeagent/internal/eventbus"
 	"zellij-with-codeagent/internal/runtime"
 )
+
+func TestExplainRetainsWorkingRevisionWhenStateEventsAreDropped(t *testing.T) {
+	f := newMonitorFixture(t)
+	bus := eventbus.NewWithBuffer(1)
+	t.Cleanup(bus.Close)
+	f.monitor.opts.EventBus = bus
+	events, unsubscribe := bus.Subscribe(context.Background())
+	t.Cleanup(unsubscribe)
+	bus.Publish(eventbus.Event{Reason: "fill subscriber buffer"})
+
+	initial, err := f.monitor.Explain(f.record.ID)
+	if err != nil || initial.ObservationEpoch == 0 || initial.WorkingRevision != 0 || !initial.LastWorkingAt.IsZero() {
+		t.Fatalf("initial observation = %+v, %v", initial, err)
+	}
+	f.becomeWorking(t)
+	firstWorkingAt := f.scheduler.Now()
+	f.scheduler.Advance(time.Second)
+	// A reason/rule change within Working is not another accepted instruction.
+	f.monitor.mu.Lock()
+	f.monitor.updateStateLocked(f.monitor.monitoring[f.record.ID], StateUpdate{
+		State: StateWorking, Reason: "different working evidence", MatchedRule: "other-working-rule",
+	})
+	f.monitor.mu.Unlock()
+	f.monitor.PaneOutput(f.pane, "READY")
+	got, err := f.monitor.Explain(f.record.ID)
+	if err != nil || got.State != StateIdle || got.WorkingRevision != 1 ||
+		got.ObservationEpoch != initial.ObservationEpoch || !got.LastWorkingAt.Equal(firstWorkingAt) {
+		t.Fatalf("completed observation = %+v, %v", got, err)
+	}
+	if event := <-events; event.Reason != "fill subscriber buffer" {
+		t.Fatalf("expected buffered sentinel, got %+v", event)
+	}
+	select {
+	case event := <-events:
+		t.Fatalf("expected dropped state events, got %+v", event)
+	default:
+	}
+
+	f.monitor.PaneOutput(f.pane, "WORK again")
+	got, err = f.monitor.Explain(f.record.ID)
+	if err != nil || got.WorkingRevision != 2 || !got.LastWorkingAt.Equal(f.scheduler.Now()) {
+		t.Fatalf("second working observation = %+v, %v", got, err)
+	}
+}
+
+func TestExplainWorkingRevisionResetsWhenObservationEpochChanges(t *testing.T) {
+	f := newMonitorFixture(t)
+	f.becomeWorking(t)
+	before, err := f.monitor.Explain(f.record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPane := f.pane
+	f.pane.Generation++
+	f.monitor.PaneOpened(f.pane)
+	f.monitor.PaneOutput(oldPane, "WORK old generation")
+	rebound, err := f.monitor.Explain(f.record.ID)
+	if err != nil || rebound.ObservationEpoch <= before.ObservationEpoch || rebound.WorkingRevision != 0 ||
+		!rebound.LastWorkingAt.IsZero() || rebound.ObservationAvailable {
+		t.Fatalf("rebound observation = %+v, %v", rebound, err)
+	}
+	f.monitor.PaneOutput(f.pane, "READY")
+	f.scheduler.Advance(startupGrace)
+	f.monitor.PaneOutput(f.pane, "WORK new generation")
+	working, err := f.monitor.Explain(f.record.ID)
+	if err != nil || working.WorkingRevision != 1 || working.ObservationEpoch != rebound.ObservationEpoch {
+		t.Fatalf("new generation working = %+v, %v", working, err)
+	}
+	f.monitor.PaneError(f.pane, errors.New("observation interrupted"))
+	failed, err := f.monitor.Explain(f.record.ID)
+	if err != nil || failed.ObservationEpoch <= rebound.ObservationEpoch || failed.WorkingRevision != 0 ||
+		!failed.LastWorkingAt.IsZero() || failed.ObservationAvailable {
+		t.Fatalf("invalidated observation = %+v, %v", failed, err)
+	}
+	if err := f.monitor.Start(f.state(t)); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := f.monitor.Explain(f.record.ID)
+	if err != nil || restarted.ObservationEpoch <= failed.ObservationEpoch || restarted.WorkingRevision != 0 {
+		t.Fatalf("restarted observation = %+v, %v", restarted, err)
+	}
+}
 
 func TestExplainReportsPendingStateWithoutChangingMonitor(t *testing.T) {
 	f := newMonitorFixture(t)

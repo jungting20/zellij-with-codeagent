@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -894,6 +895,202 @@ func TestSendInputResolvesLogicalPaneID(t *testing.T) {
 	}
 }
 
+func TestSendInputOwnershipRequiresMatchingRunningPane(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		token  OwnershipToken
+		status PaneStatus
+		wantOK bool
+	}{
+		{name: "matching owner", token: "current-owner", status: PaneStatusRunning, wantOK: true},
+		{name: "old owner", token: "previous-owner", status: PaneStatusRunning},
+		{name: "starting", token: "current-owner", status: PaneStatusStarting},
+		{name: "exited", token: "current-owner", status: PaneStatusExited},
+		{name: "closed", token: "current-owner", status: PaneStatusClosed},
+		{name: "lost", token: "current-owner", status: PaneStatusLost},
+		{name: "error", token: "current-owner", status: PaneStatusError},
+		{name: "unqualified remains compatible", status: PaneStatusError, wantOK: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &fakeBackend{createID: "terminal_5"}
+			service := NewService(Options{Registry: registry.New(), Backend: backend,
+				NewOwnershipToken: func() (OwnershipToken, error) { return "current-owner", nil },
+			})
+			created, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.registry.UpdatePaneStatus(created.Pane.ID, test.status, "test state"); err != nil {
+				t.Fatal(err)
+			}
+			err = service.SendInput(context.Background(), SendInputRequest{
+				PaneID: created.Pane.ID, Text: "follow-up\n", OwnershipToken: test.token,
+			})
+			if test.wantOK {
+				if err != nil || len(backend.sendRequests) != 1 {
+					t.Fatalf("SendInput = %v, backend calls = %d", err, len(backend.sendRequests))
+				}
+			} else if !errors.Is(err, ErrInvalidPaneTarget) || len(backend.sendRequests) != 0 {
+				t.Fatalf("rejected SendInput = %v, backend calls = %d", err, len(backend.sendRequests))
+			}
+		})
+	}
+}
+
+func TestSendInputGuardFailureDoesNotReachBackend(t *testing.T) {
+	backend := &fakeBackend{createID: "terminal_5"}
+	service := newTestService(backend)
+	created, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	guardErr := errors.New("input is no longer ready")
+	err = service.SendInput(context.Background(), SendInputRequest{
+		PaneID: created.Pane.ID, OwnershipToken: created.Pane.OwnershipToken, Text: "follow-up\n",
+		BeforeSend: func(context.Context) error { return guardErr },
+	})
+	if !errors.Is(err, guardErr) || len(backend.sendRequests) != 0 {
+		t.Fatalf("guarded SendInput = %v, backend calls = %v", err, backend.sendRequests)
+	}
+	current, err := service.registry.GetPane(created.Pane.ID)
+	if err != nil || current.Status != PaneStatusRunning {
+		t.Fatalf("guard refusal changed pane status: %+v, %v", current, err)
+	}
+}
+
+func TestSendInputRechecksTargetAfterGuard(t *testing.T) {
+	for _, change := range []string{"owner replaced", "pane closed", "context canceled"} {
+		t.Run(change, func(t *testing.T) {
+			backend := &fakeBackend{createID: "terminal_5"}
+			service := newTestService(backend)
+			created, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			err = service.SendInput(ctx, SendInputRequest{
+				PaneID: created.Pane.ID, OwnershipToken: created.Pane.OwnershipToken, Text: "follow-up\n",
+				BeforeSend: func(context.Context) error {
+					switch change {
+					case "owner replaced":
+						if _, err := service.registry.RemovePane(created.Pane.ID); err != nil {
+							return err
+						}
+						_, err := service.registry.RegisterPane(registry.RegisterPaneRequest{
+							ID: created.Pane.ID, OwnershipToken: "new-owner", ZellijPaneID: "terminal_new", Status: PaneStatusRunning,
+						})
+						return err
+					case "pane closed":
+						_, err := service.registry.UpdatePaneStatus(created.Pane.ID, PaneStatusClosed, "closed during guard")
+						return err
+					default:
+						cancel()
+						return nil
+					}
+				},
+			})
+			wantErr := ErrInvalidPaneTarget
+			if change == "context canceled" {
+				wantErr = context.Canceled
+			}
+			if !errors.Is(err, wantErr) || len(backend.sendRequests) != 0 {
+				t.Fatalf("guarded SendInput = %v, backend calls = %v", err, backend.sendRequests)
+			}
+		})
+	}
+}
+
+func TestSendInputGuardWaitsForEarlierInputAndMessages(t *testing.T) {
+	for _, useMessage := range []bool{false, true} {
+		t.Run(fmt.Sprintf("message=%t", useMessage), func(t *testing.T) {
+			backend := &blockingInputBackend{
+				fakeBackend: &fakeBackend{createIDs: []zellij.PaneID{"terminal_5", "terminal_6"}},
+				started:     make(chan struct{}), release: make(chan struct{}), delivered: make(chan struct{}),
+			}
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(backend.release) }) }
+			t.Cleanup(release)
+			service := NewService(Options{Registry: registry.New(), Backend: backend})
+			tabID := ZellijTabID(7)
+			created, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "target", ZellijSession: "test-session", ZellijTabID: &tabID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "other", ZellijSession: "test-session", ZellijTabID: &tabID}); err != nil {
+				t.Fatal(err)
+			}
+			first := make(chan error, 1)
+			go func() {
+				if useMessage {
+					_, err := service.SendMessage(context.Background(), SendMessageRequest{FromPaneID: "other", ToPaneID: "target", Body: "manual"})
+					first <- err
+					return
+				}
+				first <- service.SendInput(context.Background(), SendInputRequest{PaneID: "target", Text: "manual\n"})
+			}()
+			select {
+			case <-backend.started:
+			case err := <-first:
+				t.Fatalf("first input returned before backend started: %v", err)
+			case <-time.After(time.Second):
+				t.Fatal("first input did not reach backend")
+			}
+			// Input to another pane must not wait for the blocked target pane.
+			other := make(chan error, 1)
+			go func() {
+				other <- service.SendInput(context.Background(), SendInputRequest{PaneID: "other", Text: "independent\n"})
+			}()
+			select {
+			case err := <-other:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("another pane was blocked by target input")
+			}
+			guarded := make(chan error, 1)
+			guardEntered := make(chan struct{})
+			guardErr := errors.New("earlier input made agent busy")
+			go func() {
+				guarded <- service.SendInput(context.Background(), SendInputRequest{
+					PaneID: "target", OwnershipToken: created.Pane.OwnershipToken, Text: "follow-up\n",
+					BeforeSend: func(context.Context) error {
+						close(guardEntered)
+						select {
+						case <-backend.delivered:
+							return guardErr
+						default:
+							return errors.New("guard ran before earlier input finished")
+						}
+					},
+				})
+			}()
+			select {
+			case <-guardEntered:
+				t.Fatal("guard ran while earlier backend input was still in progress")
+			case <-time.After(25 * time.Millisecond):
+			}
+			release()
+			for name, result := range map[string]<-chan error{"first": first, "guarded": guarded} {
+				select {
+				case err := <-result:
+					if (name == "first" && err != nil) || (name == "guarded" && !errors.Is(err, guardErr)) {
+						t.Fatalf("%s input = %v", name, err)
+					}
+				case <-time.After(time.Second):
+					t.Fatalf("%s input did not finish", name)
+				}
+			}
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			if len(backend.sendRequests) != 2 {
+				t.Fatalf("backend inputs = %+v; guarded input should not be sent", backend.sendRequests)
+			}
+		})
+	}
+}
+
 func TestServiceRoutesFollowUpOperationsByRecordSession(t *testing.T) {
 	tabID := ZellijTabID(7)
 	backend := &fakeBackend{
@@ -1123,7 +1320,8 @@ func TestSnapshotOutputUpdatesPaneOutput(t *testing.T) {
 		createID:   "terminal_5",
 		dumpOutput: "PASS\n",
 	}
-	service := newTestService(backend)
+	observer := &recordingPaneObserver{}
+	service := NewService(Options{Registry: registry.New(), Backend: backend, PaneObserver: observer})
 	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"}); err != nil {
 		t.Fatalf("CreatePane() error = %v", err)
 	}
@@ -1149,6 +1347,32 @@ func TestSnapshotOutputUpdatesPaneOutput(t *testing.T) {
 	if !reflect.DeepEqual(backend.dumpRequests, want) {
 		t.Fatalf("backend DumpScreen requests = %#v, want %#v", backend.dumpRequests, want)
 	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.outputs) != 1 || observer.outputs[0] != response.Output ||
+		observer.records[0].ID != response.Pane.ID || observer.records[0].LastOutput != response.Output ||
+		observer.records[0].Generation == 0 {
+		t.Fatalf("snapshot observations = %#v, %#v", observer.outputs, observer.records)
+	}
+}
+
+func TestSnapshotOutputStripsANSIForObserverOnly(t *testing.T) {
+	backend := &fakeBackend{createID: "terminal_5", dumpOutput: "\x1b[32mREADY\x1b[0m\n"}
+	observer := &recordingPaneObserver{}
+	service := NewService(Options{Registry: registry.New(), Backend: backend, PaneObserver: observer})
+	created, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "pane-1", ZellijSession: "test-session"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := service.SnapshotOutput(context.Background(), SnapshotOutputRequest{PaneID: created.Pane.ID, ANSI: true})
+	if err != nil || got.Output != backend.dumpOutput || got.Pane.LastOutput != backend.dumpOutput {
+		t.Fatalf("ANSI snapshot = %+v, %v", got, err)
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if !reflect.DeepEqual(observer.outputs, []string{"READY\n"}) {
+		t.Fatalf("observer outputs = %q", observer.outputs)
+	}
 }
 
 func TestSnapshotOutputDoesNotMutateReusedPaneGeneration(t *testing.T) {
@@ -1156,7 +1380,8 @@ func TestSnapshotOutputDoesNotMutateReusedPaneGeneration(t *testing.T) {
 		createID:   "terminal_old",
 		dumpOutput: "stale output\n",
 	}
-	service := newTestService(backend)
+	observer := &recordingPaneObserver{}
+	service := NewService(Options{Registry: registry.New(), Backend: backend, PaneObserver: observer})
 	if _, err := service.CreatePane(context.Background(), CreatePaneRequest{ID: "coder", TaskID: "old-task", ZellijSession: "test-session"}); err != nil {
 		t.Fatalf("CreatePane(old) error = %v", err)
 	}
@@ -1183,6 +1408,11 @@ func TestSnapshotOutputDoesNotMutateReusedPaneGeneration(t *testing.T) {
 	}
 	if current.TaskID != "new-task" || current.ZellijPaneID != "terminal_new" || current.LastOutput != "" {
 		t.Fatalf("current pane = %#v, want untouched new generation", current)
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.outputs) != 0 {
+		t.Fatalf("stale snapshot notified observer: %#v", observer.outputs)
 	}
 }
 
@@ -1410,6 +1640,26 @@ type fakeBackend struct {
 	beforeCreatePane func(context.Context, zellij.CreatePaneRequest, int) error
 	beforeClosePane  func(context.Context, zellij.ClosePaneRequest) error
 	beforeDumpScreen func(context.Context, zellij.DumpScreenRequest) error
+}
+
+type blockingInputBackend struct {
+	*fakeBackend
+	started, release, delivered chan struct{}
+}
+
+func (b *blockingInputBackend) SendInput(ctx context.Context, req zellij.SendInputRequest) error {
+	if req.PaneID == "terminal_5" {
+		close(b.started)
+		select {
+		case <-b.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		err := b.fakeBackend.SendInput(ctx, req)
+		close(b.delivered)
+		return err
+	}
+	return b.fakeBackend.SendInput(ctx, req)
 }
 
 type fakeSessionSwitcher struct {

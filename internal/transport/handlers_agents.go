@@ -17,7 +17,14 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 			writeRuntimeError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, ListAgentsFromCodingAgent(response))
+		result := ListAgentsFromCodingAgent(response)
+		if s.followups != nil {
+			for i := range result.Agents {
+				a := &result.Agents[i].Agent
+				a.FollowupCount, a.FollowupPaused, a.FollowupAttention = s.followups.Summary(a.ID)
+			}
+		}
+		writeJSON(w, http.StatusOK, result)
 	case http.MethodPost:
 		var request StartAgentRequest
 		if !decodeRequest(w, r, &request) {
@@ -44,6 +51,10 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if action == "explain" {
 		s.handleExplainAgent(w, r, agentID)
+		return
+	}
+	if action == "followups" {
+		s.handleAgentFollowups(w, r, agentID)
 		return
 	}
 	if action != "focus" && action != "pin" && action != "task-alias" {

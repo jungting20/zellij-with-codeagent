@@ -21,6 +21,7 @@ const DefaultRequestTimeout = 30 * time.Second
 type ServerOptions struct {
 	Service            ServerRuntime
 	VoiceNotifications VoiceNotificationService
+	Followups          FollowupService
 	SocketPath         string
 	RequestTimeout     time.Duration
 	Version            string
@@ -41,6 +42,7 @@ type ServerRuntime interface {
 type Server struct {
 	service            ServerRuntime
 	voiceNotifications VoiceNotificationService
+	followups          FollowupService
 	socketPath         string
 	requestTimeout     time.Duration
 	version            string
@@ -69,6 +71,7 @@ func NewServer(opts ServerOptions) (*Server, error) {
 	server := &Server{
 		service:            opts.Service,
 		voiceNotifications: opts.VoiceNotifications,
+		followups:          opts.Followups,
 		socketPath:         opts.SocketPath,
 		requestTimeout:     requestTimeout,
 		version:            opts.Version,

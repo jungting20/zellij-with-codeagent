@@ -10,8 +10,9 @@ import (
 )
 
 // AgentExplanation describes the running monitor, including a pending transition.
-// Observation timestamps, title metadata and evidence are transient: recovery
-// obtains new runtime observations instead of persisting detection input.
+// Observation timestamps, revisions, title metadata and evidence are transient:
+// recovery obtains new runtime observations instead of persisting detection input.
+// Revisions are comparable only within the same daemon lifetime and observation epoch.
 type AgentExplanation struct {
 	AgentID               ID                    `json:"agent_id"`
 	Kind                  Kind                  `json:"kind"`
@@ -21,6 +22,9 @@ type AgentExplanation struct {
 	MatchedRule           string                `json:"matched_rule,omitempty"`
 	StateChangedAt        time.Time             `json:"state_changed_at"`
 	ObservedAt            time.Time             `json:"observed_at"`
+	ObservationEpoch      uint64                `json:"observation_epoch"`
+	WorkingRevision       uint64                `json:"working_revision"`
+	LastWorkingAt         time.Time             `json:"last_working_at"`
 	ObservationAvailable  bool                  `json:"observation_available"`
 	StartupGrace          bool                  `json:"startup_grace"`
 	PendingIdle           bool                  `json:"pending_idle"`
@@ -96,6 +100,9 @@ func (m *Monitor) Explain(id ID) (AgentExplanation, error) {
 		return explanation, nil
 	}
 	explanation.ObservedAt = entry.observedAt
+	explanation.ObservationEpoch = entry.token
+	explanation.WorkingRevision = entry.workingRevision
+	explanation.LastWorkingAt = entry.lastWorkingAt
 	explanation.ObservationAvailable = entry.hasInput
 	explanation.StartupGrace = entry.graceTimer != nil
 	explanation.PendingIdle = entry.idleTimer != nil || entry.idleDeadline != nil

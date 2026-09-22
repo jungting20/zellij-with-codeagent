@@ -188,6 +188,12 @@ type FocusSessionResponse struct {
 type SendInputRequest struct {
 	PaneID PaneID
 	Text   string
+	// OwnershipToken binds delayed input to the expected running pane owner.
+	// An empty token preserves the behavior of immediate, unqualified input.
+	OwnershipToken OwnershipToken
+	// BeforeSend validates transient conditions while the pane input lock is held.
+	// It must not send input to the same pane and is never persisted or transported.
+	BeforeSend func(context.Context) error
 }
 
 type SendMessageRequest struct {

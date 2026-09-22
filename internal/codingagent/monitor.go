@@ -53,6 +53,8 @@ type monitoredAgent struct {
 	paneTitle       string
 	titleAvailable  bool
 	titleObservedAt time.Time
+	workingRevision uint64
+	lastWorkingAt   time.Time
 
 	idleConfirmations int
 	idleToken         uint64
@@ -84,6 +86,8 @@ func (m *Monitor) PaneOpened(pane registry.PaneRecord) {
 	entry.paneTitle = ""
 	entry.titleAvailable = false
 	entry.titleObservedAt = time.Time{}
+	entry.workingRevision = 0
+	entry.lastWorkingAt = time.Time{}
 	m.nextToken++
 	entry.token = m.nextToken
 	entry.paneGeneration = pane.Generation
@@ -263,6 +267,8 @@ func (m *Monitor) PaneError(pane registry.PaneRecord, cause error) {
 	entry.paneTitle = ""
 	entry.titleAvailable = false
 	entry.titleObservedAt = time.Time{}
+	entry.workingRevision = 0
+	entry.lastWorkingAt = time.Time{}
 	m.nextToken++
 	entry.token = m.nextToken
 	m.updateStateLocked(entry, StateUpdate{State: StateUnknown, Reason: reason})
@@ -384,6 +390,10 @@ func (m *Monitor) updateStateLocked(entry *monitoredAgent, update StateUpdate) {
 		return
 	}
 	entry.record = change.Current
+	if change.Previous.State != StateWorking && change.Current.State == StateWorking {
+		entry.workingRevision++
+		entry.lastWorkingAt = m.opts.Now()
+	}
 	if !change.Changed || m.opts.EventBus == nil {
 		return
 	}

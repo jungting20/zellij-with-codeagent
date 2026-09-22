@@ -21,6 +21,7 @@ import (
 	"zellij-with-codeagent/internal/cli"
 	"zellij-with-codeagent/internal/codingagent"
 	"zellij-with-codeagent/internal/eventbus"
+	"zellij-with-codeagent/internal/followup"
 	"zellij-with-codeagent/internal/persistence"
 	"zellij-with-codeagent/internal/registry"
 	agentruntime "zellij-with-codeagent/internal/runtime"
@@ -154,6 +155,7 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) (e
 		service := bundle.service
 		server, err := newDaemonTransportServer(transport.ServerOptions{
 			Service:            service,
+			Followups:          bundle.followups,
 			VoiceNotifications: voiceQueueAdapter{service: voiceService},
 			SocketPath:         socketPath,
 			Version:            version,
@@ -164,6 +166,11 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) (e
 		}
 		fmt.Fprintf(stdout, "agentd serving on unix socket %s\n", socketPath)
 		serveCtx, cancelServe := context.WithCancel(ctx)
+		followupDone := make(chan struct{})
+		go func() {
+			defer close(followupDone)
+			bundle.followups.Run(serveCtx)
+		}()
 		idleEvents, unsubscribeIdleEvents := bundle.bus.Subscribe(serveCtx)
 		idleVoiceDone := make(chan struct{})
 		go func() {
@@ -182,6 +189,7 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) (e
 		unsubscribeIdleEvents()
 		<-reconcileDone
 		<-idleVoiceDone
+		<-followupDone
 		if serveErr != nil && serveErr != context.Canceled && serveErr != context.DeadlineExceeded {
 			fmt.Fprintf(stderr, "agentd serve failed: %v\n", serveErr)
 			return 1
@@ -373,11 +381,12 @@ func validateLegacyDaemonCommand(command, socketPath string) error {
 }
 
 type daemonRuntimeBundle struct {
-	service transport.ServerRuntime
-	bus     *eventbus.Bus
-	store   codingagent.Store
-	recover func(context.Context) error
-	stop    func()
+	followups *followup.Service
+	service   transport.ServerRuntime
+	bus       *eventbus.Bus
+	store     codingagent.Store
+	recover   func(context.Context) error
+	stop      func()
 }
 
 func newRuntimeService() (transport.ServerRuntime, error) {
@@ -452,7 +461,18 @@ func newRuntimeBundle(writers ...*persistence.Writer) (*daemonRuntimeBundle, err
 	if service == nil {
 		return nil, errors.New("construct daemon service: coding agent service is nil")
 	}
-	return &daemonRuntimeBundle{service: service, bus: bus, store: store,
+	adapter := followup.RuntimeAdapter{Agents: service, Runtime: runtimeService}
+	followupOptions := followup.Options{Observe: adapter.Observe, Send: adapter.Send}
+	if persistent {
+		followupOptions.Repository = followup.SQLiteRepository{Writer: writers[0]}
+	}
+	followups, err := followup.New(followupOptions)
+	if err != nil {
+		runtimeService.StopObservations()
+		monitor.Close()
+		return nil, err
+	}
+	return &daemonRuntimeBundle{service: service, bus: bus, store: store, followups: followups,
 		recover: func(ctx context.Context) error {
 			if err := service.RestoreMonitoring(ctx); err != nil {
 				return err

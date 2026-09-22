@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"zellij-with-codeagent/internal/eventbus"
 	"zellij-with-codeagent/internal/registry"
 	"zellij-with-codeagent/internal/zellij"
@@ -45,6 +47,7 @@ type Service struct {
 	parentTabMu       sync.Mutex // Serializes sibling lookup through pane registration.
 	createMu          sync.Mutex
 	creates           map[PaneID]*createPaneCall
+	inputLocks        sync.Map // PaneID -> *sync.Mutex; guards checks through backend input.
 }
 
 type createPaneCall struct {
@@ -532,8 +535,32 @@ func (s *Service) createBackendPane(ctx context.Context, req CreatePaneRequest) 
 }
 
 func (s *Service) SendInput(ctx context.Context, req SendInputRequest) error {
-	record, err := s.lookupPane(req.PaneID)
+	if req.PaneID == "" {
+		return ErrMissingPaneID
+	}
+	value, _ := s.inputLocks.LoadOrStore(req.PaneID, &sync.Mutex{})
+	lock := value.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	record, err := s.inputTarget(req)
 	if err != nil {
+		return err
+	}
+	if req.BeforeSend != nil {
+		if err := req.BeforeSend(ctx); err != nil {
+			return err
+		}
+		// Observation may take time and lifecycle changes do not hold the input lock.
+		// Resolve the pane again so a stale guard cannot authorize a different owner.
+		record, err = s.inputTarget(req)
+		if err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 
@@ -547,6 +574,22 @@ func (s *Service) SendInput(ctx context.Context, req SendInputRequest) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Service) inputTarget(req SendInputRequest) (registry.PaneRecord, error) {
+	record, err := s.lookupPane(req.PaneID)
+	if err != nil {
+		return registry.PaneRecord{}, err
+	}
+	if req.OwnershipToken != "" {
+		if req.OwnershipToken != record.OwnershipToken {
+			return registry.PaneRecord{}, fmt.Errorf("%w: pane %s ownership changed", ErrInvalidPaneTarget, req.PaneID)
+		}
+		if record.Status != registry.PaneStatusRunning {
+			return registry.PaneRecord{}, fmt.Errorf("%w: pane %s is not running", ErrInvalidPaneTarget, req.PaneID)
+		}
+	}
+	return record, nil
 }
 
 func (s *Service) SendMessage(ctx context.Context, req SendMessageRequest) (SendMessageResponse, error) {
@@ -575,12 +618,10 @@ func (s *Service) SendMessage(ctx context.Context, req SendMessageRequest) (Send
 	}
 	deliveredText := formatPaneMessage(fromRecord.ID, messageType, req.Body)
 
-	if err := s.backend.SendInput(ctx, zellij.SendInputRequest{
-		Session: string(toRecord.SessionID),
-		PaneID:  zellij.PaneID(toRecord.ZellijPaneID),
-		Text:    deliveredText,
+	if err := s.SendInput(ctx, SendInputRequest{
+		PaneID: toRecord.ID,
+		Text:   deliveredText,
 	}); err != nil {
-		_, _ = s.registry.UpdatePaneStatusGeneration(toRecord.ID, toRecord.Generation, registry.PaneStatusError, err.Error())
 		return SendMessageResponse{}, err
 	}
 
@@ -643,6 +684,9 @@ func (s *Service) SnapshotOutput(ctx context.Context, req SnapshotOutputRequest)
 	record, err = s.registry.UpdatePaneOutputGeneration(record.ID, record.Generation, output)
 	if err != nil {
 		return SnapshotOutputResponse{}, err
+	}
+	if s.observer != nil {
+		s.observer.PaneOutput(record, ansi.Strip(output))
 	}
 
 	return SnapshotOutputResponse{

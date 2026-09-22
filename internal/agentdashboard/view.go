@@ -69,9 +69,9 @@ func (m Model) View() string {
 	}
 	lines = append(lines, footerStyle.Render(separator))
 
-	help := "w worktree i input g lazygit Space pin d close Enter focus R refresh q quit"
+	help := "f 후속 i input g lazygit Space pin d close Enter focus R refresh q quit"
 	if width >= 100 {
-		help = "t ticket i input I nvim g lazygit w worktree m merge a alias Space pin d close Enter focus R refresh q quit"
+		help = "f 후속 t ticket i input I nvim g lazygit w worktree m merge a alias Space pin d close Enter focus R refresh q quit"
 	}
 	lines = append(lines, help)
 	for index := range lines {
@@ -82,6 +82,9 @@ func (m Model) View() string {
 		lines = append(lines[:m.height-footerHeight], lines[len(lines)-footerHeight:]...)
 	}
 	base := strings.Join(lines, "\n")
+	if m.followups != nil {
+		return m.popupOverlay(base, m.followupView(), (width-m.followupPopupWidth())/2, 0)
+	}
 	if m.worktrees != nil {
 		return m.popupOverlay(base, m.worktreeMenuView(), (width-76)/2, 0)
 	}
@@ -364,6 +367,10 @@ func (m Model) rowView(record transport.AgentWithPane, selected bool, width, num
 		projectWidth = maxInt(projectWidth, ansi.StringWidth(badge)+9)
 	}
 	project = m.childLabel(record) + project
+	if badge := followupBadge(record.Agent); badge != "" {
+		project = badge + " " + project
+		projectWidth = maxInt(projectWidth, ansi.StringWidth(badge)+2)
+	}
 	line := prefix + pin + " " + padCell(project, projectWidth) +
 		"  " + padCell(stateView(record.Agent.State), 10) +
 		"  " + padCell(agentName(record.Agent.Kind), 12) +
