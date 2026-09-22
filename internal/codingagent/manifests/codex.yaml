@@ -1,6 +1,7 @@
 version: 1
 agent: codex
-preserve_state_on_no_match: true
+# Unrecognized screens are idle candidates; the monitor confirms them before
+# leaving Working. Only explicitly recognized overlays preserve the old state.
 rules:
   - id: osc_title_blocked
     priority: 1100
@@ -43,7 +44,7 @@ rules:
   - id: weak_blocker
     priority: 600
     state: blocked
-    region: {type: whole_recent}
+    region: {type: after_last_prompt_marker}
     match:
       any:
         - line_regex: ['(?i)\[y/n\]']
@@ -62,24 +63,32 @@ rules:
   - id: conversation_interrupted
     priority: 550
     state: idle
-    region: {type: bottom_non_empty_lines, lines: 5}
-    match: {contains: ["■ Conversation interrupted"]}
+    region: {type: before_current_prompt_marker}
+    match:
+      regex: ['(?m)^[ \t]*■ Conversation interrupted[^\r\n]*(\r?\n([ \t]*|[ \t]*[^[:space:]•◦›»■✗✓─][^\r\n]*))*[[:space:]]*\z']
     visible_idle: true
 
   - id: screen_working_fallback
     priority: 500
     state: working
-    region: {type: bottom_non_empty_lines, lines: 5}
+    region: {type: before_current_prompt_marker}
     match:
-      line_regex: ['^[•◦][[:space:]]+.+\([^)]*esc to interrupt\)( · .*)?[[:space:]]*$']
+      # A live elapsed timer can have a remapped, hidden, wrapped, or truncated
+      # interrupt hint. Queued follow-ups may push it well above the bottom rows.
+      # A later response/status marker makes an older timer historical.
+      all:
+        - regex: ['(?m)^[ \t]*([•◦][ \t]+)?[^[:space:]›»•◦■✗✓─][^\r\n]*[[:space:]]+\(([0-9]+[hm][[:space:]]+)*[0-9]+s([[:space:]]+([•·][[:space:]]+)?[^()\r\n]+[[:space:]]+to[[:space:]]+(interrupt\)|i[a-z]*…)|\))([ \t]*·[^\r\n]*)?[ \t]*(\r?\n([ \t]*|[ \t]*[^[:space:]•◦›»■✗✓─][^\r\n]*|[ \t]*•[ \t]+(Queued follow-up inputs|Messages to be submitted after next tool call|Messages to be submitted at end of turn)[^\r\n]*))*[[:space:]]*\z']
+        - not:
+            - line_regex: ['^[ \t]*([•◦][ \t]+)?Reconnect failed — check the endpoint, then relaunch \([0-9hms ]+\)[ \t]*$']
     visible_working: true
 
   - id: screen_prompt_idle
     priority: 200
     state: idle
-    region: {type: bottom_non_empty_lines, lines: 5}
+    region: {type: current_prompt_marker}
     match:
-      line_regex: ['^[[:space:]]*›([[:space:]]+.*)?[[:space:]]*$']
+      # Animated prompts can replace the space after either marker with braille.
+      line_regex: ['^[[:space:]]*[›»]([[:space:]\x{2800}-\x{28FF}]+.*)?[[:space:]]*$']
     visible_idle: true
 
   - id: osc_title_idle

@@ -34,6 +34,22 @@ type PaneObserver interface {
 	PaneError(registry.PaneRecord, error)
 }
 
+// PaneMetadata is transient evidence from a successful Zellij pane inspection.
+// Title is the displayed pane title: it may come from OSC 0/2, a custom pane
+// name, or Zellij's default title. It is not a raw OSC observation.
+// TitleAvailable is false when inspection failed or did not supply a title;
+// observers must then discard any title retained from an earlier inspection.
+type PaneMetadata struct {
+	Title          string
+	TitleAvailable bool
+}
+
+// PaneMetadataObserver optionally receives metadata during runtime reconciliation,
+// independently of viewport updates. Metadata is never restored from storage.
+type PaneMetadataObserver interface {
+	PaneMetadata(registry.PaneRecord, PaneMetadata)
+}
+
 // ExecSubscriptionRunner runs subscribe commands with exec.CommandContext.
 type ExecSubscriptionRunner struct{}
 
@@ -299,6 +315,12 @@ func (m *SubscriptionManager) run(record registry.PaneRecord, subscription *pane
 	if waitErr != nil && m.subscriptionIsCurrent(record, subscription) {
 		m.publishStreamError(record, waitErr)
 	}
+	if readErr == nil && waitErr == nil && m.subscriptionIsCurrent(record, subscription) {
+		// A subscribe process is expected to remain attached until the pane closes
+		// or its owner cancels it. A clean, unexpected EOF still invalidates the
+		// last observation; otherwise a Working screen can remain current forever.
+		m.publishStreamError(record, errors.New("subscribe process exited unexpectedly"))
+	}
 
 	if m.opts.Bus != nil && m.subscriptionIsCurrent(record, subscription) {
 		evt := eventFromRecord(record, m.opts.Now())
@@ -429,14 +451,11 @@ func (m *SubscriptionManager) handlePaneClosed(record registry.PaneRecord) {
 
 func (m *SubscriptionManager) handlePaneUpdate(record registry.PaneRecord, text string) {
 	text = strings.TrimSpace(text)
-	if text == "" {
-		return
-	}
 
 	key := subscriptionKey{paneID: record.ID, generation: record.Generation}
 	m.mu.Lock()
-	prev := m.lastRendered[key]
-	if text == prev {
+	prev, observed := m.lastRendered[key]
+	if observed && text == prev {
 		m.mu.Unlock()
 		return
 	}

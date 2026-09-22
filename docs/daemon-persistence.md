@@ -50,6 +50,15 @@ user_version` controls schema compatibility; a newer schema is rejected.
 Output snapshots, event history, timers, channels, locks, in-flight requests and
 UI selections are not stored. Output-only updates do not enqueue database writes.
 
+Agent detection also keeps observed pane titles, their availability and timestamps,
+rule evidence, startup grace, and pending Idle confirmations only in the monitor.
+The read-only `agent explain` endpoint exposes this transient state; it does not
+write to the database. Zellij's displayed title is not a persistent agent field
+and may be a custom name rather than raw OSC. Recovery clears these observations
+and collects fresh screen/title evidence for the recovered pane generation.
+The existing state/reason/matched-rule fields continue to persist normally;
+there is no stored payload or schema change.
+
 ## Recovery and shutdown
 
 Agent state starts as `unknown` and is determined again from fresh output.

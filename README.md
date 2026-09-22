@@ -177,6 +177,14 @@ session and focus its pane, `R` to refresh, and `q` to quit. The dashboard
 shows the detected agent state (`idle`, `working`, `blocked`, or `unknown`),
 agent kind, project, and time in the current state.
 
+To inspect why an agent has its current state, run
+`zellij-agent agent explain <agent-id>` or
+`zellij-agent agent explain --json <agent-id>`. The daemon reports the published
+state, latest rule evaluation, observation timestamps, pane-title evidence and
+any pending Idle confirmation. This command is read-only. See
+[status detection](docs/agent-status-detection.md) for the current input sources
+and fallback behavior.
+
 Press `a` on an agent in either area to choose a fixed task alias:
 미지정, 구현, 버그 수정, 리팩터링, 테스트, 리뷰, 문서, or 조사.
 Use up/down or `j`/`k`, then `Enter` to apply or `Esc` to cancel. Choosing

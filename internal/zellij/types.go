@@ -112,16 +112,19 @@ type Pane struct {
 	IsFocused  bool
 	IsFloating bool
 	Title      string
-	Command    string
-	CWD        string
-	Exited     bool
-	ExitStatus *int
-	TabID      int
-	TabName    string
-	Rows       int
-	Columns    int
-	X          int
-	Y          int
+	// TitleAvailable distinguishes an explicit (possibly empty) title from a
+	// missing/null field in list-panes output. This metadata is transient.
+	TitleAvailable bool
+	Command        string
+	CWD            string
+	Exited         bool
+	ExitStatus     *int
+	TabID          int
+	TabName        string
+	Rows           int
+	Columns        int
+	X              int
+	Y              int
 }
 
 func (p *Pane) UnmarshalJSON(data []byte) error {
@@ -130,7 +133,7 @@ func (p *Pane) UnmarshalJSON(data []byte) error {
 		IsPlugin   bool            `json:"is_plugin"`
 		IsFocused  bool            `json:"is_focused"`
 		IsFloating bool            `json:"is_floating"`
-		Title      string          `json:"title"`
+		Title      *string         `json:"title"`
 		Command    string          `json:"pane_command"`
 		CWD        string          `json:"pane_cwd"`
 		Exited     bool            `json:"exited"`
@@ -156,7 +159,6 @@ func (p *Pane) UnmarshalJSON(data []byte) error {
 		IsPlugin:   raw.IsPlugin,
 		IsFocused:  raw.IsFocused,
 		IsFloating: raw.IsFloating,
-		Title:      raw.Title,
 		Command:    raw.Command,
 		CWD:        raw.CWD,
 		Exited:     raw.Exited,
@@ -167,6 +169,10 @@ func (p *Pane) UnmarshalJSON(data []byte) error {
 		Columns:    raw.Columns,
 		X:          raw.X,
 		Y:          raw.Y,
+	}
+	if raw.Title != nil {
+		p.Title = *raw.Title
+		p.TitleAvailable = true
 	}
 	return nil
 }

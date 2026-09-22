@@ -155,6 +155,11 @@ rules:
 	if err != nil {
 		t.Fatalf("NewDetector() error = %v", err)
 	}
+	return newMonitorFixtureWithDetector(t, detector)
+}
+
+func newMonitorFixtureWithDetector(t *testing.T, detector *Detector) monitorFixture {
+	t.Helper()
 	scheduler := newFakeMonitorScheduler()
 	store := NewMemoryStore(scheduler.Now)
 	record := Record{
@@ -352,6 +357,91 @@ func TestMonitorConfirmsWorkingToNonVisibleIdleThreeTimes(t *testing.T) {
 	}
 	if elapsed := f.scheduler.Now().Sub(time.Unix(1_000, 0).Add(3 * time.Second)); elapsed > 700*time.Millisecond {
 		t.Fatalf("idle resolution took %v, want no later than 700ms", elapsed)
+	}
+}
+
+func newEmbeddedCodexMonitorFixture(t *testing.T) monitorFixture {
+	t.Helper()
+	detector, loadErrors := LoadEmbeddedDetector()
+	if len(loadErrors) != 0 {
+		t.Fatalf("LoadEmbeddedDetector() errors = %v", loadErrors)
+	}
+	f := newMonitorFixtureWithDetector(t, detector)
+	f.monitor.PaneOutput(f.pane, "• Working (1m 32s • esc to i…\n\n⠁   ⠈\n»⠁Ask Codex to do anything\n  ⠠⢀\n  model footer")
+	f.scheduler.Advance(startupGrace)
+	if got := f.state(t); got.State != StateWorking || got.MatchedRule != "screen_working_fallback" {
+		t.Fatalf("initial production detection = %+v, want working/screen_working_fallback", got)
+	}
+	return f
+}
+
+func TestMonitorEmbeddedCodexConfirmsUnrecognizedCompletion(t *testing.T) {
+	f := newEmbeddedCodexMonitorFixture(t)
+	eventsBefore := len(f.bus.Recent(0))
+	f.monitor.PaneOutput(f.pane, "The change is complete.\nA future Codex release uses an unfamiliar input footer.")
+	if got := f.state(t).State; got != StateWorking {
+		t.Fatalf("state before confirmation = %s, want working", got)
+	}
+	for confirmation := 1; confirmation < idleConfirmationCount; confirmation++ {
+		f.scheduler.Advance(idleConfirmationDelay)
+		if got := f.state(t).State; got != StateWorking {
+			t.Fatalf("state after confirmation %d = %s, want working", confirmation, got)
+		}
+		// Further unrecognized output must neither bypass nor restart confirmation.
+		f.monitor.PaneOutput(f.pane, "The change is complete.\nUnfamiliar input footer updated.")
+	}
+	f.scheduler.Advance(idleConfirmationDelay)
+	got := f.state(t)
+	if got.State != StateIdle || got.MatchedRule != "" || got.StateReason != "default_known_agent_idle_fallback" {
+		t.Fatalf("confirmed completion = %+v, want idle with unmatched-screen reason", got)
+	}
+	if count := len(f.bus.Recent(0)); count != eventsBefore+1 {
+		t.Fatalf("event count = %d, want one confirmed state transition beyond %d", count, eventsBefore)
+	}
+}
+
+func TestMonitorEmbeddedCodexCancelsUnrecognizedCompletionOnNewEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		screen string
+		want   State
+		rule   string
+	}{
+		{"renewed work", "• Reading source files (3s)\n»⠁Ask Codex to do anything", StateWorking, "screen_working_fallback"},
+		{"approval", "» previous request\nAllow command?\npress enter to confirm or esc to cancel", StateBlocked, "live_strong_blocker"},
+		{"transcript viewer", "»⠁previous request\n↑/↓ to scroll · pgup/pgdn to page · home/end to jump\nq to quit · esc/← to edit prev", StateWorking, "screen_working_fallback"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newEmbeddedCodexMonitorFixture(t)
+			f.monitor.PaneOutput(f.pane, "Unfamiliar completion screen")
+			f.scheduler.Advance(idleConfirmationDelay)
+			f.monitor.PaneOutput(f.pane, test.screen)
+			f.scheduler.Advance(idleConfirmationLimit + time.Second)
+			if got := f.state(t); got.State != test.want || got.MatchedRule != test.rule {
+				t.Fatalf("state after interrupted idle candidate = %+v, want %s/%s", got, test.want, test.rule)
+			}
+			if test.want == StateWorking {
+				// Returning from an overlay or another burst of work starts a new
+				// complete confirmation cycle; old confirmations cannot leak over.
+				f.monitor.PaneOutput(f.pane, "Unfamiliar final completion screen")
+				f.scheduler.Advance(2 * idleConfirmationDelay)
+				if got := f.state(t).State; got != StateWorking {
+					t.Fatalf("new idle candidate reused old confirmations: state = %s", got)
+				}
+				f.scheduler.Advance(idleConfirmationDelay)
+				if got := f.state(t).State; got != StateIdle {
+					t.Fatalf("new idle candidate state = %s, want idle", got)
+				}
+			}
+		})
+	}
+}
+
+func TestMonitorEmbeddedCodexAnimatedCompletionIsImmediate(t *testing.T) {
+	f := newEmbeddedCodexMonitorFixture(t)
+	f.monitor.PaneOutput(f.pane, "• Working (1m 32s • esc to i…\n• The change is complete.\n\n⠁   ⠈\n»⠁Ask Codex to do anything\n  ⠠⢀\n  model footer")
+	if got := f.state(t); got.State != StateIdle || got.MatchedRule != "screen_prompt_idle" {
+		t.Fatalf("animated completion = %+v, want immediate idle/screen_prompt_idle", got)
 	}
 }
 

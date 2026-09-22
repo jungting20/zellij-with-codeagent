@@ -12,19 +12,34 @@ type DetectionInput struct {
 }
 
 type Detection struct {
-	State           State
-	RuleID          string
-	Reason          string
-	VisibleIdle     bool
-	VisibleWorking  bool
-	VisibleBlocker  bool
-	SkipStateUpdate bool
-	Fallback        bool
+	State           State  `json:"state"`
+	RuleID          string `json:"rule_id,omitempty"`
+	Reason          string `json:"reason"`
+	VisibleIdle     bool   `json:"visible_idle"`
+	VisibleWorking  bool   `json:"visible_working"`
+	VisibleBlocker  bool   `json:"visible_blocker"`
+	SkipStateUpdate bool   `json:"skip_state_update"`
+	Fallback        bool   `json:"fallback"`
 }
 
 type Detector struct {
 	rules                  map[Kind][]Rule
 	preserveStateOnNoMatch map[Kind]bool
+}
+
+// activePaneTitle filters out Zellij's default/user-assigned names, which cannot
+// prove an idle agent. Only explicit working or blocked title rules participate.
+func (d *Detector) activePaneTitle(kind Kind, title string) string {
+	if d == nil {
+		return ""
+	}
+	for _, rule := range d.rules[kind] {
+		if rule.Region.Type == RegionOSCTitle && !rule.SkipStateUpdate &&
+			(rule.State == StateWorking || rule.State == StateBlocked) && rule.Matcher.matches(title) {
+			return title
+		}
+	}
+	return ""
 }
 
 func NewDetector(manifests map[Kind]Manifest) (*Detector, error) {

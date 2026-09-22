@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -11,6 +12,109 @@ import (
 	"zellij-with-codeagent/internal/registry"
 	"zellij-with-codeagent/internal/zellij"
 )
+
+type recordingPaneMetadataObserver struct {
+	recordingPaneObserver
+	metadata []struct {
+		record registry.PaneRecord
+		value  PaneMetadata
+	}
+}
+
+func (o *recordingPaneMetadataObserver) PaneMetadata(record registry.PaneRecord, value PaneMetadata) {
+	o.metadata = append(o.metadata, struct {
+		record registry.PaneRecord
+		value  PaneMetadata
+	}{record: record, value: value})
+}
+
+func TestReconcileDeliversLiveTitleWithoutViewportChangeAndClearsFailedInspection(t *testing.T) {
+	reg := registry.New()
+	for _, session := range []registry.SessionID{"session-a", "session-b"} {
+		if _, err := reg.RegisterPane(registry.RegisterPaneRequest{
+			ID: registry.PaneID(session), SessionID: session, ZellijPaneID: "terminal_24", Role: "coding-agent",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	decode := func(payload string) []zellij.Pane {
+		t.Helper()
+		var panes []zellij.Pane
+		if err := json.Unmarshal([]byte(payload), &panes); err != nil {
+			t.Fatal(err)
+		}
+		return panes
+	}
+	backend := &fakeBackend{listPanesBySession: map[string][]zellij.Pane{
+		"session-a": decode(`[{"id":24,"title":"⠸ Working | project"}]`),
+		"session-b": decode(`[{"id":24,"title":"other project"}]`),
+	}}
+	observer := &recordingPaneMetadataObserver{}
+	service := NewService(Options{Registry: reg, Backend: backend, PaneObserver: observer})
+	assertMetadata := func(want map[registry.PaneID]PaneMetadata) {
+		t.Helper()
+		if len(observer.metadata) != len(want) {
+			t.Fatalf("metadata = %#v, want %d observations", observer.metadata, len(want))
+		}
+		for _, observation := range observer.metadata {
+			expected, ok := want[observation.record.ID]
+			if !ok || observation.value != expected || observation.record.Generation == 0 {
+				t.Fatalf("metadata = %#v, want %#v", observation, want)
+			}
+		}
+		observer.metadata = nil
+	}
+	if _, err := service.Reconcile(context.Background(), ReconcileRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	assertMetadata(map[registry.PaneID]PaneMetadata{
+		"session-a": {Title: "⠸ Working | project", TitleAvailable: true},
+		"session-b": {Title: "other project", TitleAvailable: true},
+	})
+	backend.listPanesBySession["session-a"] = decode(`[{"id":24,"title":"project"}]`)
+	backend.listPanesBySession["session-b"] = decode(`[{"id":24}]`)
+	if _, err := service.Reconcile(context.Background(), ReconcileRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	assertMetadata(map[registry.PaneID]PaneMetadata{
+		"session-a": {Title: "project", TitleAvailable: true},
+		"session-b": {},
+	})
+	backend.listErrBySession = map[string]error{"session-b": errors.New("inspection failed")}
+	if _, err := service.Reconcile(context.Background(), ReconcileRequest{}); err == nil {
+		t.Fatal("Reconcile() succeeded after list failure")
+	}
+	assertMetadata(map[registry.PaneID]PaneMetadata{"session-a": {}, "session-b": {}})
+	if len(observer.outputs) != 0 || len(observer.closed) != 0 || len(observer.errors) != 0 {
+		t.Fatalf("metadata inspection changed viewport/lifecycle: %#v", observer.recordingPaneObserver)
+	}
+}
+
+func TestPaneMetadataRejectsClosedAndReplacedGenerations(t *testing.T) {
+	reg := registry.New()
+	old, err := reg.RegisterPane(registry.RegisterPaneRequest{ID: "pane", Role: "coding-agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingPaneMetadataObserver{}
+	service := NewService(Options{Registry: reg, Backend: &fakeBackend{}, PaneObserver: observer})
+	if _, err := reg.RemovePane(old.ID); err != nil {
+		t.Fatal(err)
+	}
+	current, err := reg.RegisterPane(registry.RegisterPaneRequest{ID: "pane", Role: "coding-agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.notifyPaneMetadata(old, PaneMetadata{Title: "⠸ stale", TitleAvailable: true})
+	service.notifyPaneMetadata(old, PaneMetadata{})
+	if _, err := reg.UpdatePaneStatus(current.ID, registry.PaneStatusClosed, "closed"); err != nil {
+		t.Fatal(err)
+	}
+	service.notifyPaneMetadata(current, PaneMetadata{Title: "⠸ closed", TitleAvailable: true})
+	if len(observer.metadata) != 0 {
+		t.Fatalf("stale metadata delivered: %#v", observer.metadata)
+	}
+}
 
 type blockingPaneCloseObserver struct {
 	entered chan struct{}

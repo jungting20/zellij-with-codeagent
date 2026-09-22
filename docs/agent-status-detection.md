@@ -1,6 +1,55 @@
 # Codex, Gemini, Cursor Agent, Claude Code 상태 감지 로직
 
-이 문서는 현재 Herdr 소스 기준으로 네 코딩 에이전트의 상태 감지 방식을 정리한다.
+## 이 저장소의 현재 구현 (2026-09-22)
+
+`zellij-agent` daemon은 RuntimeService를 통해 Zellij의 subscribe 화면과
+기존 2초 reconcile의 `list-panes --all --json` 제목을 받아 감지한다.
+클라이언트나 planner가 Zellij를 직접 호출하지 않는다.
+
+- 화면: 변경된 subscribe 화면을 전달하며 빈 화면도 이전 화면을 지운다.
+- 제목: Zellij의 표시 제목이다. 원본 OSC와 달리 사용자 지정 이름이나 기본
+  제목일 수도 있다. 알려진 Working/Blocked 제목 규칙에 맞는 값만 사용한다.
+  일반 제목은 명시적인 Idle 근거로 사용하지 않는다.
+- 제목 조회 실패·누락, pane 세대 변경, 관측 오류가 발생하면 기존 제목 근거를
+  버린다. 원본 OSC progress는 현재 Zellij 구독 API에서 제공하지 않으며
+  `progress_available=false`로 표시한다.
+- pane 종료 통지나 취소 없이 subscribe 스트림이 끝나면 관측 오류로 처리해
+  마지막 화면의 Working을 유지하지 않고 Unknown으로 전환한다.
+- Codex의 `›`/`»` 및 점자 애니메이션 입력창을 인식하고 현재 입력창 앞의
+  작업 표시를 판정한다. 잘린 중단 안내, 줄바꿈, 후속 입력 큐도 처리한다.
+- Codex 미인식 화면은 `default_known_agent_idle_fallback`으로 Idle 후보가 된다.
+  Working에서 명시적인 대기 표시 없이 전환할 때는 100ms 간격 3회 재확인하며,
+  기존 700ms 상한을 유지한다. 그동안 새 Working/Blocked 표시나 기록 뷰어가
+  나타나면 후보를 취소한다. 작업 시간이 길다는 이유만으로 Idle로 바꾸지 않는다.
+- 대화 기록 뷰어는 기존 상태를 보존한다. 새 화면 형태를 미인식하면 실제 작업
+  또는 승인 대기를 Idle로 분류할 수 있으므로 Idle을 작업 성공의 증명으로 쓰지 않는다.
+
+실제 실행 중인 감지기의 근거는 다음 명령으로 확인한다. `<agent-id>`는
+`GET /v1/agents` 응답의 `agents[].agent.id`다.
+
+```sh
+zellij-agent agent explain <agent-id>
+zellij-agent agent explain --json <agent-id>
+```
+
+`GET /v1/agents/{agent-id}/explain`은 상태를 변경하지 않고 다음을 반환한다.
+
+- `state`, `state_reason`, `matched_rule`: 현재 발행한 상태와 판정 근거
+- `detection.detection`: 최신 입력에 대한 후보 판정 (재확인 중에는 state와 다름)
+- `pending_idle`, `idle_confirmations`, `startup_grace`: 전환 유예 상태
+- `observed_at`: 마지막 화면 변경 관측 시각
+- `title_available`, `title_source`, `title_used_for_detection`, `title_observed_at`:
+  제목 가용 여부·출처·실제 사용 여부·관측 시각
+- `detection.rules`: 우선순위 순 규칙별 영역과 일치 여부, 최대 1,200자 근거
+  (`truncated=true`이면 끝부분만 표시; 실제 판정은 전체 영역 사용)
+
+제목, 화면, 진단 근거와 타이머는 일시적인 관측 데이터다. DB에는 기존 상태
+필드만 저장하고 daemon 재시작 후 새 관측으로 복원한다. 원본 OSC 확보나 규칙
+원격 업데이트는 이번 구현에 포함하지 않는다.
+
+## Herdr 조사 기록 (2026-07-28)
+
+아래는 당시 Herdr 소스 기준의 조사 기록이며 위의 현재 구현과 구분한다.
 
 - 조사 기준일: 2026-07-28
 - 상태 종류: `idle`, `working`, `blocked`, `unknown`

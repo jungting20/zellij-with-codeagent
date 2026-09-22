@@ -3,29 +3,33 @@ package codingagent
 import (
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 type RegionType string
 
 const (
-	RegionWholeRecent             RegionType = "whole_recent"
-	RegionBottomNonEmptyLines     RegionType = "bottom_non_empty_lines"
-	RegionAfterLastPromptMarker   RegionType = "after_last_prompt_marker"
-	RegionPromptBoxBody           RegionType = "prompt_box_body"
-	RegionAfterLastHorizontalRule RegionType = "after_last_horizontal_rule"
-	RegionOSCTitle                RegionType = "osc_title"
-	RegionOSCProgress             RegionType = "osc_progress"
+	RegionWholeRecent               RegionType = "whole_recent"
+	RegionBottomNonEmptyLines       RegionType = "bottom_non_empty_lines"
+	RegionAfterLastPromptMarker     RegionType = "after_last_prompt_marker"
+	RegionBeforeCurrentPromptMarker RegionType = "before_current_prompt_marker"
+	RegionCurrentPromptMarker       RegionType = "current_prompt_marker"
+	RegionPromptBoxBody             RegionType = "prompt_box_body"
+	RegionAfterLastHorizontalRule   RegionType = "after_last_horizontal_rule"
+	RegionOSCTitle                  RegionType = "osc_title"
+	RegionOSCProgress               RegionType = "osc_progress"
 )
 
 type Region struct {
-	Type  RegionType
-	Lines int
+	Type  RegionType `json:"type"`
+	Lines int        `json:"lines,omitempty"`
 }
 
 func convertRegion(raw regionYAML) (Region, error) {
 	region := Region{Type: RegionType(strings.TrimSpace(raw.Type)), Lines: raw.Lines}
 	switch region.Type {
-	case RegionWholeRecent, RegionAfterLastPromptMarker, RegionPromptBoxBody,
+	case RegionWholeRecent, RegionAfterLastPromptMarker, RegionBeforeCurrentPromptMarker, RegionCurrentPromptMarker, RegionPromptBoxBody,
 		RegionAfterLastHorizontalRule, RegionOSCTitle, RegionOSCProgress:
 		return region, nil
 	case RegionBottomNonEmptyLines:
@@ -45,10 +49,23 @@ func selectRegion(region Region, input DetectionInput) string {
 	case RegionBottomNonEmptyLines:
 		return bottomNonEmptyLines(input.Screen, region.Lines)
 	case RegionAfterLastPromptMarker:
-		if index := strings.LastIndex(input.Screen, "›"); index >= 0 {
-			return input.Screen[index+len("›"):]
+		lines := strings.Split(input.Screen, "\n")
+		if index := lastPromptLine(lines); index >= 0 {
+			return strings.Join(lines[index+1:], "\n")
 		}
 		return input.Screen
+	case RegionBeforeCurrentPromptMarker:
+		lines := strings.Split(input.Screen, "\n")
+		if index := currentPromptLine(lines); index >= 0 {
+			return strings.Join(lines[:index], "\n")
+		}
+		return input.Screen
+	case RegionCurrentPromptMarker:
+		lines := strings.Split(input.Screen, "\n")
+		if index := currentPromptLine(lines); index >= 0 {
+			return lines[index]
+		}
+		return ""
 	case RegionPromptBoxBody:
 		return promptBoxBody(input.Screen)
 	case RegionAfterLastHorizontalRule:
@@ -60,6 +77,39 @@ func selectRegion(region Region, input DetectionInput) string {
 	default:
 		return ""
 	}
+}
+
+// Prompt boundaries are complete lines, not quoted marker characters in output.
+// Codex's prompt animation can replace the space after either marker with braille.
+func lastPromptLine(lines []string) int {
+	for index := len(lines) - 1; index >= 0; index-- {
+		line := strings.TrimSpace(lines[index])
+		marker, size := utf8.DecodeRuneInString(line)
+		if marker != '›' && marker != '»' {
+			continue
+		}
+		rest := line[size:]
+		separator, _ := utf8.DecodeRuneInString(rest)
+		if rest == "" || unicode.IsSpace(separator) || (separator >= '\u2800' && separator <= '\u28ff') {
+			return index
+		}
+	}
+	return -1
+}
+
+func currentPromptLine(lines []string) int {
+	index := lastPromptLine(lines)
+	if index < 0 {
+		return -1
+	}
+	// A subsequent response/status means this is a submitted, historical prompt.
+	for _, line := range lines[index+1:] {
+		first, _ := utf8.DecodeRuneInString(strings.TrimSpace(line))
+		if strings.ContainsRune("•◦■✗✓─", first) {
+			return -1
+		}
+	}
+	return index
 }
 
 func bottomNonEmptyLines(screen string, count int) string {

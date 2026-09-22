@@ -16,7 +16,8 @@ import (
 )
 
 type scriptedSubscriptionRunner struct {
-	fn func(ctx context.Context, spec zellij.CommandSpec, pw *io.PipeWriter)
+	fn      func(ctx context.Context, spec zellij.CommandSpec, pw *io.PipeWriter)
+	waitErr error
 }
 
 func (r *scriptedSubscriptionRunner) Start(ctx context.Context, spec zellij.CommandSpec) (*SubscriptionStream, error) {
@@ -30,9 +31,91 @@ func (r *scriptedSubscriptionRunner) Start(ctx context.Context, spec zellij.Comm
 	return &SubscriptionStream{
 		Stdout: pr,
 		Wait: func() error {
-			return nil
+			return r.waitErr
 		},
 	}, nil
+}
+
+func TestSubscriptionManagerUnexpectedExitInvalidatesLastObservation(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		paneClosed bool
+		canceled   bool
+		readErr    error
+		waitErr    error
+		wantError  string
+	}{
+		{name: "clean unexpected exit", wantError: "subscribe process exited unexpectedly"},
+		{name: "read error already reported", readErr: errors.New("subscribe read failed"), wantError: "subscribe read failed"},
+		{name: "process error already reported", waitErr: errors.New("subscribe wait failed"), wantError: "subscribe wait failed"},
+		{name: "intentional pane close", paneClosed: true},
+		{name: "canceled subscription", canceled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reg := registry.New()
+			record, err := reg.RegisterPane(registry.RegisterPaneRequest{
+				ID: "coder", ZellijPaneID: "terminal_24", Role: "coding-agent",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			observer := &recordingPaneObserver{}
+			bus := eventbus.New()
+			runner := &scriptedSubscriptionRunner{
+				waitErr: test.waitErr,
+				fn: func(_ context.Context, _ zellij.CommandSpec, pw *io.PipeWriter) {
+					if test.paneClosed {
+						_, _ = io.WriteString(pw, `{"name":"pane_closed","pane_id":"terminal_24"}`+"\n")
+						return
+					}
+					_, _ = io.WriteString(pw, `{"name":"pane_update","pane_id":"terminal_24","viewport":["• Working (12s • esc to interrupt)"]}`+"\n")
+					if test.canceled {
+						cancel()
+					}
+					if test.readErr != nil {
+						_ = pw.CloseWithError(test.readErr)
+					}
+				},
+			}
+			mgr := NewSubscriptionManager(SubscriptionManagerOptions{
+				Registry: reg, Backend: zellij.NewBackend(zellij.Options{}),
+				Bus: bus, Observer: observer, Runner: runner,
+			})
+			subscription := &paneSubscription{
+				ctx: ctx, cancel: cancel, done: make(chan struct{}),
+				key: subscriptionKey{paneID: record.ID, generation: record.Generation},
+			}
+			mgr.cancelByPaneID[record.ID] = subscription
+			mgr.run(record, subscription, ctx)
+
+			observer.mu.Lock()
+			defer observer.mu.Unlock()
+			if test.wantError != "" {
+				if len(observer.outputs) != 1 || observer.outputs[0] != "• Working (12s • esc to interrupt)" {
+					t.Fatalf("outputs = %#v, want valid working observation before EOF", observer.outputs)
+				}
+				if len(observer.errors) != 1 || observer.errors[0].Error() != test.wantError {
+					t.Fatalf("errors = %v, want one %q notification", observer.errors, test.wantError)
+				}
+			} else if len(observer.errors) != 0 {
+				t.Fatalf("intentional exit generated errors: %v", observer.errors)
+			}
+			if test.paneClosed && (len(observer.closed) != 1 || observer.closed[0] != record.ID) {
+				t.Fatalf("closed = %#v, want pane close notification", observer.closed)
+			}
+			errorEvents := 0
+			for _, event := range bus.Recent(0) {
+				if event.Type == eventbus.TypeSubscribeError {
+					errorEvents++
+				}
+			}
+			if errorEvents != len(observer.errors) {
+				t.Fatalf("subscribe error events = %d, want %d observer error notifications", errorEvents, len(observer.errors))
+			}
+		})
+	}
 }
 
 type blockingStartSubscriptionRunner struct {
@@ -62,6 +145,42 @@ type blockingPaneObserver struct {
 	mu      sync.Mutex
 	outputs []string
 	once    sync.Once
+}
+
+func TestSubscriptionManagerDeliversBlankViewportToClearEarlierEvidence(t *testing.T) {
+	reg := registry.New()
+	record, err := reg.RegisterPane(registry.RegisterPaneRequest{
+		ID: "coder", ZellijPaneID: "terminal_24", Role: "coding-agent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingPaneObserver{}
+	mgr := NewSubscriptionManager(SubscriptionManagerOptions{
+		Registry: reg, Bus: eventbus.New(), Observer: observer,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	subscription := &paneSubscription{
+		ctx: ctx, cancel: cancel, done: make(chan struct{}),
+		key: subscriptionKey{paneID: record.ID, generation: record.Generation},
+	}
+	mgr.cancelByPaneID[record.ID] = subscription
+	for _, line := range []string{
+		`{"event":"pane_update","pane_id":"terminal_24","viewport":[]}`,
+		`{"event":"pane_update","pane_id":"terminal_24","viewport":["Working (Esc to interrupt)"]}`,
+		`{"event":"pane_update","pane_id":"terminal_24","viewport":["  ",""]}`,
+		`{"event":"pane_update","pane_id":"terminal_24","viewport":[]}`,
+	} {
+		mgr.handleLine(record, subscription, line)
+	}
+	if len(observer.outputs) != 3 || observer.outputs[0] != "" || observer.outputs[1] != "Working (Esc to interrupt)" || observer.outputs[2] != "" {
+		t.Fatalf("observed output = %#v, want blank, working, blank without duplicate", observer.outputs)
+	}
+	current, err := reg.GetPane(record.ID)
+	if err != nil || current.LastOutput != "" {
+		t.Fatalf("current = %#v, error = %v; want cleared latest output", current, err)
+	}
 }
 
 func (o *blockingPaneObserver) PaneOpened(registry.PaneRecord) {}

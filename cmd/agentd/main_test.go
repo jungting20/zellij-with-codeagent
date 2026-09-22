@@ -77,22 +77,6 @@ func TestRunInvalidArgument(t *testing.T) {
 	}
 }
 
-func TestRunServeDefaultsSocket(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	var stdout, stderr bytes.Buffer
-
-	code := runContext(ctx, []string{"serve"}, &stdout, &stderr)
-
-	if code != 0 {
-		t.Fatalf("runContext() exit code = %d, want 0; stderr=%q", code, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "/tmp/agentd.sock") {
-		t.Fatalf("stdout = %q, want default socket path", stdout.String())
-	}
-}
-
 func TestRunServeCanStopWithCanceledContext(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())

@@ -42,6 +42,10 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, BadRequest("agent id and action are required"), http.StatusBadRequest)
 		return
 	}
+	if action == "explain" {
+		s.handleExplainAgent(w, r, agentID)
+		return
+	}
 	if action != "focus" && action != "pin" && action != "task-alias" {
 		writeAPIError(w, APIError{Code: CodeNotFound, Message: "agent action not found"}, http.StatusNotFound)
 		return

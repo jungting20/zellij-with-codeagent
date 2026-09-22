@@ -36,6 +36,11 @@ func (s *Service) Reconcile(ctx context.Context, _ ReconcileRequest) (ReconcileR
 	for _, sessionID := range sessions {
 		livePanes, err := s.backend.ListPanes(ctx, zellij.ListPanesRequest{Session: string(sessionID)})
 		if err != nil {
+			// This reconciliation pass will not deliver its collected metadata.
+			// Clear earlier title evidence instead of retaining a stale spinner.
+			for _, record := range records {
+				s.notifyPaneMetadata(record, PaneMetadata{})
+			}
 			s.publishRuntimeHealth(fmt.Sprintf("reconcile failed for session %q: %v", sessionID, err))
 			return ReconcileResponse{}, err
 		}
@@ -71,6 +76,9 @@ func (s *Service) Reconcile(ctx context.Context, _ ReconcileRequest) (ReconcileR
 		}
 
 		pane := paneFromRecord(reconciled)
+		if live, ok := liveByKey[livePaneKey{session: reconciled.SessionID, paneID: reconciled.ZellijPaneID}]; ok && !live.Exited {
+			s.notifyPaneMetadata(reconciled, PaneMetadata{Title: live.Title, TitleAvailable: live.TitleAvailable})
+		}
 		response.Panes = append(response.Panes, pane)
 		switch pane.Status {
 		case PaneStatusRunning, PaneStatusStarting:
@@ -89,6 +97,18 @@ func (s *Service) Reconcile(ctx context.Context, _ ReconcileRequest) (ReconcileR
 	}
 
 	return response, nil
+}
+
+func (s *Service) notifyPaneMetadata(record registry.PaneRecord, metadata PaneMetadata) {
+	observer, ok := s.observer.(PaneMetadataObserver)
+	if !ok {
+		return
+	}
+	current, err := s.currentPaneGeneration(record)
+	if err != nil || isTerminalStatus(current.Status) {
+		return
+	}
+	observer.PaneMetadata(current, metadata)
 }
 
 func (s *Service) reconcileRecord(record registry.PaneRecord, liveByKey map[livePaneKey]zellij.Pane) (registry.PaneRecord, error) {

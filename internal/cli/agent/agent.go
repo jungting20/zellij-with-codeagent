@@ -66,6 +66,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, newClient Cli
 		return runNext(args[1:], stdout, stderr, newClient, cfg)
 	case "prev":
 		return runPrevious(args[1:], stdout, stderr, newClient, cfg)
+	case "explain":
+		return runExplain(args[1:], stdout, stderr, newClient)
 	case "dashboard":
 		return runDashboard(args[1:], stdin, stdout, stderr, newClient, cfg)
 	default:
@@ -635,6 +637,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  start   Manage a coding agent in the current Zellij pane")
 	fmt.Fprintln(w, "  next    Focus the next managed coding agent")
 	fmt.Fprintln(w, "  prev    Focus the previous managed coding agent")
+	fmt.Fprintln(w, "  explain  Show the evidence for an agent's detected state")
 	fmt.Fprintln(w, "  dashboard  Show and focus managed coding agents")
 	fmt.Fprintln(w)
 	printStartSummary(w)

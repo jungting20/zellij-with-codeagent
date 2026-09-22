@@ -48,6 +48,11 @@ type monitoredAgent struct {
 	latestInput DetectionInput
 	hasInput    bool
 	graceTimer  Timer
+	// Observation metadata is transient and rebuilt after pane recovery.
+	observedAt      time.Time
+	paneTitle       string
+	titleAvailable  bool
+	titleObservedAt time.Time
 
 	idleConfirmations int
 	idleToken         uint64
@@ -75,6 +80,10 @@ func (m *Monitor) PaneOpened(pane registry.PaneRecord) {
 	m.stopTimersLocked(entry)
 	entry.latestInput = DetectionInput{}
 	entry.hasInput = false
+	entry.observedAt = time.Time{}
+	entry.paneTitle = ""
+	entry.titleAvailable = false
+	entry.titleObservedAt = time.Time{}
 	m.nextToken++
 	entry.token = m.nextToken
 	entry.paneGeneration = pane.Generation
@@ -85,6 +94,7 @@ func (m *Monitor) PaneOpened(pane registry.PaneRecord) {
 }
 
 var _ runtime.PaneObserver = (*Monitor)(nil)
+var _ runtime.PaneMetadataObserver = (*Monitor)(nil)
 
 func NewMonitor(opts MonitorOptions) *Monitor {
 	if opts.Now == nil {
@@ -165,10 +175,45 @@ func (m *Monitor) PaneOutput(pane registry.PaneRecord, renderedText string) {
 	}
 	entry.latestInput.Screen = renderedText
 	entry.hasInput = true
+	entry.observedAt = m.opts.Now()
 	if entry.graceTimer != nil {
 		return
 	}
 	m.evaluateLocked(entry)
+}
+
+// PaneMetadata receives fresh, generation-checked title observations from
+// runtime reconciliation. Zellij titles may be manually renamed, so only known
+// active title signals are evidence; an ordinary name is not proof of Idle.
+func (m *Monitor) PaneMetadata(pane registry.PaneRecord, metadata runtime.PaneMetadata) {
+	if m == nil || pane.Role != "coding-agent" || m.opts.Store == nil {
+		return
+	}
+	record, err := m.opts.Store.GetByPane(runtime.PaneID(pane.ID))
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry := m.monitoring[record.ID]
+	if !sameMonitoredPane(entry, record, pane) {
+		return
+	}
+	entry.paneTitle = ""
+	entry.titleAvailable = metadata.TitleAvailable
+	entry.titleObservedAt = time.Time{}
+	entry.latestInput.OSCTitle = ""
+	if metadata.TitleAvailable {
+		entry.paneTitle = metadata.Title
+		entry.titleObservedAt = m.opts.Now()
+		entry.latestInput.OSCTitle = m.opts.Detector.activePaneTitle(record.Kind, metadata.Title)
+		if entry.latestInput.OSCTitle != "" {
+			entry.hasInput = true
+		}
+	}
+	if entry.graceTimer == nil && entry.hasInput {
+		m.evaluateLocked(entry)
+	}
 }
 
 func (m *Monitor) PaneClosed(pane registry.PaneRecord) {
@@ -214,6 +259,10 @@ func (m *Monitor) PaneError(pane registry.PaneRecord, cause error) {
 	m.stopTimersLocked(entry)
 	entry.latestInput = DetectionInput{}
 	entry.hasInput = false
+	entry.observedAt = time.Time{}
+	entry.paneTitle = ""
+	entry.titleAvailable = false
+	entry.titleObservedAt = time.Time{}
 	m.nextToken++
 	entry.token = m.nextToken
 	m.updateStateLocked(entry, StateUpdate{State: StateUnknown, Reason: reason})

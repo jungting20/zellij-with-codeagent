@@ -134,7 +134,7 @@ func TestRegionBottomNonEmptyLinesPreservesInterveningAndTrailingBlankLines(t *t
 func TestRegionAfterLastPromptMarkerUsesLastMarkerOrFullScreen(t *testing.T) {
 	screen := "history\n›\nold response\n›\nlatest response"
 	region := Region{Type: RegionAfterLastPromptMarker}
-	if got, want := selectRegion(region, DetectionInput{Screen: screen}), "\nlatest response"; got != want {
+	if got, want := selectRegion(region, DetectionInput{Screen: screen}), "latest response"; got != want {
 		t.Fatalf("selectRegion(with marker) = %q, want %q", got, want)
 	}
 	if got := selectRegion(region, DetectionInput{Screen: "full screen"}); got != "full screen" {

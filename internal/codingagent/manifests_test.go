@@ -47,7 +47,7 @@ func TestEmbeddedManifests(t *testing.T) {
 		{name: "codex interrupted conversation excludes working footer", kind: KindCodex, fixture: "testdata/codex/idle-conversation-interrupted.txt", inputField: "screen", wantState: StateIdle, wantRule: "conversation_interrupted", wantPriority: 550, wantIdle: true},
 		{name: "codex prompt idle", kind: KindCodex, fixture: "testdata/codex/idle-screen-prompt.txt", inputField: "screen", wantState: StateIdle, wantRule: "screen_prompt_idle", wantPriority: 200, wantIdle: true},
 		{name: "codex osc idle", kind: KindCodex, fixture: "testdata/codex/idle-osc-title.txt", inputField: "osc_title", wantState: StateIdle, wantRule: "osc_title_idle", wantPriority: 100, wantIdle: true},
-		{name: "codex unmatched preserves state", kind: KindCodex, fixture: "testdata/codex/idle-unmatched.txt", inputField: "screen", wantSkipUpdate: true, wantFallback: true, wantReason: "default_known_agent_preserve_state_fallback"},
+		{name: "codex unmatched idle candidate", kind: KindCodex, fixture: "testdata/codex/idle-unmatched.txt", inputField: "screen", wantState: StateIdle, wantFallback: true},
 
 		{name: "gemini apply confirmation wins", kind: KindGemini, fixture: "testdata/gemini/blocked-apply-confirmation.txt", inputField: "screen", wantState: StateBlocked, wantRule: "apply_or_allow_change", wantPriority: 300, wantBlocker: true},
 		{name: "gemini working cancel hint", kind: KindGemini, fixture: "testdata/gemini/working-esc-cancel.txt", inputField: "screen", wantState: StateWorking, wantRule: "esc_cancel_working", wantPriority: 100, wantWorking: true},
@@ -193,4 +193,118 @@ func assertEmbeddedDetection(t *testing.T, detector *Detector, tt embeddedManife
 		}
 	}
 	t.Fatalf("winning rule %q not found in detector", got.RuleID)
+}
+
+func TestCodexAnimatedPrompt(t *testing.T) {
+	detector, loadErrors := LoadEmbeddedDetector()
+	if len(loadErrors) != 0 {
+		t.Fatalf("LoadEmbeddedDetector() errors = %v", loadErrors)
+	}
+	for _, prompt := range []string{"›", "»"} {
+		for _, separator := range []string{" ", "⠁", "⠁ "} {
+			for _, working := range []bool{false, true} {
+				name := prompt + separator
+				if working {
+					name += "working"
+				}
+				t.Run(name, func(t *testing.T) {
+					header := "Worked for 3m 30s · done 5:41 PM"
+					want := StateIdle
+					if working {
+						header = "• Working (59s • esc to interrupt)"
+						want = StateWorking
+					}
+					screen := header + "\n\n⠁   ⠈         ⠄\n" + prompt + separator +
+						"Ask Codex to do anything    ⠈\n  ⠠⢀      ⠄\n  gpt-6-astra ultra · ~/project"
+					got, err := detector.Detect(KindCodex, DetectionInput{Screen: screen})
+					if err != nil || got.State != want {
+						t.Fatalf("Detect() = %+v, %v; want %s", got, err, want)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestCodexLiveActivitySurvivesLayoutAndInterruptHintChanges(t *testing.T) {
+	detector, loadErrors := LoadEmbeddedDetector()
+	if len(loadErrors) != 0 {
+		t.Fatalf("LoadEmbeddedDetector() errors = %v", loadErrors)
+	}
+	for _, activity := range []string{
+		"• Working (1m 32s • esc to i…",
+		"• Working (1m 32s • ctrl+c to interrupt)",
+		"• Working (1m 32s)",
+		"Working (1m 32s)",
+		"◦ Reading source files (12s • esc to interrupt)",
+		"• Working (1m 32s • esc to\n  interrupt)",
+		"• Working (1m\n  32s • esc to interrupt)",
+		"• Waiting for background terminal (2m 25s • esc to interrupt) · 1 background terminal running · /ps to view",
+		"• Working (25s • esc to interrupt)\n\n• Queued follow-up inputs\n  queued message one\n  queued message two\n  queued message three\n  queued message four\n  queued message five",
+		"• Working (25s • esc to interrupt)\n\n• Messages to be submitted after next tool call (press ctrl+c to interrupt and send immediately)\n  queued follow-up",
+		"• Working (25s • esc to interrupt)\n\n• Messages to be submitted at end of turn\n  queued follow-up",
+		"■ Conversation interrupted\n• Working (3s • esc to interrupt)",
+	} {
+		t.Run(activity, func(t *testing.T) {
+			screen := "› previous request\n• Previous response\n\n" + activity + "\n\n⠁     ⠈\n»⠁Ask Codex to do anything\n  ⠠⢀\n  model footer"
+			got, err := detector.Detect(KindCodex, DetectionInput{Screen: screen})
+			if err != nil || got.State != StateWorking || got.RuleID != "screen_working_fallback" || !got.VisibleWorking {
+				t.Fatalf("Detect() = %+v, %v, want visible working from current activity", got, err)
+			}
+		})
+	}
+}
+
+func TestCodexHistoricalSignalsDoNotOverrideCurrentIdlePrompt(t *testing.T) {
+	detector, loadErrors := LoadEmbeddedDetector()
+	if len(loadErrors) != 0 {
+		t.Fatalf("LoadEmbeddedDetector() errors = %v", loadErrors)
+	}
+	for _, history := range []string{
+		"• Working (12s • esc to interrupt)\n• Finished the change.",
+		"• Working (12s)\n✓ Finished",
+		"• Working (12s)\n✗ Failed",
+		"• Working (12s)\n■ Conversation interrupted",
+		"• Reconnect failed — check the endpoint, then relaunch (12s)",
+		"allow command?\npress enter to confirm or esc to cancel\n• Done",
+		"Do you want to allow this? [y/n]\n• Done",
+	} {
+		t.Run(history, func(t *testing.T) {
+			screen := history + "\n»⠁Ask Codex to do anything\n  model footer"
+			got, err := detector.Detect(KindCodex, DetectionInput{Screen: screen})
+			if err != nil || got.State != StateIdle || !got.VisibleIdle {
+				t.Fatalf("Detect() = %+v, %v, want visible idle despite historical signals", got, err)
+			}
+		})
+	}
+	got, err := detector.Detect(KindCodex, DetectionInput{Screen: "»⠁Do you want to allow command? [y/n]\n  model footer"})
+	if err != nil || got.State != StateIdle {
+		t.Fatalf("prompt contents misclassified as blocker: %+v, %v", got, err)
+	}
+}
+
+func TestCodexLiveBlockersAndTranscriptViewerAfterAnimatedPrompt(t *testing.T) {
+	detector, loadErrors := LoadEmbeddedDetector()
+	if len(loadErrors) != 0 {
+		t.Fatalf("LoadEmbeddedDetector() errors = %v", loadErrors)
+	}
+	for _, test := range []struct {
+		name   string
+		screen string
+		state  State
+		rule   string
+		skip   bool
+	}{
+		{"approval", "press enter to confirm or esc to cancel", StateBlocked, "live_strong_blocker", false},
+		{"question", "enter to submit all", StateBlocked, "live_strong_blocker", false},
+		{"legacy approval", "Do you want to continue? [y/n]", StateBlocked, "weak_blocker", false},
+		{"viewer", "↑/↓ to scroll · pgup/pgdn to page · home/end to jump\nq to quit · esc/← to edit prev", "", "transcript_viewer", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := detector.Detect(KindCodex, DetectionInput{Screen: "»⠁previous request\n" + test.screen})
+			if err != nil || got.State != test.state || got.RuleID != test.rule || got.SkipStateUpdate != test.skip {
+				t.Fatalf("Detect() = %+v, %v, want %s/%s skip:%t", got, err, test.state, test.rule, test.skip)
+			}
+		})
+	}
 }
