@@ -47,6 +47,8 @@ func (m Model) updateWorktreeMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "":
 		switch msg.String() {
 		case "g":
+			return m.openLazygit()
+		case "t":
 			return m.focusChildWorktree()
 		case "a":
 			m.worktrees = nil
@@ -126,7 +128,7 @@ func (m Model) worktreeMenuView() string {
 	lines := []string{"Worktree", p.directory}
 	switch p.mode {
 	case "":
-		lines = append(lines, "a: 추가", "s: 자식 워크트리에 셸 명령어 실행", "m: merge", "g: 자식 워크트리 탭으로 이동", "Esc 닫기")
+		lines = append(lines, "a: 추가", "s: 자식 워크트리에 셸 명령어 실행", "m: merge", "t: 자식 워크트리 탭으로 이동", "g: lazygit", "Esc 닫기")
 		if p.summary != "" {
 			lines = append(lines, p.summary)
 		}

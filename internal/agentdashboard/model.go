@@ -414,10 +414,8 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openFollowups()
 	case "m":
 		return m.openMerge()
-	case "w":
-		return m.openWorktreeMenu()
 	case "g":
-		return m.openLazygit()
+		return m.openWorktreeMenu()
 	case "i":
 		return m.openInput()
 	case "I":

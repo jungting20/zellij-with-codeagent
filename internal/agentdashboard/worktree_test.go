@@ -89,7 +89,7 @@ func TestWorktreeNameBeforePicker(t *testing.T) {
 	m := inputModel(t, c.fakeClient, false)
 	m.client = c
 	m.rows[0].Pane.CWD = repo
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
 	m = concreteModel(t, next)
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	m = concreteModel(t, next)
@@ -133,7 +133,7 @@ func TestWorktreeNameCancel(t *testing.T) {
 	m := inputModel(t, c.fakeClient, false)
 	m.client = c
 	m.rows[0].Pane.CWD = t.TempDir()
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
 	m = concreteModel(t, next)
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = concreteModel(t, next)

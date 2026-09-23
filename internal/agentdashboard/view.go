@@ -69,9 +69,9 @@ func (m Model) View() string {
 	}
 	lines = append(lines, footerStyle.Render(separator))
 
-	help := "f 후속 i input g lazygit Space pin d close Enter focus R refresh q quit"
+	help := "f 후속 i input g worktree Space pin d close Enter focus R refresh q quit"
 	if width >= 100 {
-		help = "f 후속 t ticket i input I nvim g lazygit w worktree m merge a alias Space pin d close Enter focus R refresh q quit"
+		help = "f 후속 t ticket i input I nvim g worktree m merge a alias Space pin d close Enter focus R refresh q quit"
 	}
 	lines = append(lines, help)
 	for index := range lines {

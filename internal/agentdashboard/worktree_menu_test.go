@@ -14,8 +14,8 @@ import (
 func TestWorktreeMenuShellAndCancel(t *testing.T) {
 	m := inputModel(t, &fakeClient{}, false)
 	m.rows[0].Pane.CWD = "/repo"
-	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
-	if m.worktrees == nil || m.worktreeNaming || !strings.Contains(m.View(), "m: merge") {
+	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	if m.worktrees == nil || m.worktreeNaming || !strings.Contains(m.View(), "m: merge") || !strings.Contains(m.View(), "g: lazygit") || !strings.Contains(m.View(), "t: 자식 워크트리 탭으로 이동") {
 		t.Fatal(m.View())
 	}
 	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
@@ -49,7 +49,7 @@ func TestWorktreeMenuShellAndCancel(t *testing.T) {
 }
 func TestWorktreeMenuMergeUsesExistingFlow(t *testing.T) {
 	m := inputModel(t, &fakeClient{}, false)
-	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
 	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
 	if m.worktrees != nil || !strings.Contains(m.statusText, "자식 worktree agent가 없습니다") {
 		t.Fatal(m.statusText)
@@ -68,7 +68,7 @@ func TestWorktreeShellKeepsSelectedParentAcrossRefresh(t *testing.T) {
 		{Agent: transport.Agent{ID: "child"}, Pane: transport.Pane{ID: "child-pane", ParentPaneID: "parent-pane", CWD: childDir, Status: "running"}},
 		{Agent: transport.Agent{ID: "other"}, Pane: transport.Pane{ID: "other-pane", CWD: otherDir, Status: "running"}},
 	}}
-	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
 	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
 	m.rows = []transport.AgentWithPane{client.listResponse.Agents[2]}
 	m.worktrees.prompt.SetValue("printf done > marker")
@@ -99,13 +99,13 @@ func TestWorktreeGoFocusesDirectChildAndGuardsRepeats(t *testing.T) {
 		transport.AgentWithPane{Agent: transport.Agent{ID: "unrelated"}, Pane: transport.Pane{ParentPaneID: "other", SessionID: "worktree-agent", Status: "running"}},
 		transport.AgentWithPane{Agent: transport.Agent{ID: "child"}, Pane: transport.Pane{ID: "child-pane", ParentPaneID: "parent-pane", SessionID: "worktree-agent", Status: "running"}},
 	)
-	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
 	m.selected = 2 // Refresh/selection changes must not change the menu's parent.
-	m, cmd := inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	m, cmd := inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
 	if cmd == nil || !m.focusing || !m.worktrees.busy {
 		t.Fatal("missing focus command")
 	}
-	if _, repeat := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")}); repeat != nil {
+	if _, repeat := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")}); repeat != nil {
 		t.Fatal("duplicate focus")
 	}
 	next, _ := m.Update(cmd())
@@ -116,15 +116,15 @@ func TestWorktreeGoFocusesDirectChildAndGuardsRepeats(t *testing.T) {
 }
 func TestWorktreeGoWithoutChildKeepsMenu(t *testing.T) {
 	m := inputModel(t, &fakeClient{}, false)
-	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
-	m, cmd := inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	m, cmd := inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
 	if cmd != nil || m.worktrees == nil || m.quitting || !strings.Contains(m.View(), "이동할 자식") {
 		t.Fatal(m.View())
 	}
 }
 func TestWorktreeGoFailureAllowsRetry(t *testing.T) {
 	m := inputModel(t, &fakeClient{}, false)
-	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	m, _ = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
 	m.focusing = true
 	m.worktrees.busy = true
 	next, _ := m.Update(focusResultMsg{err: errors.New("pane closed")})

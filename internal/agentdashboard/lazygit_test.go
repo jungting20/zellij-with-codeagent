@@ -25,8 +25,12 @@ func TestLazygitUsesSelectedPaneDirectoryAndReturns(t *testing.T) {
 			t.Fatalf("command=%v error=%v", cmd, err)
 		}
 		m, run := inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+		if run != nil || m.worktrees == nil || m.gitRunning {
+			t.Fatal("first g did not open worktree menu")
+		}
+		m, run = inputKey(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
 		if run == nil || !m.gitRunning {
-			t.Fatal("g did not launch lazygit")
+			t.Fatal("gg did not launch lazygit")
 		}
 		next, duplicate := m.openLazygit()
 		if duplicate != nil {
