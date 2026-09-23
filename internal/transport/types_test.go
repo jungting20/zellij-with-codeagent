@@ -14,6 +14,7 @@ import (
 
 func TestAgentStartRequestRoundTripPreservesSourceAndArguments(t *testing.T) {
 	payload := []byte(`{
+		"new_pane": true,
 		"kind": "codex",
 			"cwd": "/workspace/project",
 			"access": "read-only",
@@ -27,6 +28,9 @@ func TestAgentStartRequestRoundTripPreservesSourceAndArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	converted := request.ToCodingAgent()
+	if !converted.NewPane || !StartAgentRequestFromCodingAgent(converted).NewPane {
+		t.Fatal("new pane launch option lost in transport conversion")
+	}
 	if converted.Kind != codingagent.KindCodex || converted.CWD != "/workspace/project" || converted.AccessMode != codingagent.AccessReadOnly || !converted.NotifyOnIdle || converted.SourceZellijSession != "physical-a" || converted.SourceZellijPaneID != "terminal_2" {
 		t.Fatalf("StartAgentRequest.ToCodingAgent() = %#v", converted)
 	}

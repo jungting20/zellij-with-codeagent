@@ -477,6 +477,7 @@ func (s *Service) createBackendPane(ctx context.Context, req CreatePaneRequest) 
 	}
 	if req.NewTab {
 		tabID, err := s.backend.CreateTab(ctx, zellij.CreateTabRequest{
+			NoFocus:      req.NoFocus,
 			Session:      req.ZellijSession,
 			Name:         req.TabName,
 			CWD:          req.CWD,
@@ -511,6 +512,7 @@ func (s *Service) createBackendPane(ctx context.Context, req CreatePaneRequest) 
 	}
 
 	zellijID, err := s.backend.CreatePane(ctx, zellij.CreatePaneRequest{
+		NoFocus: req.NoFocus,
 		Session: req.ZellijSession,
 		Name:    req.Name,
 		CWD:     req.CWD,

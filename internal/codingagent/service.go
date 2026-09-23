@@ -32,6 +32,9 @@ type AgentWithPane struct {
 }
 
 type StartAgentRequest struct {
+	// NewPane creates an independent pane instead of claiming the caller's pane.
+	// This launch option is transient; the created pane is persisted normally.
+	NewPane bool
 	// TargetSession places a child in a new tab named after its parent pane.
 	// It is a launch option; the resulting location is persisted on the pane.
 	TargetSession       string
@@ -255,6 +258,13 @@ func (s *Service) StartAgent(ctx context.Context, request StartAgentRequest) (St
 			createRequest.EnsureSession = true
 		}
 		response, createErr := s.RuntimeService.CreatePane(ctx, createRequest)
+		pane, err = response.Pane, createErr
+	} else if request.NewPane {
+		response, createErr := s.RuntimeService.CreatePane(ctx, runtime.CreatePaneRequest{
+			ID: created.PaneID, AgentID: runtime.AgentID(created.ID), Role: "coding-agent",
+			ZellijSession: sourceSession, NewTab: true, NoFocus: true,
+			Name: filepath.Base(cwd), Command: command, CWD: cwd,
+		})
 		pane, err = response.Pane, createErr
 	} else {
 		paneResponse, claimErr := s.RuntimeService.ClaimPane(ctx, runtime.ClaimPaneRequest{

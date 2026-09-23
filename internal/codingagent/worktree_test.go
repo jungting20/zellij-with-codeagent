@@ -17,6 +17,33 @@ func (f *childRuntime) CreatePane(_ context.Context, req runtime.CreatePaneReque
 	f.request = req
 	return runtime.CreatePaneResponse{Pane: runtime.Pane{ID: req.ID, ParentPaneID: req.ParentPaneID}}, f.err
 }
+
+func TestStartIndependentAgentCreatesNewTabWithoutClaimingDashboard(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		store := NewMemoryStore(nil)
+		rt := &childRuntime{serviceFakeRuntime: &serviceFakeRuntime{}}
+		if fail {
+			rt.err = errors.New("create failed")
+		}
+		service := NewService(ServiceOptions{RuntimeService: rt, Store: store, LifecycleMonitor: &serviceFakeMonitor{}, NewAgentID: func() ID { return "independent" }})
+		cwd := t.TempDir()
+		_, err := service.StartAgent(context.Background(), StartAgentRequest{
+			NewPane: true, Kind: KindCodex, CWD: cwd,
+			SourceZellijSession: "dashboard-session", SourceZellijPaneID: "terminal_42",
+		})
+		if (err != nil) != fail {
+			t.Fatalf("error = %v", err)
+		}
+		if len(rt.claimed) != 0 || !rt.request.NewTab || !rt.request.NoFocus || rt.request.ParentPaneID != "" || rt.request.ZellijSession != "dashboard-session" || rt.request.CWD != cwd || len(rt.request.Command) == 0 {
+			t.Fatalf("must create an independent executable pane: claims=%v request=%+v", rt.claimed, rt.request)
+		}
+		if fail {
+			if _, err := store.Get("independent"); !errors.Is(err, ErrNotFound) {
+				t.Fatal("failed launch retained its record")
+			}
+		}
+	}
+}
 func TestStartChildCreatesPaneAndRollsBackFailure(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		store := NewMemoryStore(nil)

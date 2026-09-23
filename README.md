@@ -100,6 +100,13 @@ dedicated dashboard:
 ./bin/zellij-agent agent dashboard
 ```
 
+Press `n` to start an agent in a directory saved by zoxide. Search the
+directory list, press Enter, choose Codex, Claude, Gemini, Cursor, or Hermes,
+then press Enter again. The dashboard uses `zoxide query --list`, so zoxide
+must be installed and have recorded at least one directory.
+The daemon launches the agent in a new tab while keeping focus on the dashboard; closing
+the dashboard or focusing the agent does not stop it.
+
 Press `f` on a Codex or Claude agent to manage its follow-up instructions.
 Use `a` to add, `e` to edit a queued instruction, `d` to cancel, and `p` to
 pause or resume automatic delivery. Enter saves; Alt+Enter inserts a newline.

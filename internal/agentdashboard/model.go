@@ -80,6 +80,7 @@ type panelSelection struct {
 
 type Model struct {
 	worktrees *worktreeMenu // Transient menu and shell execution results.
+	recent    *recentPopup  // Transient zoxide directory and agent selection.
 	ticket    *ticketPopup
 	followups *followupPopup // Transient editor; the daemon owns the durable queue.
 	// Merge selection and debounce are transient dashboard state.
@@ -177,6 +178,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case worktreeShellResultMsg:
 		return m.handleWorktreeShellResult(msg)
+	case recentDirectoriesMsg:
+		return m.handleRecentDirectories(msg)
+	case recentStartedMsg:
+		return m.handleRecentStarted(msg)
 	case ticketAgentConfigMsg:
 		return m.handleTicketAgentConfig(msg)
 	case ticketResultMsg:
@@ -375,6 +380,9 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.worktrees != nil {
 		return m.updateWorktreeMenuKey(msg)
 	}
+	if m.recent != nil {
+		return m.updateRecentKey(msg)
+	}
 	if m.ticket != nil {
 		return m.updateTicketKey(msg)
 	}
@@ -416,6 +424,8 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openMerge()
 	case "g":
 		return m.openWorktreeMenu()
+	case "n":
+		return m.openRecent()
 	case "i":
 		return m.openInput()
 	case "I":

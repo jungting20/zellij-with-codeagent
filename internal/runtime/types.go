@@ -133,6 +133,8 @@ type ClaimPaneResponse struct {
 }
 
 type CreatePaneRequest struct {
+	// NoFocus is a transient launch option that preserves client focus.
+	NoFocus bool
 	// ReuseParentTab makes NewTab a fallback when no live sibling exists.
 	// This is a transient creation policy; grouping uses persisted ParentPaneID.
 	ReuseParentTab bool

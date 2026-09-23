@@ -32,6 +32,11 @@ connection refused; timeouts and other errors do not justify replacing them.
 
 ## Stored data
 
+The agent start request's `new_pane` option is transient. It selects creation
+of an independent pane in a new tab instead of claiming the caller's pane.
+The resulting agent and pane use the existing persisted records and normal
+startup recovery; the option itself requires no schema migration.
+
 Schema version 2 adds follow-up queues to the existing data and metadata tables.
 Opening a version 1 database creates the new table transactionally and preserves
 all existing records and indexes; no database reset is required.

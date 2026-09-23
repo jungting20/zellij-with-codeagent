@@ -816,6 +816,7 @@ func TestCreatePaneCreatesNewTabAndRegistersTabMetadata(t *testing.T) {
 	service := newTestService(backend)
 
 	response, err := service.CreatePane(context.Background(), CreatePaneRequest{
+		NoFocus:       true,
 		ID:            "pane-1",
 		ZellijSession: "test-session",
 		Role:          "test",
@@ -832,6 +833,7 @@ func TestCreatePaneCreatesNewTabAndRegistersTabMetadata(t *testing.T) {
 		t.Fatalf("backend CreateTab calls = %d, want 1", len(backend.createTabRequests))
 	}
 	wantTabRequest := zellij.CreateTabRequest{
+		NoFocus: true,
 		Session: "test-session",
 		Name:    "agent-tests",
 		CWD:     "/workspace",
@@ -1694,6 +1696,7 @@ func (b *fakeBackend) CreateTab(_ context.Context, req zellij.CreateTabRequest) 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.createTabRequests = append(b.createTabRequests, zellij.CreateTabRequest{
+		NoFocus:      req.NoFocus,
 		Session:      req.Session,
 		Name:         req.Name,
 		CWD:          req.CWD,
@@ -1728,6 +1731,7 @@ func (b *fakeBackend) CreatePane(ctx context.Context, req zellij.CreatePaneReque
 		tabID = &clone
 	}
 	cloned := zellij.CreatePaneRequest{
+		NoFocus:  req.NoFocus,
 		Session:  req.Session,
 		Name:     req.Name,
 		CWD:      req.CWD,

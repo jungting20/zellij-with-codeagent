@@ -69,9 +69,9 @@ func (m Model) View() string {
 	}
 	lines = append(lines, footerStyle.Render(separator))
 
-	help := "f 후속 i input g worktree Space pin d close Enter focus R refresh q quit"
+	help := "n new f i input g worktree Space pin d close Enter focus R refresh q quit"
 	if width >= 100 {
-		help = "f 후속 t ticket i input I nvim g worktree m merge a alias Space pin d close Enter focus R refresh q quit"
+		help = "n 새 agent f 후속 t ticket i input I nvim g worktree m merge a alias Space pin d close Enter focus R refresh q quit"
 	}
 	lines = append(lines, help)
 	for index := range lines {
@@ -87,6 +87,9 @@ func (m Model) View() string {
 	}
 	if m.worktrees != nil {
 		return m.popupOverlay(base, m.worktreeMenuView(), (width-76)/2, 0)
+	}
+	if m.recent != nil {
+		return m.popupOverlay(base, m.recentView(), (width-72)/2, 0)
 	}
 	if m.ticket != nil {
 		return m.popupOverlay(base, m.ticketView(), (width-m.ticketPopupWidth())/2, 0)

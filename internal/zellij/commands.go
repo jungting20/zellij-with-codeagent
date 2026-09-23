@@ -24,6 +24,9 @@ func newActionCommand(binary, session, action string, args ...string) CommandSpe
 
 func createPaneCommand(binary, session string, req CreatePaneRequest) CommandSpec {
 	args := make([]string, 0, 10+len(req.Command))
+	if req.NoFocus {
+		args = append(args, "--no-focus")
+	}
 	if req.Name != "" {
 		args = append(args, "--name", req.Name)
 	}
@@ -46,6 +49,9 @@ func createPaneCommand(binary, session string, req CreatePaneRequest) CommandSpe
 
 func createTabCommand(binary, session string, req CreateTabRequest) CommandSpec {
 	args := make([]string, 0, 6+len(req.Command))
+	if req.NoFocus {
+		args = append(args, "--no-focus")
+	}
 	if req.LayoutString != "" {
 		args = append(args, "--layout-string", req.LayoutString)
 	}

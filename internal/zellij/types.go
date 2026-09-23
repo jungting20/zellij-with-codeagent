@@ -49,6 +49,7 @@ type Options struct {
 }
 
 type CreatePaneRequest struct {
+	NoFocus  bool
 	Session  string
 	Name     string
 	CWD      string
@@ -58,6 +59,7 @@ type CreatePaneRequest struct {
 }
 
 type CreateTabRequest struct {
+	NoFocus      bool
 	Session      string
 	Name         string
 	CWD          string
