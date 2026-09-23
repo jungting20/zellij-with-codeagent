@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -165,6 +166,13 @@ func (s *Service) CreatePane(ctx context.Context, req CreatePaneRequest) (Create
 			return CreatePaneResponse{}, err
 		}
 	}
+	if req.ReuseDirectoryTab {
+		req, err = s.resolveDirectoryTab(ctx, req)
+		if err != nil {
+			s.finishCreatePane(call, CreatePaneResponse{}, err)
+			return CreatePaneResponse{}, err
+		}
+	}
 	req, err = s.resolveCreatePaneTarget(ctx, req)
 	if err != nil {
 		s.finishCreatePane(call, CreatePaneResponse{}, err)
@@ -317,6 +325,53 @@ func createPaneCleanupError(cause, cleanupErr error) error {
 		return cause
 	}
 	return errors.Join(cause, fmt.Errorf("%w: %v", ErrCleanupPartial, cleanupErr))
+}
+
+func (s *Service) resolveDirectoryTab(ctx context.Context, req CreatePaneRequest) (CreatePaneRequest, error) {
+	if !req.NewTab || req.ZellijTabID != nil || req.SameTabAsPaneID != "" || req.SameTabAsZellijPaneID != "" {
+		return req, ErrInvalidPaneTarget
+	}
+	lister, ok := s.backend.(interface {
+		ActiveSessions(context.Context) ([]string, error)
+	})
+	if !ok {
+		return req, errors.New("listing live Zellij sessions is unavailable")
+	}
+	want, err := filepath.EvalSymlinks(req.CWD)
+	if err != nil {
+		return req, err
+	}
+	sessions, err := lister.ActiveSessions(ctx)
+	if err != nil {
+		return req, err
+	}
+	sort.Strings(sessions)
+	for index, session := range sessions {
+		if session == req.ZellijSession {
+			sessions[0], sessions[index] = sessions[index], sessions[0]
+			break
+		}
+	}
+	for _, session := range sessions {
+		panes, err := s.backend.ListPanes(ctx, zellij.ListPanesRequest{Session: session})
+		if err != nil {
+			return req, fmt.Errorf("list panes in session %q: %w", session, err)
+		}
+		for _, pane := range panes {
+			if pane.IsPlugin || pane.Exited || pane.CWD == "" {
+				continue
+			}
+			cwd, err := filepath.EvalSymlinks(pane.CWD)
+			if err == nil && cwd == want {
+				tabID := ZellijTabID(pane.TabID)
+				req.ZellijSession = session
+				req.ZellijTabID = &tabID
+				req.NewTab = false
+				return req, nil
+			}
+		}
+	}
+	return req, nil
 }
 
 func (s *Service) resolveCreatePaneTarget(ctx context.Context, req CreatePaneRequest) (CreatePaneRequest, error) {

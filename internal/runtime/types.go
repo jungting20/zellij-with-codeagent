@@ -138,6 +138,9 @@ type CreatePaneRequest struct {
 	// ReuseParentTab makes NewTab a fallback when no live sibling exists.
 	// This is a transient creation policy; grouping uses persisted ParentPaneID.
 	ReuseParentTab bool
+	// ReuseDirectoryTab searches live sessions for a tab containing the same CWD.
+	// When none exists, NewTab remains the fallback. This launch policy is transient.
+	ReuseDirectoryTab bool
 	// EnsureSession creates the destination in the background before pane creation.
 	EnsureSession bool
 	ParentPaneID  PaneID

@@ -41,6 +41,57 @@ func TestCreatePanePropagatesZellijSession(t *testing.T) {
 	}
 }
 
+func TestCreatePaneReusesDirectoryTabAcrossLiveSessions(t *testing.T) {
+	cwd := t.TempDir()
+	backend := &fakeBackend{
+		createID: "terminal_new",
+		listPanesBySession: map[string][]zellij.Pane{
+			"source": {{ID: "terminal_source", CWD: t.TempDir(), TabID: 1}},
+			"other": {
+				{ID: "plugin", CWD: cwd, TabID: 2, IsPlugin: true},
+				{ID: "exited", CWD: cwd, TabID: 3, Exited: true},
+				{ID: "terminal_existing", CWD: cwd, TabID: 4},
+				{ID: "terminal_new", CWD: cwd, TabID: 4},
+			},
+		},
+	}
+	service := NewService(Options{Registry: registry.New(), Backend: &directoryTabBackend{fakeBackend: backend, sessions: []string{"other", "source"}}})
+	created, err := service.CreatePane(context.Background(), CreatePaneRequest{
+		ID: "agent", ZellijSession: "source", CWD: cwd, NewTab: true, ReuseDirectoryTab: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backend.createTabRequests) != 0 || len(backend.createRequests) != 1 ||
+		backend.createRequests[0].Session != "other" || backend.createRequests[0].TabID == nil || *backend.createRequests[0].TabID != 4 {
+		t.Fatalf("created in wrong tab: tabs=%#v panes=%#v", backend.createTabRequests, backend.createRequests)
+	}
+	if created.Pane.SessionID != "other" || created.Pane.ZellijTabID == nil || *created.Pane.ZellijTabID != 4 {
+		t.Fatalf("persisted pane location = %#v", created.Pane)
+	}
+}
+
+func TestCreatePaneCreatesNewTabWhenNoLiveDirectoryMatches(t *testing.T) {
+	cwd := t.TempDir()
+	backend := &fakeBackend{
+		createTabID: 5,
+		listPanesBySession: map[string][]zellij.Pane{
+			"source": {{ID: "terminal_new", CWD: t.TempDir(), TabID: 5}},
+			"other":  {{ID: "terminal_other", CWD: t.TempDir(), TabID: 2}},
+		},
+	}
+	service := NewService(Options{Registry: registry.New(), Backend: &directoryTabBackend{fakeBackend: backend, sessions: []string{"other", "source"}}})
+	_, err := service.CreatePane(context.Background(), CreatePaneRequest{
+		ID: "agent", ZellijSession: "source", CWD: cwd, NewTab: true, ReuseDirectoryTab: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backend.createTabRequests) != 1 || backend.createTabRequests[0].Session != "source" || len(backend.createRequests) != 0 {
+		t.Fatalf("expected new tab: tabs=%#v panes=%#v", backend.createTabRequests, backend.createRequests)
+	}
+}
+
 func TestCreatePaneAssignsDistinctOwnershipTokens(t *testing.T) {
 	backend := &fakeBackend{createIDs: []zellij.PaneID{"terminal_a", "terminal_b"}}
 	tokens := []OwnershipToken{"token-a", "token-b"}
@@ -1816,6 +1867,15 @@ func (b *fakeBackend) ListPanes(_ context.Context, req zellij.ListPanesRequest) 
 	panes := make([]zellij.Pane, len(panesForSession))
 	copy(panes, panesForSession)
 	return panes, nil
+}
+
+type directoryTabBackend struct {
+	*fakeBackend
+	sessions []string
+}
+
+func (b *directoryTabBackend) ActiveSessions(context.Context) ([]string, error) {
+	return append([]string(nil), b.sessions...), nil
 }
 
 func (b *fakeBackend) DumpScreen(ctx context.Context, req zellij.DumpScreenRequest) (string, error) {

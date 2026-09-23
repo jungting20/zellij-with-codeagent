@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -172,6 +173,7 @@ func (m Model) startRecentCmd(p *recentPopup) tea.Cmd {
 		client := m.client.(worktreeClient)
 		_, err := client.StartAgent(m.ctx, transport.StartAgentRequest{
 			NewPane:            true,
+			ReuseDirectoryTab:  true,
 			Kind:               kind,
 			CWD:                path,
 			SourceSession:      m.opts.SourceSession,
@@ -201,14 +203,14 @@ func (m Model) recentView() string {
 	if m.width > 0 {
 		width = minInt(width, maxInt(20, m.width-4))
 	}
-	lines := []string{"새 에이전트"}
+	lines := []string{titleStyle.Render("새 에이전트")}
 	if p.mode == "directory" {
 		lines = append(lines, p.input.View())
 		paths := p.matches()
 		if p.busy {
-			lines = append(lines, "zoxide 디렉토리 로딩 중…")
+			lines = append(lines, mutedStyle.Render("zoxide 디렉토리 로딩 중…"))
 		} else if len(paths) == 0 && p.err == "" {
-			lines = append(lines, "검색 결과가 없습니다")
+			lines = append(lines, mutedStyle.Render("검색 결과가 없습니다"))
 		}
 		visible := 10
 		if m.height > 0 {
@@ -216,13 +218,17 @@ func (m Model) recentView() string {
 		}
 		start := viewportStart(p.selected, len(paths), visible)
 		for index := start; index < len(paths) && index < start+visible; index++ {
-			prefix := "  "
 			if index == p.selected {
-				prefix = "> "
+				lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255")).
+					Background(lipgloss.Color("24")).Render("> "+paths[index]))
+				continue
 			}
-			lines = append(lines, prefix+paths[index])
+			path := paths[index]
+			name := filepath.Base(path)
+			parent := strings.TrimSuffix(path, name)
+			lines = append(lines, "  "+mutedStyle.Render(parent)+idleStyle.Render(name))
 		}
-		lines = append(lines, "↑↓ 선택 · Enter 다음 · Esc 닫기")
+		lines = append(lines, mutedStyle.Render("↑↓ 선택 · Enter 다음 · Esc 닫기"))
 	} else {
 		lines = append(lines, "디렉토리: "+p.path, "에이전트 종류:")
 		for index, kind := range recentAgentKinds {
@@ -238,11 +244,11 @@ func (m Model) recentView() string {
 		}
 	}
 	if p.err != "" {
-		lines = append(lines, "오류: "+p.err)
+		lines = append(lines, errorStyle.Render("오류: "+p.err))
 	}
 	for index := range lines {
 		lines[index] = ansi.Truncate(lines[index], maxInt(1, width-4), "…")
 	}
-	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("42")).Padding(0, 1).
 		Width(maxInt(1, width-2)).Render(strings.Join(lines, "\n"))
 }

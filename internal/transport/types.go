@@ -99,6 +99,7 @@ type ListPanesResponse struct {
 
 type StartAgentRequest struct {
 	NewPane            bool     `json:"new_pane,omitempty"`
+	ReuseDirectoryTab  bool     `json:"reuse_directory_tab,omitempty"`
 	TargetSession      string   `json:"target_session,omitempty"`
 	ParentPaneID       string   `json:"parent_pane_id,omitempty"`
 	Kind               string   `json:"kind"`
@@ -361,6 +362,7 @@ type Event struct {
 func (req StartAgentRequest) ToCodingAgent() codingagent.StartAgentRequest {
 	return codingagent.StartAgentRequest{
 		NewPane:             req.NewPane,
+		ReuseDirectoryTab:   req.ReuseDirectoryTab,
 		TargetSession:       req.TargetSession,
 		ParentPaneID:        rt.PaneID(req.ParentPaneID),
 		Kind:                codingagent.Kind(req.Kind),
@@ -377,6 +379,7 @@ func (req StartAgentRequest) ToCodingAgent() codingagent.StartAgentRequest {
 func StartAgentRequestFromCodingAgent(req codingagent.StartAgentRequest) StartAgentRequest {
 	converted := StartAgentRequest{
 		NewPane:            req.NewPane,
+		ReuseDirectoryTab:  req.ReuseDirectoryTab,
 		TargetSession:      req.TargetSession,
 		ParentPaneID:       string(req.ParentPaneID),
 		Kind:               string(req.Kind),

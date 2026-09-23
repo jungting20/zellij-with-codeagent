@@ -83,7 +83,7 @@ func TestRecentDirectorySelectionStartsChosenAgentThroughClient(t *testing.T) {
 	if m.recent != nil || client.calls != 1 {
 		t.Fatalf("popup = %#v, calls = %d", m.recent, client.calls)
 	}
-	if !client.request.NewPane || client.request.Kind != "claude" || client.request.CWD != "/tmp/second project" ||
+	if !client.request.NewPane || !client.request.ReuseDirectoryTab || client.request.Kind != "claude" || client.request.CWD != "/tmp/second project" ||
 		client.request.SourceSession != "main" || client.request.SourceZellijPaneID != "42" {
 		t.Fatalf("start request = %#v", client.request)
 	}
