@@ -123,7 +123,7 @@ func TestRunNextFocusesNextAgentWithZellijContext(t *testing.T) {
 	if client.socket != "/tmp/next.sock" || client.timeout != 3*time.Second {
 		t.Fatalf("client socket=%q timeout=%s", client.socket, client.timeout)
 	}
-	want := transport.FocusNextAgentRequest{IdleOnly: true, PinnedOnly: true}
+	want := transport.FocusNextAgentRequest{SourceSession: "session-b", SourceZellijPaneID: "terminal_8", IdleOnly: true, PinnedOnly: true}
 	if !reflect.DeepEqual(client.nextRequest, want) {
 		t.Fatalf("FocusNextAgent request=%#v, want %#v", client.nextRequest, want)
 	}
@@ -1015,5 +1015,27 @@ func TestRunNextNeedsNoZellijEnvironment(t *testing.T) {
 	code := Run([]string{"next"}, strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{})
 	if code != 0 || client.nextCalls != 1 || client.nextRequest.SourceSession != "" || client.nextRequest.SourceZellijPaneID != "" {
 		t.Fatalf("code=%d request=%#v stderr=%s", code, client.nextRequest, &stderr)
+	}
+}
+
+func TestRunNextWithPartialZellijEnvironment(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		env         map[string]string
+		wantSession string
+	}{
+		{name: "session without pane", env: map[string]string{"ZELLIJ_SESSION_NAME": " session-b "}, wantSession: "session-b"},
+		{name: "pane without session", env: map[string]string{"ZELLIJ_PANE_ID": "8"}},
+		{name: "empty environment", env: map[string]string{}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &testClient{}
+			var stdout, stderr bytes.Buffer
+			code := Run([]string{"next", "--pinned-only"}, strings.NewReader(""), &stdout, &stderr, testFactory(client), Config{Getenv: mapGetenv(tt.env)})
+			want := transport.FocusNextAgentRequest{SourceSession: tt.wantSession, PinnedOnly: true}
+			if code != 0 || client.nextCalls != 1 || !reflect.DeepEqual(client.nextRequest, want) || stderr.Len() != 0 {
+				t.Fatalf("code=%d request=%#v want=%#v stderr=%s", code, client.nextRequest, want, &stderr)
+			}
+		})
 	}
 }

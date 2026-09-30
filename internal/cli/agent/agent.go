@@ -116,10 +116,19 @@ func runNext(args []string, stdout, stderr io.Writer, newClient ClientFactory, c
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
+	var session, paneID string
+	if cfg.Getenv != nil {
+		session = strings.TrimSpace(cfg.Getenv("ZELLIJ_SESSION_NAME"))
+		if session != "" {
+			paneID = normalizeZellijPaneID(cfg.Getenv("ZELLIJ_PANE_ID"))
+		}
+	}
 	response, err := client.FocusNextAgent(ctx, transport.FocusNextAgentRequest{
-		IdleOnly:     *idleOnly,
-		PinnedOnly:   *pinnedOnly,
-		UnpinnedOnly: *unpinnedOnly,
+		SourceSession:      session,
+		SourceZellijPaneID: paneID,
+		IdleOnly:           *idleOnly,
+		PinnedOnly:         *pinnedOnly,
+		UnpinnedOnly:       *unpinnedOnly,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "agent next failed via socket %s: %v\n", *socket, err)

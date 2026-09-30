@@ -284,10 +284,11 @@ check the plugin log rather than treating the CLI exit status as confirmation.
 The hidden bridge creates no terminal panes. It briefly queues requests while
 checking connected clients, without waiting for command completion or overriding
 environment variables.
-`agent next` does not read `ZELLIJ_SESSION_NAME` or `ZELLIJ_PANE_ID`.
-The daemon selects the next managed agent and the runtime finds the single
-connected Zellij client to switch to that agent's pane. If no client or multiple
-clients are connected, navigation reports an error instead of choosing a client.
+`agent next` forwards `ZELLIJ_SESSION_NAME` and, when available,
+`ZELLIJ_PANE_ID` so the runtime can focus from the caller's session even when
+other sessions have connected clients. Without a source session, the runtime
+requires exactly one connected Zellij client across all sessions; otherwise
+navigation reports an error instead of choosing a client.
 CLI filter flags remain available for direct callers.
 
 Coding-agent records are in-memory. A pane close notification removes its

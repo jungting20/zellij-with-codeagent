@@ -191,7 +191,11 @@ Use the printed absolute path as one identical `file:` plugin URL in
 `Alt+o`, and `payload "idle-and-unpinned"` for `Alt+p`.
 On first load, approve the `RunCommands` and `ReadApplicationState` permission request.
 The bridge executes the public CLI directly using the host environment.
-The runtime requires a single connected Zellij client for navigation.
+With `ZELLIJ_SESSION_NAME` set, the CLI forwards the caller's session to the
+runtime. Run `agent next --pinned-only` inside a pane while another session has
+a connected client and confirm it focuses from the caller's session without
+the "exactly one connected Zellij client" error. Without a source session,
+the runtime requires a single connected Zellij client across all sessions.
 The bridge checks the current client list for each batch of keypresses so that
 disconnected client instances cannot execute duplicate navigation requests.
 For a startup regression check, create a background session with the bridge in
