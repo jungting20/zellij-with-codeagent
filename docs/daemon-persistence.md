@@ -189,3 +189,27 @@ schema is introduced. The manager uses this agent for all newly claimed tickets.
 Ticket `agent` values remain unchanged as registration metadata. Existing worker
 panes retain their original commands. Dashboard picker state is transient, and
 choosing an agent does not rewrite the project config or ticket records.
+
+## Last submitted instruction
+
+Pane JSON records retain `LastInstruction` and `LastInstructionAt`, exposed as
+`last_instruction` and `last_instruction_at` in transport pane responses. Runtime
+`SendInput` records them only after successful backend delivery of nonblank input
+ending in a newline. The submission newline is removed; other content is preserved.
+Failed, partial and Enter-only input do not overwrite the previous instruction.
+Dashboard input, CLI input and follow-up dispatch share this runtime path. Input
+typed directly into a terminal is not observed by this feature.
+
+The existing immutable registry FIFO persists both fields and startup restores
+them alongside pane identity and generation. Generation checks prevent delayed
+sends from recording against a replacement pane. Observation and recovery updates
+preserve them. As with other registry writes, success acknowledges enqueueing;
+abrupt termination can lose changes not yet committed. No schema migration is
+needed for these additive JSON fields: older records default to empty text and a
+zero timestamp. Output snapshots remain transient. Expanded-view content, scroll
+position and selection are transient dashboard state.
+
+The agent dashboard shows up to three wrapped lines of the selected agent's last
+instruction above its output preview, with elapsed time. Press `p` for a scrolling
+full view; `p` or Esc closes it. In short terminals, list selection takes priority,
+and the full view remains accessible even when the inline preview cannot fit.

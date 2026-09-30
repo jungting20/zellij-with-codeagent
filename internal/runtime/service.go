@@ -630,6 +630,16 @@ func (s *Service) SendInput(ctx context.Context, req SendInputRequest) error {
 		_, _ = s.registry.UpdatePaneStatusGeneration(record.ID, record.Generation, registry.PaneStatusError, err.Error())
 		return err
 	}
+	// Only submitted, nonblank input is a new instruction. Enter-only and
+	// partial input must not erase the last successfully submitted request.
+	if strings.HasSuffix(req.Text, "\n") {
+		text := strings.TrimSuffix(req.Text, "\n")
+		if strings.TrimSpace(text) != "" {
+			if _, err := s.registry.RecordPaneInstructionGeneration(record.ID, record.Generation, text); err != nil {
+				return fmt.Errorf("input delivered but recording last instruction failed: %w", err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -889,24 +899,26 @@ func sequentialPaneIDGenerator() PaneIDGenerator {
 
 func paneFromRecord(record registry.PaneRecord) Pane {
 	return Pane{
-		ID:             PaneID(record.ID),
-		OwnershipToken: OwnershipToken(record.OwnershipToken),
-		SessionID:      SessionID(record.SessionID),
-		TabID:          TabID(record.TabID),
-		TaskID:         TaskID(record.TaskID),
-		AgentID:        AgentID(record.AgentID),
-		ParentPaneID:   record.ParentPaneID,
-		ZellijPaneID:   ZellijPaneID(record.ZellijPaneID),
-		ZellijTabID:    runtimeTabID(record.ZellijTabID),
-		TabName:        record.TabName,
-		Role:           record.Role,
-		Command:        cloneStrings(record.Command),
-		CWD:            record.CWD,
-		Status:         PaneStatus(record.Status),
-		LastOutput:     record.LastOutput,
-		StatusMessage:  record.StatusMessage,
-		CreatedAt:      record.CreatedAt,
-		UpdatedAt:      record.UpdatedAt,
+		ID:                PaneID(record.ID),
+		OwnershipToken:    OwnershipToken(record.OwnershipToken),
+		SessionID:         SessionID(record.SessionID),
+		TabID:             TabID(record.TabID),
+		TaskID:            TaskID(record.TaskID),
+		AgentID:           AgentID(record.AgentID),
+		ParentPaneID:      record.ParentPaneID,
+		ZellijPaneID:      ZellijPaneID(record.ZellijPaneID),
+		ZellijTabID:       runtimeTabID(record.ZellijTabID),
+		TabName:           record.TabName,
+		Role:              record.Role,
+		Command:           cloneStrings(record.Command),
+		CWD:               record.CWD,
+		Status:            PaneStatus(record.Status),
+		LastOutput:        record.LastOutput,
+		LastInstruction:   record.LastInstruction,
+		LastInstructionAt: record.LastInstructionAt,
+		StatusMessage:     record.StatusMessage,
+		CreatedAt:         record.CreatedAt,
+		UpdatedAt:         record.UpdatedAt,
 	}
 }
 

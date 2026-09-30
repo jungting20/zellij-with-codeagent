@@ -42,6 +42,8 @@ func (m Model) View() string {
 	if m.height > 0 {
 		bodyHeight = maxInt(1, m.height-3-len(activityLines))
 	}
+	instructionLines := m.instructionView(minInt(4, maxInt(0, bodyHeight-3)), width)
+	bodyHeight -= len(instructionLines)
 	outputLines := m.outputView(bodyHeight - m.listContentHeight(width))
 	bodyHeight -= len(outputLines)
 	if width >= 100 {
@@ -55,6 +57,7 @@ func (m Model) View() string {
 	} else {
 		lines = append(lines, m.panelView(m.focusPinned, width, bodyHeight)...)
 	}
+	lines = append(lines, instructionLines...)
 	lines = append(lines, outputLines...)
 	lines = append(lines, activityLines...)
 
@@ -69,9 +72,9 @@ func (m Model) View() string {
 	}
 	lines = append(lines, footerStyle.Render(separator))
 
-	help := "n new f i input g worktree Space pin d close Enter focus R refresh q quit"
+	help := "p 지시 n new f i input g worktree Space pin d close Enter focus R refresh q quit"
 	if width >= 100 {
-		help = "n 새 agent f 후속 t ticket i input I nvim g worktree m merge a alias Space pin d close Enter focus R refresh q quit"
+		help = "p 지시 n new f 후속 t ticket i input I nvim g worktree m merge a alias Space pin d close Enter focus R refresh q quit"
 	}
 	lines = append(lines, help)
 	for index := range lines {
@@ -82,6 +85,9 @@ func (m Model) View() string {
 		lines = append(lines[:m.height-footerHeight], lines[len(lines)-footerHeight:]...)
 	}
 	base := strings.Join(lines, "\n")
+	if m.instructionOpen {
+		return m.popupOverlay(base, m.instructionPopupView(), 0, 0)
+	}
 	if m.followups != nil {
 		return m.popupOverlay(base, m.followupView(), (width-m.followupPopupWidth())/2, 0)
 	}

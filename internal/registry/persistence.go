@@ -18,6 +18,7 @@ func (r *Registry) saveLocked(session SessionRecord, tab TabRecord, pane PaneRec
 	session.Tabs = nil
 	tab.Panes = nil
 	pane = clonePaneRecord(pane)
+	// Screen output is transient; submitted instruction text and time persist.
 	pane.LastOutput = ""
 	var value any = pane
 	if deleted {

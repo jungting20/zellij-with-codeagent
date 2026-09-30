@@ -375,3 +375,33 @@ func TestParentPaneRoundTrip(t *testing.T) {
 		t.Fatal(pane)
 	}
 }
+
+func TestPaneLastInstructionSurvivesTransportConversions(t *testing.T) {
+	at := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	for _, pane := range []Pane{
+		PaneFromRuntime(rt.Pane{ID: "pane", LastInstruction: "수정\n테스트", LastInstructionAt: at}),
+		PaneFromRuntimeRecord(rt.PaneRecord{ID: "pane", LastInstruction: "수정\n테스트", LastInstructionAt: at}),
+	} {
+		data, err := json.Marshal(pane)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), `"last_instruction":`) || !strings.Contains(string(data), `"last_instruction_at":`) {
+			t.Fatalf("missing metadata: %s", data)
+		}
+		var got Pane
+		if err = json.Unmarshal(data, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.LastInstruction != "수정\n테스트" || !got.LastInstructionAt.Equal(at) {
+			t.Fatalf("lost instruction: %+v", got)
+		}
+	}
+	data, err := json.Marshal(Pane{ID: "legacy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"last_instruction`) {
+		t.Fatalf("empty metadata not omitted: %s", data)
+	}
+}

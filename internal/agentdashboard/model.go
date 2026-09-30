@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"zellij-with-codeagent/internal/listselector"
@@ -79,6 +80,11 @@ type panelSelection struct {
 }
 
 type Model struct {
+	instructionOpen     bool // Transient full instruction viewer.
+	instructionContent  string
+	instructionAt       time.Time
+	instructionViewport viewport.Model
+
 	worktrees *worktreeMenu // Transient menu and shell execution results.
 	recent    *recentPopup  // Transient zoxide directory and agent selection.
 	ticket    *ticketPopup
@@ -172,6 +178,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.resizeTickets()
 		m.resizeFollowups()
+		if m.instructionOpen {
+			m.resizeInstruction()
+		}
 		if m.inputPane != "" {
 			m.prompt.SetWidth(maxInt(1, m.inputPopupWidth()-4))
 		}
@@ -242,7 +251,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.inputPane, m.inputAgent, m.inputError = "", "", ""
 		m.prompt.Reset()
 		m.statusText = "input sent to " + msg.agentID
-		return m, nil
+		return m, m.requestRefresh()
 	case aliasResultMsg:
 		m.aliasSaving = false
 		if msg.err != nil {
@@ -374,6 +383,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.instructionOpen {
+		return m.updateInstructionKey(msg)
+	}
 	if m.followups != nil {
 		return m.updateFollowupKey(msg)
 	}
@@ -416,6 +428,8 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectedID = m.rows[m.selected].Agent.ID
 			m.focusPinned = m.hierarchyRoot(m.rows[m.selected]).Agent.Pinned
 		}
+	case "p":
+		return m.openInstruction()
 	case "t":
 		return m.openTickets()
 	case "f":

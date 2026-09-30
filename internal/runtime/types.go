@@ -360,22 +360,24 @@ type CleanupResponse struct {
 }
 
 type Pane struct {
-	ParentPaneID   PaneID
-	ID             PaneID
-	OwnershipToken OwnershipToken
-	SessionID      SessionID
-	TabID          TabID
-	TaskID         TaskID
-	AgentID        AgentID
-	ZellijPaneID   ZellijPaneID
-	ZellijTabID    *ZellijTabID
-	TabName        string
-	Role           string
-	Command        []string
-	CWD            string
-	Status         PaneStatus
-	LastOutput     string
-	StatusMessage  string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ParentPaneID      PaneID
+	ID                PaneID
+	OwnershipToken    OwnershipToken
+	SessionID         SessionID
+	TabID             TabID
+	TaskID            TaskID
+	AgentID           AgentID
+	ZellijPaneID      ZellijPaneID
+	ZellijTabID       *ZellijTabID
+	TabName           string
+	Role              string
+	Command           []string
+	CWD               string
+	Status            PaneStatus
+	LastOutput        string
+	LastInstruction   string
+	LastInstructionAt time.Time
+	StatusMessage     string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }

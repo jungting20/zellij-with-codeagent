@@ -2,6 +2,8 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 	"zellij-with-codeagent/internal/persistence"
@@ -102,5 +104,56 @@ func TestWorktreeChildLocationSurvivesRestart(t *testing.T) {
 	parent, err := reg.GetPane("parent")
 	if err != nil || parent.SessionID != "source" {
 		t.Fatalf("parent = %+v, error = %v", parent, err)
+	}
+}
+
+func TestLegacyPanePayloadDefaultsToNoInstruction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	w, err := persistence.Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewPersistent(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pane, err := reg.RegisterPane(RegisterPaneRequest{ID: "legacy", Status: PaneStatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate an older payload without the newly introduced JSON fields.
+	data, err := json.Marshal(pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var old map[string]any
+	if err = json.Unmarshal(data, &old); err != nil {
+		t.Fatal(err)
+	}
+	delete(old, "LastInstruction")
+	delete(old, "LastInstructionAt")
+	w.Enqueue(persistence.Change{Table: persistence.Panes, ID: string(pane.ID), Parent: tabStorageID(pane.SessionID, pane.TabID), Value: old})
+	if err = w.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w, err = persistence.Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close(context.Background())
+	reg, err = NewPersistent(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := reg.GetPane("legacy")
+	if err != nil || got.LastInstruction != "" || !got.LastInstructionAt.IsZero() {
+		t.Fatalf("legacy defaults: %+v, %v", got, err)
+	}
+	if _, err = reg.RecordPaneInstructionGeneration(got.ID, got.Generation+1, "stale"); !errors.Is(err, ErrStaleRecord) {
+		t.Fatalf("stale generation: %v", err)
+	}
+	got, _ = reg.GetPane("legacy")
+	if got.LastInstruction != "" {
+		t.Fatal("stale update changed instruction")
 	}
 }

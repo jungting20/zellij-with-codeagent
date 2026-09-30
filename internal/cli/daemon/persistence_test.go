@@ -38,6 +38,14 @@ func TestDaemonBundleRestartsWithAgentSettingsAndFreshMonitoring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const lastInstruction = "로그인 원인을 수정하고 테스트를 실행해줘."
+	if err := first.service.SendInput(context.Background(), agentruntime.SendInputRequest{PaneID: created.Agent.Pane.ID, Text: lastInstruction + "\n"}); err != nil {
+		t.Fatal(err)
+	}
+	beforeRestart, err := first.service.InspectPane(context.Background(), agentruntime.InspectPaneRequest{PaneID: created.Agent.Pane.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
 	id := created.Agent.Agent.ID
 	if _, err = first.store.SetPinned(id, true); err != nil {
 		t.Fatal(err)
@@ -87,6 +95,9 @@ func TestDaemonBundleRestartsWithAgentSettingsAndFreshMonitoring(t *testing.T) {
 	pane, err := second.service.InspectPane(context.Background(), agentruntime.InspectPaneRequest{PaneID: got.PaneID})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if pane.Pane.LastInstruction != lastInstruction || pane.Pane.LastInstructionAt.IsZero() || !pane.Pane.LastInstructionAt.Equal(beforeRestart.Pane.LastInstructionAt) {
+		t.Fatalf("instruction lost during recovery: %+v", pane.Pane)
 	}
 	if pane.Pane.OwnershipToken != created.Agent.Pane.OwnershipToken {
 		t.Fatal("ownership token changed on restart")

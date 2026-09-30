@@ -324,24 +324,26 @@ type ExecutionPlanTabResponse struct {
 }
 
 type Pane struct {
-	ParentPaneID   string    `json:"parent_pane_id,omitempty"`
-	ID             string    `json:"id"`
-	OwnershipToken string    `json:"ownership_token,omitempty"`
-	SessionID      string    `json:"session_id,omitempty"`
-	TabID          string    `json:"tab_id,omitempty"`
-	TaskID         string    `json:"task_id,omitempty"`
-	AgentID        string    `json:"agent_id,omitempty"`
-	ZellijPaneID   string    `json:"zellij_pane_id,omitempty"`
-	ZellijTabID    *int      `json:"zellij_tab_id,omitempty"`
-	TabName        string    `json:"tab_name,omitempty"`
-	Role           string    `json:"role,omitempty"`
-	Command        []string  `json:"command,omitempty"`
-	CWD            string    `json:"cwd,omitempty"`
-	Status         string    `json:"status"`
-	LastOutput     string    `json:"last_output,omitempty"`
-	StatusMessage  string    `json:"status_message,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ParentPaneID      string    `json:"parent_pane_id,omitempty"`
+	ID                string    `json:"id"`
+	OwnershipToken    string    `json:"ownership_token,omitempty"`
+	SessionID         string    `json:"session_id,omitempty"`
+	TabID             string    `json:"tab_id,omitempty"`
+	TaskID            string    `json:"task_id,omitempty"`
+	AgentID           string    `json:"agent_id,omitempty"`
+	ZellijPaneID      string    `json:"zellij_pane_id,omitempty"`
+	ZellijTabID       *int      `json:"zellij_tab_id,omitempty"`
+	TabName           string    `json:"tab_name,omitempty"`
+	Role              string    `json:"role,omitempty"`
+	Command           []string  `json:"command,omitempty"`
+	CWD               string    `json:"cwd,omitempty"`
+	Status            string    `json:"status"`
+	LastOutput        string    `json:"last_output,omitempty"`
+	LastInstruction   string    `json:"last_instruction,omitempty"`
+	LastInstructionAt time.Time `json:"last_instruction_at,omitzero"`
+	StatusMessage     string    `json:"status_message,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type Event struct {
@@ -539,24 +541,26 @@ func PaneFromRuntime(pane rt.Pane) Pane {
 		tabID = &value
 	}
 	return Pane{
-		ID:             string(pane.ID),
-		ParentPaneID:   string(pane.ParentPaneID),
-		OwnershipToken: string(pane.OwnershipToken),
-		SessionID:      string(pane.SessionID),
-		TabID:          string(pane.TabID),
-		TaskID:         string(pane.TaskID),
-		AgentID:        string(pane.AgentID),
-		ZellijPaneID:   string(pane.ZellijPaneID),
-		ZellijTabID:    tabID,
-		TabName:        pane.TabName,
-		Role:           string(pane.Role),
-		Command:        cloneStrings(pane.Command),
-		CWD:            pane.CWD,
-		Status:         string(pane.Status),
-		LastOutput:     pane.LastOutput,
-		StatusMessage:  pane.StatusMessage,
-		CreatedAt:      pane.CreatedAt,
-		UpdatedAt:      pane.UpdatedAt,
+		ID:                string(pane.ID),
+		ParentPaneID:      string(pane.ParentPaneID),
+		OwnershipToken:    string(pane.OwnershipToken),
+		SessionID:         string(pane.SessionID),
+		TabID:             string(pane.TabID),
+		TaskID:            string(pane.TaskID),
+		AgentID:           string(pane.AgentID),
+		ZellijPaneID:      string(pane.ZellijPaneID),
+		ZellijTabID:       tabID,
+		TabName:           pane.TabName,
+		Role:              string(pane.Role),
+		Command:           cloneStrings(pane.Command),
+		CWD:               pane.CWD,
+		Status:            string(pane.Status),
+		LastOutput:        pane.LastOutput,
+		LastInstruction:   pane.LastInstruction,
+		LastInstructionAt: pane.LastInstructionAt,
+		StatusMessage:     pane.StatusMessage,
+		CreatedAt:         pane.CreatedAt,
+		UpdatedAt:         pane.UpdatedAt,
 	}
 }
 
@@ -833,24 +837,26 @@ func PaneFromRuntimeRecord(pane rt.PaneRecord) Pane {
 		tabID = &value
 	}
 	return Pane{
-		ID:             string(pane.ID),
-		ParentPaneID:   string(pane.ParentPaneID),
-		OwnershipToken: string(pane.OwnershipToken),
-		SessionID:      string(pane.SessionID),
-		TabID:          string(pane.TabID),
-		TaskID:         string(pane.TaskID),
-		AgentID:        string(pane.AgentID),
-		ZellijPaneID:   string(pane.ZellijPaneID),
-		ZellijTabID:    tabID,
-		TabName:        pane.TabName,
-		Role:           string(pane.Role),
-		Command:        cloneStrings(pane.Command),
-		CWD:            pane.CWD,
-		Status:         string(pane.Status),
-		LastOutput:     pane.LastOutput,
-		StatusMessage:  pane.StatusMessage,
-		CreatedAt:      pane.CreatedAt,
-		UpdatedAt:      pane.UpdatedAt,
+		ID:                string(pane.ID),
+		ParentPaneID:      string(pane.ParentPaneID),
+		OwnershipToken:    string(pane.OwnershipToken),
+		SessionID:         string(pane.SessionID),
+		TabID:             string(pane.TabID),
+		TaskID:            string(pane.TaskID),
+		AgentID:           string(pane.AgentID),
+		ZellijPaneID:      string(pane.ZellijPaneID),
+		ZellijTabID:       tabID,
+		TabName:           pane.TabName,
+		Role:              string(pane.Role),
+		Command:           cloneStrings(pane.Command),
+		CWD:               pane.CWD,
+		Status:            string(pane.Status),
+		LastOutput:        pane.LastOutput,
+		LastInstruction:   pane.LastInstruction,
+		LastInstructionAt: pane.LastInstructionAt,
+		StatusMessage:     pane.StatusMessage,
+		CreatedAt:         pane.CreatedAt,
+		UpdatedAt:         pane.UpdatedAt,
 	}
 }
 

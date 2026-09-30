@@ -281,6 +281,28 @@ func (r *Registry) updatePaneStatusGeneration(id PaneID, generation uint64, stat
 	return clonePaneRecord(pane), nil
 }
 
+// RecordPaneInstructionGeneration records successful submitted input for the
+// same managed pane generation. Its timestamp is independent of observations.
+func (r *Registry) RecordPaneInstructionGeneration(id PaneID, generation uint64, text string) (PaneRecord, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	loc, session, tab, pane, err := r.resolvePanePathLocked(id)
+	if err != nil {
+		return PaneRecord{}, err
+	}
+	if pane.Generation != generation {
+		return PaneRecord{}, ErrStaleRecord
+	}
+	now := r.now()
+	pane.LastInstruction, pane.LastInstructionAt = text, now
+	pane.UpdatedAt = now
+	tab.Panes[id], tab.UpdatedAt = pane, now
+	session.Tabs[loc.TabID], session.UpdatedAt = tab, now
+	r.sessions[loc.SessionID] = session
+	r.saveLocked(session, tab, pane, false)
+	return clonePaneRecord(pane), nil
+}
+
 func (r *Registry) UpdatePaneOutput(id PaneID, output string) (PaneRecord, error) {
 	return r.updatePaneOutputGeneration(id, 0, output)
 }
